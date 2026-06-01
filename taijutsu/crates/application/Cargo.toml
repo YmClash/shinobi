@@ -1,0 +1,12 @@
+[package]
+name = "application"
+version = "0.1.0"
+edition = "2024"
+description = "SHINOBI — Use Cases (orchestration de la logique métier)"
+
+[dependencies]
+domain      = { path = "../domain" }
+uuid        = { workspace = true }
+chrono      = { workspace = true }
+async-trait = { workspace = true }
+tracing     = { workspace = true }

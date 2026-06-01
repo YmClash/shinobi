@@ -1,0 +1,43 @@
+// ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+// SHINOBI — Protocole Ninpo (gRPC)
+// Définitions Protobuf pour le streaming natif
+// ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+syntax = "proto3";
+
+package shinobi.ninpo;
+
+// Service principal du moteur Taijutsu.
+// Point d'entrée gRPC pour toutes les opérations VCS.
+service ShinobiService {
+    // Vérification de la disponibilité du serveur.
+    rpc Ping (PingRequest) returns (PingResponse);
+
+    // Créer une nouvelle opération VCS (commit/changement).
+    rpc CreateOperation (CreateOperationRequest) returns (CreateOperationResponse);
+}
+
+// ── Messages Ping ──────────────────────────────
+
+message PingRequest {}
+
+message PingResponse {
+    string version = 1;
+    string status  = 2;
+    int64  uptime_seconds = 3;
+}
+
+// ── Messages Operation ─────────────────────────
+
+message CreateOperationRequest {
+    string author_id   = 1;
+    string description = 2;
+    // Identifiants des opérations parentes (merge possible).
+    repeated string parent_ids = 3;
+}
+
+message CreateOperationResponse {
+    string operation_id = 1;
+    string content_id   = 2;
+    int64  created_at   = 3;
+}
