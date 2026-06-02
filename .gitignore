@@ -131,3 +131,6 @@ dojutsu/grafana/data/
 # Nen (Kafka data)
 nen/data/
 nen/logs/
+
+# Codex
+CODEX_BOARD.md
