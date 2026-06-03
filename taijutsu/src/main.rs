@@ -1,31 +1,41 @@
 //! # SHINOBI — Taijutsu : Moteur Central
 //!
 //! Point d'entrée du backend. Initialise simultanément :
-//! - **Axum** : serveur HTTP/REST sur le port 3000
-//! - **Tonic** : serveur gRPC (protocole Ninpo) sur le port 50051
+//! - **Axum** : serveur HTTP/REST sur le port configurable
+//! - **Tonic** : serveur gRPC (protocole Ninpo) sur le port configurable
 //!
 //! Les deux serveurs tournent en parallèle dans le même runtime Tokio.
 //! Un shutdown gracieux est déclenché via Ctrl+C.
 
-use std::net::SocketAddr;
+mod config;
 
+use std::net::SocketAddr;
+use std::sync::Arc;
+
+use sqlx::postgres::PgPoolOptions;
 use tokio::net::TcpListener;
 use tracing::{error, info};
 use tracing_subscriber::{EnvFilter, layer::SubscriberExt, util::SubscriberInitExt};
 
+use application::use_cases::create_operation::CreateOperationUseCase;
+use application::use_cases::get_operation::GetOperationUseCase;
+use application::use_cases::list_operations::ListOperationsUseCase;
+use infrastructure::cache::redis_cache::RedisCache;
+use infrastructure::persistence::postgres_repo::PostgresOperationRepository;
+use infrastructure::vcs::jujutsu_engine::JujutsuEngine;
 use presentation::grpc::services::proto::shinobi_service_server::ShinobiServiceServer;
 use presentation::grpc::services::ShinobiServiceImpl;
 use presentation::rest::routes::create_router;
+use presentation::state::SharedState;
 
-/// Ports de configuration des serveurs.
-const REST_PORT: u16 = 3000;
-const GRPC_PORT: u16 = 50051;
+use config::Config;
 
 #[tokio::main]
 async fn main() -> anyhow::Result<()> {
+    // ── Charger .env (silencieux si absent) ───────
+    dotenvy::dotenv().ok();
+
     // ── Observabilité ──────────────────────────────
-    // Initialise le subscriber tracing avec filtrage par variable d'env.
-    // Usage: RUST_LOG=debug cargo run
     tracing_subscriber::registry()
         .with(EnvFilter::try_from_default_env().unwrap_or_else(|_| EnvFilter::new("info")))
         .with(tracing_subscriber::fmt::layer().with_target(true))
@@ -33,13 +43,57 @@ async fn main() -> anyhow::Result<()> {
 
     print_banner();
 
+    // ── Configuration ──────────────────────────────
+    let config = Config::from_env();
+    info!(
+        rest_port = config.rest_port,
+        grpc_port = config.grpc_port,
+        vcs_root = %config.vcs_workspace_root,
+        "Configuration chargée"
+    );
+
+    // ── Infrastructure (adaptateurs secondaires) ───
+    // Fūinjutsu: PostgreSQL
+    let pg_pool = PgPoolOptions::new()
+        .max_connections(10)
+        .connect(&config.database_url)
+        .await?;
+    info!("✅ PostgreSQL connecté");
+
+    // Fūinjutsu: Redis
+    let _redis_cache = RedisCache::connect(&config.redis_url).await?;
+    info!("✅ Redis connecté");
+
+    // VCS Engine (Anti-Corruption Layer)
+    let vcs_engine = JujutsuEngine::new(&config.vcs_workspace_root);
+    info!("✅ VCS Engine initialisé (ACL stub)");
+
+    // ── Adaptateurs ────────────────────────────────
+    let repo = Arc::new(PostgresOperationRepository::new(pg_pool));
+    let vcs = Arc::new(vcs_engine);
+
+    // ── Use Cases (couche application) ─────────────
+    let create_operation = Arc::new(CreateOperationUseCase::new(
+        vcs.clone(),
+        repo.clone(),
+    ));
+    let get_operation = Arc::new(GetOperationUseCase::new(repo.clone()));
+    let list_operations = Arc::new(ListOperationsUseCase::new(repo.clone()));
+
+    // ── État partagé (DI Container) ────────────────
+    let shared_state = SharedState {
+        create_operation,
+        get_operation,
+        list_operations,
+    };
+
     // ── Serveur Axum (REST) ────────────────────────
-    let rest_addr = SocketAddr::from(([0, 0, 0, 0], REST_PORT));
-    let rest_router = create_router();
+    let rest_addr = SocketAddr::from(([0, 0, 0, 0], config.rest_port));
+    let rest_router = create_router(shared_state.clone());
     let rest_listener = TcpListener::bind(rest_addr).await?;
 
     info!(
-        port = REST_PORT,
+        port = config.rest_port,
         "⚡ Axum REST — En écoute sur http://{rest_addr}"
     );
 
@@ -51,11 +105,11 @@ async fn main() -> anyhow::Result<()> {
     };
 
     // ── Serveur Tonic (gRPC / Ninpo) ───────────────
-    let grpc_addr = SocketAddr::from(([0, 0, 0, 0], GRPC_PORT));
-    let shinobi_service = ShinobiServiceImpl::default();
+    let grpc_addr = SocketAddr::from(([0, 0, 0, 0], config.grpc_port));
+    let shinobi_service = ShinobiServiceImpl::new(shared_state);
 
     info!(
-        port = GRPC_PORT,
+        port = config.grpc_port,
         "⚡ Tonic gRPC (Ninpo) — En écoute sur http://{grpc_addr}"
     );
 
@@ -68,8 +122,6 @@ async fn main() -> anyhow::Result<()> {
     };
 
     // ── Lancement simultané ────────────────────────
-    // Les deux serveurs tournent en parallèle.
-    // Si l'un échoue, l'erreur est propagée immédiatement.
     tokio::select! {
         result = rest_server => {
             if let Err(e) = result {

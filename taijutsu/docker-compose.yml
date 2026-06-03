@@ -1,0 +1,38 @@
+# ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+# SHINOBI / Taijutsu — Services de développement
+# ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+# Usage: docker compose up -d
+
+services:
+  # ── Fūinjutsu: PostgreSQL ──────────────────
+  postgres:
+    image: postgres:17-alpine
+    container_name: shinobi-postgres
+    environment:
+      POSTGRES_DB: shinobi_dev
+      POSTGRES_USER: shinobi
+      POSTGRES_PASSWORD: shinobi
+    ports:
+      - "5433:5432"
+    volumes:
+      - pgdata:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U shinobi -d shinobi_dev"]
+      interval: 5s
+      timeout: 5s
+      retries: 5
+
+  # ── Fūinjutsu: Redis ───────────────────────
+  redis:
+    image: redis:8-alpine
+    container_name: shinobi-redis
+    ports:
+      - "6380:6379"
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 5s
+      timeout: 5s
+      retries: 5
+
+volumes:
+  pgdata:

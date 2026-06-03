@@ -7,5 +7,7 @@
 //! - `rest` — Serveur HTTP/REST via Axum
 //! - `grpc` — Protocole **Ninpo** : serveur gRPC via Tonic
 
+pub mod errors;
 pub mod grpc;
 pub mod rest;
+pub mod state;

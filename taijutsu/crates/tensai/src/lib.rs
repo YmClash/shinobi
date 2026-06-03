@@ -8,10 +8,12 @@
 //! ## Architecture
 //! - `SemanticChunk` : fragment de code avec ses métadonnées (type, portée, dépendances)
 //! - `Chunker` (Trait) : contrat de découpage, implémenté par les parsers Tree-sitter
+//! - `RustChunker` : implémentation Tree-sitter pour le langage Rust
 //!
 //! ## Phase actuelle
-//! Stub structurel. L'intégration Tree-sitter arrive en phase 2.
+//! Chunker Rust opérationnel. Langages supplémentaires en phases futures.
 
+pub mod rust_chunker;
 use serde::{Deserialize, Serialize};
 
 /// Fragment sémantique de code source.

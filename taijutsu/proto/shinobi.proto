@@ -14,7 +14,13 @@ service ShinobiService {
     rpc Ping (PingRequest) returns (PingResponse);
 
     // Créer une nouvelle opération VCS (commit/changement).
-    rpc CreateOperation (CreateOperationRequest) returns (CreateOperationResponse);
+    rpc CreateOperation (CreateOperationRequest) returns (OperationResponse);
+
+    // Retrouver une opération par son identifiant.
+    rpc GetOperation (GetOperationRequest) returns (OperationResponse);
+
+    // Lister les opérations avec filtrage optionnel.
+    rpc ListOperations (ListOperationsRequest) returns (ListOperationsResponse);
 }
 
 // ── Messages Ping ──────────────────────────────
@@ -36,8 +42,28 @@ message CreateOperationRequest {
     repeated string parent_ids = 3;
 }
 
-message CreateOperationResponse {
-    string operation_id = 1;
-    string content_id   = 2;
-    int64  created_at   = 3;
+message GetOperationRequest {
+    string id = 1;
+}
+
+message ListOperationsRequest {
+    // Nombre maximum de résultats (défaut: 50).
+    int32 limit = 1;
+    // Filtre optionnel par auteur (UUID). Vide = pas de filtre.
+    string author_id = 2;
+}
+
+// ── Réponses Operation ─────────────────────────
+
+message OperationResponse {
+    string id          = 1;
+    string author_id   = 2;
+    string content_id  = 3;
+    string description = 4;
+    repeated string parent_ids = 5;
+    int64  created_at  = 6;
+}
+
+message ListOperationsResponse {
+    repeated OperationResponse operations = 1;
 }
