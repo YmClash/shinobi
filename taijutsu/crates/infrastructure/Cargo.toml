@@ -15,7 +15,8 @@ sqlx  = { workspace = true }
 redis = { workspace = true }
 
 # — Moteur VCS —
-# jj-lib = { workspace = true }  # Activé en phase 2 (Anti-Corruption Layer)
+jj-lib = { workspace = true }
+pollster = { workspace = true }
 
 # — Sérialisation —
 serde      = { workspace = true }
@@ -29,3 +30,7 @@ uuid        = { workspace = true }
 chrono      = { workspace = true }
 async-trait = { workspace = true }
 anyhow      = { workspace = true }
+
+[dev-dependencies]
+tempfile = { workspace = true }
+tokio = { workspace = true }
