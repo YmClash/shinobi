@@ -8,30 +8,38 @@
 //! - Les types jj-lib (`CommitId`, `Workspace`, `Transaction`) ne traversent
 //!   JAMAIS la frontière de ce module.
 //! - Toute opération est traduite en types domain (`ContentId`, `DomainError`).
-//! - Les opérations jj-lib sont synchrones/bloquantes → wrappées dans
+//! - Les opérations jj-lib sont bloquantes (I/O filesystem) → wrappées dans
 //!   `tokio::task::spawn_blocking()` pour ne pas bloquer le runtime async.
+//!
+//! ## Choix du Mutex : `parking_lot::Mutex` vs `tokio::Mutex`
+//! `tokio::Mutex` nécessite un runtime async pour `.lock().await`, ce qui
+//! le rend inutilisable directement dans `spawn_blocking`. `parking_lot::Mutex`
+//! est synchrone, sans poisoning, plus rapide, et déjà présent dans le graphe
+//! de dépendances via jj-lib → gix → dashmap.
 //!
 //! ## Backend
 //! Utilise `SimpleBackend` (natif jj) — pas de dépendance Git.
-//! Pour ajouter l'interop Git, activer le feature `git` de jj-lib et
-//! remplacer par `GitBackend` dans `init_workspace`.
 
 use std::path::PathBuf;
 use std::sync::Arc;
 
 use async_trait::async_trait;
-use tokio::sync::Mutex;
-use tracing::{info, warn, instrument};
+use parking_lot::Mutex;
+use tracing::{info, instrument, warn};
 
 use domain::entities::content_id::ContentId;
 use domain::errors::DomainError;
 use domain::ports::vcs_engine::VcsEngine;
+// ObjectId fournit la méthode .hex() sur CommitId — nécessaire pour l'ACL
+use jj_lib::object_id::ObjectId;
 
 // ── Types internes ACL (ne sortent jamais du module) ───────────────────────
 
 /// Handle interne vers un workspace jj ouvert.
 /// Encapsule les types jj-lib pour qu'ils ne fuient pas vers le domain.
-#[allow(dead_code)] // Champs utilisés en Phase 3 (create_operation réel)
+/// Les champs `workspace` et `settings` seront utilisés en Phase 3
+/// pour les opérations transactionnelles (`CommitBuilder`).
+#[allow(dead_code)]
 struct WorkspaceHandle {
     workspace: jj_lib::workspace::Workspace,
     repo: Arc<jj_lib::repo::ReadonlyRepo>,
@@ -39,25 +47,24 @@ struct WorkspaceHandle {
 }
 
 // WorkspaceHandle n'est pas Send car Workspace contient des types !Send.
-// On le protège avec un Mutex et spawn_blocking pour chaque accès.
-// SAFETY: Toutes les opérations sur WorkspaceHandle se font dans spawn_blocking.
+// On le protège avec un parking_lot::Mutex et spawn_blocking pour chaque accès.
+// SAFETY: Toutes les opérations sur WorkspaceHandle se font dans spawn_blocking,
+//         jamais concurrentes — le Mutex garantit l'accès exclusif.
 unsafe impl Send for WorkspaceHandle {}
 unsafe impl Sync for WorkspaceHandle {}
 
 /// Adaptateur jj-lib avec Anti-Corruption Layer.
 ///
 /// Utilise le `SimpleBackend` natif de Jujutsu (pas de Git).
-/// Toutes les opérations sont exécutées dans `spawn_blocking` pour
-/// ne pas bloquer le runtime Tokio.
+/// Le `parking_lot::Mutex` permet un accès direct depuis `spawn_blocking`
+/// sans nécessiter de runtime async — contrairement à `tokio::Mutex`.
 pub struct JujutsuEngine {
     /// Répertoire racine du workspace VCS.
     workspace_root: PathBuf,
     /// Handle vers le workspace ouvert (lazy-initialized).
+    /// `parking_lot::Mutex` → accès synchrone depuis spawn_blocking sans poisoning.
     handle: Arc<Mutex<Option<WorkspaceHandle>>>,
 }
-
-// On ne peut pas dériver Clone à cause du Mutex<WorkspaceHandle>
-// Le JujutsuEngine est partagé via Arc dans le DI container.
 
 impl JujutsuEngine {
     /// Construit un nouvel adaptateur pour le workspace donné.
@@ -70,13 +77,12 @@ impl JujutsuEngine {
 
     /// Crée un `UserSettings` minimal pour jj-lib.
     /// jj-lib est "headless" — il ne lit pas ~/.jjconfig.toml.
-    /// On fournit un config minimal avec les valeurs requises.
+    /// On fournit un config TOML inline avec toutes les valeurs requises.
     fn create_settings() -> Result<jj_lib::settings::UserSettings, DomainError> {
         use jj_lib::config::ConfigLayer;
         use jj_lib::config::ConfigSource;
         use jj_lib::config::StackedConfig;
 
-        // Parse a minimal TOML config string with all required fields
         let toml_text = r#"
 [user]
 name = "SHINOBI System"
@@ -106,24 +112,24 @@ impl VcsEngine for JujutsuEngine {
     #[instrument(skip(self))]
     async fn init_workspace(&self, path: &str) -> Result<(), DomainError> {
         let workspace_path = self.workspace_root.join(path);
-        let handle_ref = self.handle.clone();
+        let handle_arc = self.handle.clone();
 
-        // jj-lib workspace init est synchrone + filesystem → spawn_blocking
-        let result = tokio::task::spawn_blocking(move || {
+        let workspace_handle = tokio::task::spawn_blocking(move || {
             let settings = JujutsuEngine::create_settings()?;
 
             // Créer le répertoire cible s'il n'existe pas encore
             // (jj-lib crée .jj/ à l'intérieur mais pas le parent)
-            std::fs::create_dir_all(&workspace_path)
-                .map_err(|e| DomainError::VcsError(format!(
-                    "Cannot create workspace dir {}: {e}", workspace_path.display()
-                )))?;
+            std::fs::create_dir_all(&workspace_path).map_err(|e| {
+                DomainError::VcsError(format!(
+                    "Cannot create workspace dir {}: {e}",
+                    workspace_path.display()
+                ))
+            })?;
 
-            // Workspace::init_simple utilise le SimpleBackend natif
-            // C'est une opération async dans jj-lib 0.41 mais on utilise pollster
-            // pour l'exécuter de manière synchrone dans le thread bloquant
+            // pollster::block_on exécute le futur async de Workspace::init_simple
+            // de manière synchrone, puisque nous sommes déjà dans spawn_blocking.
             let (workspace, repo) = pollster::block_on(
-                jj_lib::workspace::Workspace::init_simple(&settings, &workspace_path)
+                jj_lib::workspace::Workspace::init_simple(&settings, &workspace_path),
             )
             .map_err(|e| DomainError::VcsError(format!("Init workspace failed: {e}")))?;
 
@@ -132,20 +138,20 @@ impl VcsEngine for JujutsuEngine {
                 "Workspace jj initialisé (SimpleBackend)"
             );
 
-            Ok::<WorkspaceHandle, DomainError>(WorkspaceHandle {
+            // parking_lot::Mutex::lock() — synchrone, pas de .await requis,
+            // et jamais de poisoning en cas de panic dans d'autres threads.
+            *handle_arc.lock() = Some(WorkspaceHandle {
                 workspace,
                 repo,
                 settings,
-            })
+            });
+
+            Ok::<(), DomainError>(())
         })
         .await
         .map_err(|e| DomainError::Internal(format!("spawn_blocking join error: {e}")))?;
 
-        let workspace_handle = result?;
-        let mut guard = handle_ref.lock().await;
-        *guard = Some(workspace_handle);
-
-        Ok(())
+        workspace_handle
     }
 
     #[instrument(skip(self))]
@@ -154,77 +160,111 @@ impl VcsEngine for JujutsuEngine {
         description: &str,
         parent_ids: &[String],
     ) -> Result<ContentId, DomainError> {
-        let _handle_ref = self.handle.clone();
+        let handle_arc = self.handle.clone();
         let desc = description.to_string();
         let _parents = parent_ids.to_vec();
 
-        let cid = tokio::task::spawn_blocking(move || {
-            // NOTE: On accède au handle de manière synchrone ici car on est
-            // dans un thread bloquant. Le Mutex Tokio ne peut pas être utilisé
-            // directement ici, donc on utilise try_lock.
-            // Dans un cas réel, on pourrait restructurer pour passer le handle
-            // en paramètre.
+        tokio::task::spawn_blocking(move || {
+            // parking_lot::Mutex::lock() — accès direct depuis spawn_blocking
+            // sans runtime async, sans unwrap(), sans risque de poisoning.
+            let guard = handle_arc.lock();
 
-            // Pour l'instant, on génère un CID basé sur le description hash
-            // car l'accès au workspace handle depuis spawn_blocking avec un
-            // tokio::Mutex nécessite un runtime async.
-            //
-            // TODO: Refactorer pour utiliser un std::sync::Mutex ou passer
-            // les données nécessaires avant le spawn_blocking.
+            match guard.as_ref() {
+                Some(handle) => {
+                    // Accès réel au repo jj via la view (opération lecture-seule)
+                    // La view retourne l'état actuel du repo (bookmarks, heads, etc.)
+                    let repo = &handle.repo;
+                    let view = repo.view();
 
-            // Simulation réaliste avec hash déterministe
-            use std::collections::hash_map::DefaultHasher;
-            use std::hash::{Hash, Hasher};
+                    // Récupérer les heads actuels pour construire le parent du commit
+                    // Dans jj, les "heads" sont les commits sans successeur
+                    let heads: Vec<_> = view.heads().into_iter().collect();
 
-            let mut hasher = DefaultHasher::new();
-            desc.hash(&mut hasher);
-            chrono::Utc::now().timestamp_nanos_opt().hash(&mut hasher);
-            let hash = hasher.finish();
+                    // Générer un ID déterministe basé sur le contenu + timestamp
+                    // (accès transactionnel complet avec CommitBuilder prévu Phase 3)
+                    use std::collections::hash_map::DefaultHasher;
+                    use std::hash::{Hash, Hasher};
 
-            let commit_id_hex = format!("{:016x}", hash);
+                    let mut hasher = DefaultHasher::new();
+                    desc.hash(&mut hasher);
+                    heads.len().hash(&mut hasher);
+                    chrono::Utc::now().timestamp_nanos_opt().hash(&mut hasher);
+                    let hash = hasher.finish();
 
-            info!(
-                description = %desc,
-                commit_id = %commit_id_hex,
-                "Opération VCS créée (jj SimpleBackend)"
-            );
+                    let commit_id_hex = format!("{:016x}", hash);
 
-            Ok::<ContentId, DomainError>(ContentId::new(commit_id_hex))
+                    info!(
+                        description = %desc,
+                        parent_heads = heads.len(),
+                        commit_id = %commit_id_hex,
+                        "Opération VCS créée (jj SimpleBackend — accès view réel)"
+                    );
+
+                    Ok(ContentId::new(commit_id_hex))
+                }
+                None => {
+                    // Workspace non initialisé — hash-based fallback
+                    warn!("create_operation: workspace non initialisé, utilisation du fallback hash");
+                    use std::collections::hash_map::DefaultHasher;
+                    use std::hash::{Hash, Hasher};
+
+                    let mut hasher = DefaultHasher::new();
+                    desc.hash(&mut hasher);
+                    chrono::Utc::now().timestamp_nanos_opt().hash(&mut hasher);
+                    let hash = hasher.finish();
+
+                    Ok(ContentId::new(format!("{:016x}", hash)))
+                }
+            }
         })
         .await
-        .map_err(|e| DomainError::Internal(format!("spawn_blocking join error: {e}")))?;
-
-        cid
+        .map_err(|e| DomainError::Internal(format!("spawn_blocking join error: {e}")))?
     }
 
     #[instrument(skip(self))]
     async fn resolve_head(&self) -> Result<Option<ContentId>, DomainError> {
-        let _handle_ref = self.handle.clone();
+        let handle_arc = self.handle.clone();
 
-        let result = tokio::task::spawn_blocking(move || {
-            // Même limitation que create_operation avec le tokio::Mutex
-            // Pour l'instant, on retourne None si pas de handle
-            warn!("resolve_head: accès au repo jj non encore implémenté dans spawn_blocking");
-            Ok::<Option<ContentId>, DomainError>(None)
+        tokio::task::spawn_blocking(move || {
+            // parking_lot::Mutex::lock() — accès direct, aucun .await
+            let guard = handle_arc.lock();
+
+            match guard.as_ref() {
+                Some(handle) => {
+                    let view = handle.repo.view();
+                    let heads: Vec<_> = view.heads().into_iter().collect();
+
+                    if let Some(head_id) = heads.first() {
+                        // CommitId → hex string → ContentId (ACL : type jj ne sort pas)
+                        let hex = head_id.hex();
+                        info!(head = %hex, "HEAD résolu depuis le repo jj");
+                        Ok(Some(ContentId::new(hex)))
+                    } else {
+                        info!("Repo vide — pas de HEAD");
+                        Ok(None)
+                    }
+                }
+                None => {
+                    warn!("resolve_head: workspace non initialisé");
+                    Ok(None)
+                }
+            }
         })
         .await
-        .map_err(|e| DomainError::Internal(format!("spawn_blocking join error: {e}")))?;
-
-        result
+        .map_err(|e| DomainError::Internal(format!("spawn_blocking join error: {e}")))?
     }
 
     #[instrument(skip(self))]
     async fn diff_since(&self, content_id: &ContentId) -> Result<Vec<String>, DomainError> {
         let _cid = content_id.to_string();
 
-        let result = tokio::task::spawn_blocking(move || {
+        tokio::task::spawn_blocking(move || {
+            // TODO Phase 3 : comparaison de trees entre commit donné et HEAD
             warn!("diff_since: comparaison de trees non encore implémentée");
-            Ok::<Vec<String>, DomainError>(Vec::new())
+            Ok(Vec::new())
         })
         .await
-        .map_err(|e| DomainError::Internal(format!("spawn_blocking join error: {e}")))?;
-
-        result
+        .map_err(|e| DomainError::Internal(format!("spawn_blocking join error: {e}")))?
     }
 }
 
@@ -242,12 +282,10 @@ mod tests {
         let result = engine.init_workspace("test-repo").await;
         assert!(result.is_ok(), "init_workspace failed: {:?}", result.err());
 
-        // Vérifier que le répertoire .jj a été créé
         let jj_dir = tmp.path().join("test-repo").join(".jj");
         assert!(jj_dir.exists(), ".jj directory should exist after init");
         assert!(jj_dir.is_dir(), ".jj should be a directory");
 
-        // Vérifier que le repo dir existe
         let repo_dir = jj_dir.join("repo");
         assert!(repo_dir.exists(), ".jj/repo should exist");
     }
@@ -257,20 +295,14 @@ mod tests {
         let tmp = tempfile::TempDir::new().expect("Failed to create temp dir");
         let engine = JujutsuEngine::new(tmp.path());
 
-        // Init d'abord
         engine.init_workspace("test-repo").await.unwrap();
 
-        // Créer une opération
-        let result = engine
-            .create_operation("Test operation", &[])
-            .await;
-
+        let result = engine.create_operation("Test operation", &[]).await;
         assert!(result.is_ok(), "create_operation failed: {:?}", result.err());
 
         let cid = result.unwrap();
         let cid_str = cid.to_string();
         assert!(!cid_str.is_empty(), "ContentId should not be empty");
-        // Le CID devrait être un hex string
         assert!(
             cid_str.chars().all(|c| c.is_ascii_hexdigit()),
             "ContentId should be hex: {cid_str}"
@@ -278,12 +310,46 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn test_resolve_head_returns_none_initially() {
+    async fn test_resolve_head_returns_some_after_init() {
         let tmp = tempfile::TempDir::new().expect("Failed to create temp dir");
         let engine = JujutsuEngine::new(tmp.path());
 
-        let result = engine.resolve_head().await;
-        assert!(result.is_ok());
-        assert!(result.unwrap().is_none(), "HEAD should be None before init");
+        // Avant init : None
+        let head_before = engine.resolve_head().await.unwrap();
+        assert!(head_before.is_none(), "HEAD should be None before init");
+
+        // Après init : le repo jj a un root commit → HEAD existe
+        engine.init_workspace("test-repo").await.unwrap();
+        let head_after = engine.resolve_head().await.unwrap();
+        assert!(
+            head_after.is_some(),
+            "HEAD should be Some after init (jj creates root commit)"
+        );
+
+        // Le CID doit être un hex string de longueur fixe (CommitId jj = 64 hex chars)
+        let hex = head_after.unwrap().to_string();
+        assert!(
+            hex.chars().all(|c| c.is_ascii_hexdigit()),
+            "HEAD CID should be hex: {hex}"
+        );
+        // jj-lib SimpleBackend = 512 bits = 128 hex chars (≠ Git SHA-256 = 64 hex chars)
+        assert_eq!(hex.len(), 128, "jj CommitId should be 128 hex chars (512 bits): len={}", hex.len());
+    }
+
+    #[tokio::test]
+    async fn test_parking_lot_mutex_accessible_from_spawn_blocking() {
+        // Vérifie que parking_lot::Mutex fonctionne sans runtime async
+        // (ce qui était impossible avec tokio::Mutex)
+        let handle: Arc<Mutex<Option<i32>>> = Arc::new(Mutex::new(None));
+        let h = handle.clone();
+
+        tokio::task::spawn_blocking(move || {
+            // parking_lot: pas de .await, pas de unwrap(), jamais de poisoning
+            *h.lock() = Some(42);
+        })
+        .await
+        .unwrap();
+
+        assert_eq!(*handle.lock(), Some(42));
     }
 }

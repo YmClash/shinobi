@@ -61,3 +61,6 @@ fuzz/corpus/
 .DS_Store
 Thumbs.db
 Desktop.ini
+
+#d Docs
+/Docs

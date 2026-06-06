@@ -15,8 +15,11 @@ sqlx  = { workspace = true }
 redis = { workspace = true }
 
 # — Moteur VCS —
-jj-lib = { workspace = true }
-pollster = { workspace = true }
+jj-lib    = { workspace = true }
+pollster  = { workspace = true }
+
+# — Synchronisation haute performance —
+parking_lot = { workspace = true }
 
 # — Sérialisation —
 serde      = { workspace = true }
