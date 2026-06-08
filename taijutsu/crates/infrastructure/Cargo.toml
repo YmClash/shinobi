@@ -21,6 +21,9 @@ pollster  = { workspace = true }
 # — Synchronisation haute performance —
 parking_lot = { workspace = true }
 
+# — Async streams (diff_since) —
+futures = { workspace = true }
+
 # — Sérialisation —
 serde      = { workspace = true }
 serde_json = { workspace = true }

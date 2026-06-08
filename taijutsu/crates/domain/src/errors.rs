@@ -37,6 +37,10 @@ pub enum DomainError {
     #[error("Erreur de stockage distribué: {0}")]
     StorageError(String),
 
+    /// Commit introuvable dans le repo VCS.
+    #[error("Commit introuvable: {id}")]
+    CommitNotFound { id: String },
+
     /// Erreur interne inattendue.
     #[error("Erreur interne: {0}")]
     Internal(String),

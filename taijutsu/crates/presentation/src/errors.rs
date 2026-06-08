@@ -18,6 +18,7 @@ impl IntoResponse for AppError {
     fn into_response(self) -> Response {
         let (status, message) = match &self.0 {
             DomainError::NotFound { .. } => (StatusCode::NOT_FOUND, self.0.to_string()),
+            DomainError::CommitNotFound { .. } => (StatusCode::NOT_FOUND, self.0.to_string()),
             DomainError::BusinessRule(_) => {
                 (StatusCode::UNPROCESSABLE_ENTITY, self.0.to_string())
             }
@@ -57,6 +58,7 @@ impl From<DomainError> for AppError {
 pub fn domain_error_to_status(err: DomainError) -> tonic::Status {
     match &err {
         DomainError::NotFound { .. } => tonic::Status::not_found(err.to_string()),
+        DomainError::CommitNotFound { .. } => tonic::Status::not_found(err.to_string()),
         DomainError::BusinessRule(_) => tonic::Status::invalid_argument(err.to_string()),
         DomainError::Conflict(_) => tonic::Status::already_exists(err.to_string()),
         DomainError::Persistence(_)
