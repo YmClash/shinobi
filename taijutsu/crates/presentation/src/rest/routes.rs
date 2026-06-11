@@ -124,6 +124,7 @@ async fn create_operation_handler(
         author_id: body.author_id,
         description: body.description,
         parent_ids: body.parent_ids,
+        files: vec![],
     };
 
     let result = state.create_operation.execute(cmd).await?;

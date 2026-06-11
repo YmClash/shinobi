@@ -5,5 +5,6 @@
 //! - Les adaptateurs primaires (presentation/) les **consomment** via les use cases.
 
 pub mod content_store;
+pub mod event_publisher;
 pub mod repository;
 pub mod vcs_engine;

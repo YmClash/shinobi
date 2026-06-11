@@ -14,15 +14,18 @@ use std::sync::Arc;
 
 use sqlx::postgres::PgPoolOptions;
 use tokio::net::TcpListener;
-use tracing::{error, info};
+use tracing::{error, info, warn};
 use tracing_subscriber::{EnvFilter, layer::SubscriberExt, util::SubscriberInitExt};
 
 use application::use_cases::create_operation::CreateOperationUseCase;
 use application::use_cases::get_operation::GetOperationUseCase;
 use application::use_cases::list_operations::ListOperationsUseCase;
 use infrastructure::cache::redis_cache::RedisCache;
+use infrastructure::content::ipfs_store::IpfsContentStore;
+use infrastructure::events::kafka_producer::KafkaEventPublisher;
 use infrastructure::persistence::postgres_repo::PostgresOperationRepository;
 use infrastructure::vcs::jujutsu_engine::JujutsuEngine;
+use domain::ports::vcs_engine::VcsEngine as _; // Trait import — rend init_workspace() visible
 use presentation::grpc::services::proto::shinobi_service_server::ShinobiServiceServer;
 use presentation::grpc::services::ShinobiServiceImpl;
 use presentation::rest::routes::create_router;
@@ -49,6 +52,8 @@ async fn main() -> anyhow::Result<()> {
         rest_port = config.rest_port,
         grpc_port = config.grpc_port,
         vcs_root = %config.vcs_workspace_root,
+        kafka_brokers = %config.kafka_brokers,
+        ipfs_api_url = %config.ipfs_api_url,
         "Configuration chargée"
     );
 
@@ -64,9 +69,47 @@ async fn main() -> anyhow::Result<()> {
     let _redis_cache = RedisCache::connect(&config.redis_url).await?;
     info!("✅ Redis connecté");
 
-    // VCS Engine (Anti-Corruption Layer)
+    // VCS Engine (Anti-Corruption Layer) — auto-init au démarrage
+    // Phase Makimono : évoluer vers un registre dynamique multi-workspace (multi-tenant).
     let vcs_engine = JujutsuEngine::new(&config.vcs_workspace_root);
-    info!("✅ VCS Engine initialisé (ACL stub)");
+    vcs_engine.init_workspace("default").await?;
+    info!(
+        workspace = %config.vcs_workspace_root,
+        "✅ VCS Engine initialisé (jj-lib ACL — workspace 'default')"
+    );
+
+    // Nen: Kafka Event Publisher (optionnel — graceful degradation)
+    let event_publisher: Option<Arc<dyn domain::ports::event_publisher::EventPublisher>> =
+        match KafkaEventPublisher::new(&config.kafka_brokers, &config.kafka_topic) {
+            Ok(publisher) => {
+                info!(
+                    brokers = %config.kafka_brokers,
+                    topic = %config.kafka_topic,
+                    "✅ Kafka Event Publisher initialisé"
+                );
+                Some(Arc::new(publisher))
+            }
+            Err(e) => {
+                warn!("⚠️ Kafka non disponible — événements désactivés: {e}");
+                None
+            }
+        };
+
+    // Genjutsu: IPFS Content Store (optionnel — graceful degradation)
+    let _content_store: Option<Arc<dyn domain::ports::content_store::ContentStore>> =
+        match IpfsContentStore::new(&config.ipfs_api_url) {
+            Ok(store) => {
+                info!(
+                    api_url = %config.ipfs_api_url,
+                    "✅ IPFS Content Store initialisé (Genjutsu)"
+                );
+                Some(Arc::new(store))
+            }
+            Err(e) => {
+                warn!("⚠️ IPFS non disponible — stockage distribué désactivé: {e}");
+                None
+            }
+        };
 
     // ── Adaptateurs ────────────────────────────────
     let repo = Arc::new(PostgresOperationRepository::new(pg_pool));
@@ -76,6 +119,7 @@ async fn main() -> anyhow::Result<()> {
     let create_operation = Arc::new(CreateOperationUseCase::new(
         vcs.clone(),
         repo.clone(),
+        event_publisher,
     ));
     let get_operation = Arc::new(GetOperationUseCase::new(repo.clone()));
     let list_operations = Arc::new(ListOperationsUseCase::new(repo.clone()));

@@ -100,6 +100,7 @@ impl ShinobiService for ShinobiServiceImpl {
             author_id,
             description: req.description,
             parent_ids,
+            files: vec![],
         };
 
         let result = self

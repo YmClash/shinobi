@@ -37,6 +37,12 @@ chrono      = { workspace = true }
 async-trait = { workspace = true }
 anyhow      = { workspace = true }
 
+# — Événementiel (Nen / Kafka) —
+rdkafka = { workspace = true }
+
+# — Stockage distribué (Genjutsu / IPFS) —
+reqwest = { workspace = true }
+
 [dev-dependencies]
 tempfile = { workspace = true }
 tokio = { workspace = true }

@@ -32,10 +32,13 @@ use domain::entities::content_id::ContentId;
 use domain::errors::DomainError;
 use domain::ports::vcs_engine::VcsEngine;
 // ObjectId fournit la méthode .hex() sur CommitId — nécessaire pour l'ACL
-use jj_lib::backend::CommitId;
+use jj_lib::backend::{CommitId, CopyId, TreeValue};
 use jj_lib::matchers::EverythingMatcher;
+use jj_lib::merged_tree::MergedTree;
 use jj_lib::object_id::ObjectId;
-use jj_lib::repo::Repo as _; // Trait requis pour .store(), .view() sur Arc<ReadonlyRepo>
+use jj_lib::repo::Repo as _;
+use jj_lib::repo_path::RepoPathBuf;
+use jj_lib::tree_builder::TreeBuilder; // Trait requis pour .store(), .view() sur Arc<ReadonlyRepo>
 
 // ── Types internes ACL (ne sortent jamais du module) ───────────────────────
 
@@ -233,14 +236,17 @@ impl VcsEngine for JujutsuEngine {
         workspace_handle
     }
 
-    #[instrument(skip(self))]
+    #[instrument(skip(self, files))]
     async fn create_operation(
         &self,
         description: &str,
         _parent_ids: &[String],
+        files: &[(String, Vec<u8>)],
     ) -> Result<ContentId, DomainError> {
         let handle_arc = self.handle.clone();
         let desc = description.to_string();
+        // Clone files into owned data for the 'static closure
+        let files_owned: Vec<(String, Vec<u8>)> = files.to_vec();
 
         tokio::task::spawn_blocking(move || {
             // parking_lot::Mutex::lock() — accès direct depuis spawn_blocking
@@ -255,26 +261,68 @@ impl VcsEngine for JujutsuEngine {
             // start_transaction(self: &Arc<Self>) emprunte l'Arc — on ne peut
             // pas emprunter depuis le MutexGuard en même temps.
             let repo_arc = wh.repo.clone();
+            let store = repo_arc.store();
 
-            // 1. Démarrer la transaction
+            // ── Construire le MergedTree ─────────────────────────────────
+            let merged_tree = if files_owned.is_empty() {
+                // Cas Phase 3 : empty tree (rétro-compatible)
+                store.empty_merged_tree()
+            } else {
+                // Cas Phase 4A : TreeBuilder avec fichiers réels
+                let mut tree_builder = TreeBuilder::new(
+                    store.clone(),
+                    store.empty_tree_id().clone(),
+                );
+
+                for (path, content) in &files_owned {
+                    let repo_path = RepoPathBuf::from_internal_string(path)
+                        .map_err(|e| DomainError::VcsError(format!("invalid repo path '{path}': {e}")))?;
+
+                    // IMPORTANT: Pont Asynchrone (Cursor + AsyncRead)
+                    // store.write_file() attend &mut dyn AsyncRead + Send + Unpin.
+                    // std::io::Cursor implémente tokio::io::AsyncRead via le
+                    // feature io-util (activé par tokio "full") — pollster::block_on
+                    // exécute le futur synchronement dans spawn_blocking.
+                    let mut cursor = std::io::Cursor::new(content.as_slice());
+                    let file_id = pollster::block_on(
+                        store.write_file(&repo_path, &mut cursor)
+                    )
+                    .map_err(|e| DomainError::VcsError(format!("write_file failed: {e}")))?;
+
+                    tree_builder.set(
+                        repo_path,
+                        TreeValue::File {
+                            id: file_id,
+                            executable: false,
+                            copy_id: CopyId::placeholder(),
+                        },
+                    );
+                }
+
+                // write_tree() est async — pollster::block_on dans spawn_blocking
+                let tree_id = pollster::block_on(tree_builder.write_tree())
+                    .map_err(|e| DomainError::VcsError(format!("TreeBuilder write_tree failed: {e}")))?;
+
+                // TreeId → MergedTree résolu (sans conflits)
+                MergedTree::resolved(store.clone(), tree_id)
+            };
+
+            // ── Transaction (inchangé sauf le tree) ──────────────────────
             let mut tx = repo_arc.start_transaction();
 
-            // 2. Obtenir le tree vide (pas de fichiers dans le working copy)
-            let empty_tree = repo_arc.store().empty_merged_tree();
-
-            // 3. Déterminer les parents : heads triés, ou root_commit si vide
+            // Déterminer les parents : heads triés, ou root_commit si vide
             let mut heads: Vec<CommitId> = repo_arc.view().heads().iter().cloned().collect();
             heads.sort(); // CommitId: Ord dérivé (object_id.rs) — déterminisme
             let parents = if heads.is_empty() {
-                vec![repo_arc.store().root_commit_id().clone()]
+                vec![store.root_commit_id().clone()]
             } else {
                 heads
             };
 
-            // 4. Créer le commit via CommitBuilder (transactionnel réel)
+            // Créer le commit via CommitBuilder (transactionnel réel)
             let commit = pollster::block_on(
                 tx.repo_mut()
-                    .new_commit(parents, empty_tree)
+                    .new_commit(parents, merged_tree)
                     .set_description(&desc)
                     .write(),
             )
@@ -283,18 +331,20 @@ impl VcsEngine for JujutsuEngine {
             // ACL : capturer le CommitId hex AVANT de consommer tx
             let commit_id_hex = commit.id().hex();
 
-            // 5. Finaliser la transaction — publie le commit dans le repo
+            // Finaliser la transaction — publie le commit dans le repo
             let new_repo = pollster::block_on(
                 tx.commit(format!("SHINOBI: {desc}"))
             )
             .map_err(|e| DomainError::VcsError(format!("Transaction commit failed: {e}")))?;
 
-            // 6. Mettre à jour le handle avec le nouveau repo
+            // Mettre à jour le handle avec le nouveau repo
             wh.update_repo(new_repo);
 
+            let file_count = files_owned.len();
             info!(
                 description = %desc,
                 commit_id = %commit_id_hex,
+                files = file_count,
                 "Opération VCS créée (jj SimpleBackend — commit transactionnel réel)"
             );
 
@@ -433,7 +483,7 @@ mod tests {
 
         engine.init_workspace("test-repo").await.unwrap();
 
-        let result = engine.create_operation("Test operation", &[]).await;
+        let result = engine.create_operation("Test operation", &[], &[]).await;
         assert!(result.is_ok(), "create_operation failed: {:?}", result.err());
 
         let cid = result.unwrap();
@@ -503,7 +553,7 @@ mod tests {
 
         // Créer une opération transactionnelle réelle
         let cid = engine
-            .create_operation("Phase 3 real commit", &[])
+            .create_operation("Phase 3 real commit", &[], &[])
             .await
             .unwrap();
 
@@ -532,11 +582,11 @@ mod tests {
         engine.init_workspace("test-repo").await.unwrap();
 
         let cid1 = engine
-            .create_operation("First commit", &[])
+            .create_operation("First commit", &[], &[])
             .await
             .unwrap();
         let cid2 = engine
-            .create_operation("Second commit", &[])
+            .create_operation("Second commit", &[], &[])
             .await
             .unwrap();
 
@@ -555,7 +605,7 @@ mod tests {
 
         engine.init_workspace("test-repo").await.unwrap();
         engine
-            .create_operation("Test commit", &[])
+            .create_operation("Test commit", &[], &[])
             .await
             .unwrap();
 
@@ -574,7 +624,7 @@ mod tests {
         let engine = JujutsuEngine::new(tmp.path());
 
         // Sans init_workspace, create_operation doit échouer
-        let result = engine.create_operation("Should fail", &[]).await;
+        let result = engine.create_operation("Should fail", &[], &[]).await;
         assert!(
             result.is_err(),
             "create_operation should fail without init"
@@ -596,7 +646,7 @@ mod tests {
 
         engine.init_workspace("test-repo").await.unwrap();
         engine
-            .create_operation("Test commit", &[])
+            .create_operation("Test commit", &[], &[])
             .await
             .unwrap();
 
@@ -636,7 +686,7 @@ mod tests {
 
         // Après create_operation, le repo interne doit être mis à jour
         engine
-            .create_operation("Update repo test", &[])
+            .create_operation("Update repo test", &[], &[])
             .await
             .unwrap();
 
@@ -649,7 +699,7 @@ mod tests {
 
         // Un second commit doit aussi fonctionner (repo pas stale)
         let cid2 = engine
-            .create_operation("Second after update", &[])
+            .create_operation("Second after update", &[], &[])
             .await;
         assert!(
             cid2.is_ok(),
@@ -669,7 +719,7 @@ mod tests {
 
         // Créer un nouveau commit
         engine
-            .create_operation("New commit for diff", &[])
+            .create_operation("New commit for diff", &[], &[])
             .await
             .unwrap();
 
@@ -680,6 +730,166 @@ mod tests {
             diff.is_ok(),
             "diff_since(old_head) should not panic: {:?}",
             diff.err()
+        );
+    }
+
+    // ── Phase 4A — Tests VCS File Writing ──────────────────────────────────
+
+    #[tokio::test]
+    async fn test_create_operation_with_single_file() {
+        let tmp = tempfile::TempDir::new().expect("Failed to create temp dir");
+        let engine = JujutsuEngine::new(tmp.path());
+
+        engine.init_workspace("test-repo").await.unwrap();
+
+        let head_before = engine.resolve_head().await.unwrap().unwrap();
+
+        let files = vec![
+            ("hello.txt".to_string(), b"Hello SHINOBI!".to_vec()),
+        ];
+
+        let cid = engine
+            .create_operation("Add hello.txt", &[], &files)
+            .await;
+        assert!(cid.is_ok(), "create_operation with file failed: {:?}", cid.err());
+
+        let cid = cid.unwrap();
+        assert!(!cid.to_string().is_empty(), "ContentId should not be empty");
+
+        // HEAD must have changed
+        let head_after = engine.resolve_head().await.unwrap().unwrap();
+        assert_ne!(
+            head_before.to_string(),
+            head_after.to_string(),
+            "HEAD should change after commit with file"
+        );
+    }
+
+    #[tokio::test]
+    async fn test_create_operation_with_multiple_files() {
+        let tmp = tempfile::TempDir::new().expect("Failed to create temp dir");
+        let engine = JujutsuEngine::new(tmp.path());
+
+        engine.init_workspace("test-repo").await.unwrap();
+
+        let files = vec![
+            ("src/main.rs".to_string(), b"fn main() {}".to_vec()),
+            ("src/lib.rs".to_string(), b"pub mod core;".to_vec()),
+            ("README.md".to_string(), b"# SHINOBI".to_vec()),
+        ];
+
+        let cid = engine
+            .create_operation("Initial project structure", &[], &files)
+            .await;
+        assert!(
+            cid.is_ok(),
+            "create_operation with multiple files failed: {:?}",
+            cid.err()
+        );
+
+        let hex = cid.unwrap().to_string();
+        assert_eq!(hex.len(), 128, "jj CommitId should be 128 hex chars: len={}", hex.len());
+    }
+
+    #[tokio::test]
+    async fn test_diff_since_detects_file_addition() {
+        let tmp = tempfile::TempDir::new().expect("Failed to create temp dir");
+        let engine = JujutsuEngine::new(tmp.path());
+
+        engine.init_workspace("test-repo").await.unwrap();
+
+        // Capture HEAD before adding file
+        let old_head = engine.resolve_head().await.unwrap().unwrap();
+
+        // Commit with a real file
+        let files = vec![
+            ("hello.txt".to_string(), b"Hello World".to_vec()),
+        ];
+        engine
+            .create_operation("Add hello.txt", &[], &files)
+            .await
+            .unwrap();
+
+        // diff_since(old_head) should detect the added file
+        let diff = engine.diff_since(&old_head).await.unwrap();
+        assert!(
+            !diff.is_empty(),
+            "diff_since should detect file addition (got empty vec)"
+        );
+        assert!(
+            diff.contains(&"hello.txt".to_string()),
+            "diff should contain 'hello.txt', got: {:?}",
+            diff
+        );
+    }
+
+    #[tokio::test]
+    async fn test_create_with_empty_files_uses_empty_tree() {
+        let tmp = tempfile::TempDir::new().expect("Failed to create temp dir");
+        let engine = JujutsuEngine::new(tmp.path());
+
+        engine.init_workspace("test-repo").await.unwrap();
+
+        let old_head = engine.resolve_head().await.unwrap().unwrap();
+
+        // Empty files slice → should use empty_merged_tree (Phase 3 behavior)
+        let cid = engine
+            .create_operation("Empty tree commit", &[], &[])
+            .await
+            .unwrap();
+
+        // Should succeed and return valid CID
+        assert!(!cid.to_string().is_empty());
+
+        // diff_since should show no file changes (both trees empty)
+        let diff = engine.diff_since(&old_head).await.unwrap();
+        assert!(
+            diff.is_empty(),
+            "diff_since with empty-tree commits should be empty, got: {:?}",
+            diff
+        );
+    }
+
+    #[tokio::test]
+    async fn test_create_with_file_then_diff_shows_path() {
+        let tmp = tempfile::TempDir::new().expect("Failed to create temp dir");
+        let engine = JujutsuEngine::new(tmp.path());
+
+        engine.init_workspace("test-repo").await.unwrap();
+
+        // Step 1: Empty commit (Phase 3 style)
+        let old_cid = engine
+            .create_operation("Empty baseline", &[], &[])
+            .await
+            .unwrap();
+
+        // Step 2: Commit with files
+        let files = vec![
+            ("config/app.toml".to_string(), b"[server]\nport = 3000".to_vec()),
+            ("src/main.rs".to_string(), b"fn main() { println!(\"SHINOBI\"); }".to_vec()),
+        ];
+        engine
+            .create_operation("Add project files", &[], &files)
+            .await
+            .unwrap();
+
+        // Step 3: Diff from old_cid → should show both files
+        let diff = engine.diff_since(&old_cid).await.unwrap();
+        assert!(
+            diff.len() >= 2,
+            "diff should show at least 2 files, got {}: {:?}",
+            diff.len(),
+            diff
+        );
+        assert!(
+            diff.contains(&"config/app.toml".to_string()),
+            "diff should contain 'config/app.toml': {:?}",
+            diff
+        );
+        assert!(
+            diff.contains(&"src/main.rs".to_string()),
+            "diff should contain 'src/main.rs': {:?}",
+            diff
         );
     }
 }

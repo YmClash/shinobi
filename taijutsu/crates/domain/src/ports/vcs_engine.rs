@@ -21,10 +21,14 @@ pub trait VcsEngine: Send + Sync {
 
     /// Enregistre une opération dans le graphe de versioning.
     /// Retourne le CID du contenu associé.
+    ///
+    /// `files` : liste de (chemin relatif, contenu bytes) à écrire dans le tree.
+    /// Si la slice est vide, un empty_tree est utilisé (commit de métadonnées).
     async fn create_operation(
         &self,
         description: &str,
         parent_ids: &[String],
+        files: &[(String, Vec<u8>)],
     ) -> Result<ContentId, DomainError>;
 
     /// Résout la tête courante du graphe (HEAD).
