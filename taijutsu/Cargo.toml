@@ -102,3 +102,6 @@ rdkafka = { version = "0.39", features = ["cmake-build", "tokio"] }
 
 # — HTTP Client (Genjutsu / IPFS) —
 reqwest = { version = "0.12", features = ["multipart", "json"] }
+
+# — Métriques (Prometheus) —
+axum-prometheus = { version = "0.10" }

@@ -38,6 +38,12 @@ fn row_to_operation(row: sqlx::postgres::PgRow) -> Result<Operation, DomainError
     let parent_ids: Vec<Uuid> = serde_json::from_value(parent_ids_json)
         .map_err(|e| DomainError::Persistence(format!("parent_ids JSON invalide: {e}")))?;
 
+    // Phase 5: ipfs_cid est nullable — on le mappe vers Option<ContentId>
+    let ipfs_content_id: Option<ContentId> = row
+        .try_get::<Option<String>, _>("ipfs_cid")
+        .map_err(|e| DomainError::Persistence(e.to_string()))?
+        .map(ContentId::new);
+
     Ok(Operation {
         id: row
             .try_get("id")
@@ -49,6 +55,7 @@ fn row_to_operation(row: sqlx::postgres::PgRow) -> Result<Operation, DomainError
             row.try_get::<String, _>("content_id")
                 .map_err(|e| DomainError::Persistence(e.to_string()))?,
         ),
+        ipfs_content_id,
         description: row
             .try_get("description")
             .map_err(|e| DomainError::Persistence(e.to_string()))?,
@@ -68,13 +75,14 @@ impl OperationRepository for PostgresOperationRepository {
 
         sqlx::query(
             r#"
-            INSERT INTO operations (id, author_id, content_id, description, parent_ids, created_at)
-            VALUES ($1, $2, $3, $4, $5, $6)
+            INSERT INTO operations (id, author_id, content_id, ipfs_cid, description, parent_ids, created_at)
+            VALUES ($1, $2, $3, $4, $5, $6, $7)
             "#,
         )
         .bind(operation.id)
         .bind(operation.author_id)
         .bind(operation.content_id.as_str())
+        .bind(operation.ipfs_content_id.as_ref().map(|cid| cid.as_str()))
         .bind(&operation.description)
         .bind(&parent_ids_json)
         .bind(operation.created_at)
@@ -88,7 +96,7 @@ impl OperationRepository for PostgresOperationRepository {
     #[instrument(skip(self))]
     async fn find_by_id(&self, id: &Uuid) -> Result<Option<Operation>, DomainError> {
         let row = sqlx::query(
-            "SELECT id, author_id, content_id, description, parent_ids, created_at \
+            "SELECT id, author_id, content_id, ipfs_cid, description, parent_ids, created_at \
              FROM operations WHERE id = $1",
         )
         .bind(id)
@@ -105,7 +113,7 @@ impl OperationRepository for PostgresOperationRepository {
     #[instrument(skip(self))]
     async fn list_recent(&self, limit: usize) -> Result<Vec<Operation>, DomainError> {
         let rows = sqlx::query(
-            "SELECT id, author_id, content_id, description, parent_ids, created_at \
+            "SELECT id, author_id, content_id, ipfs_cid, description, parent_ids, created_at \
              FROM operations ORDER BY created_at DESC LIMIT $1",
         )
         .bind(limit as i64)
@@ -119,7 +127,7 @@ impl OperationRepository for PostgresOperationRepository {
     #[instrument(skip(self))]
     async fn find_by_author(&self, author_id: &Uuid) -> Result<Vec<Operation>, DomainError> {
         let rows = sqlx::query(
-            "SELECT id, author_id, content_id, description, parent_ids, created_at \
+            "SELECT id, author_id, content_id, ipfs_cid, description, parent_ids, created_at \
              FROM operations WHERE author_id = $1 ORDER BY created_at DESC",
         )
         .bind(author_id)

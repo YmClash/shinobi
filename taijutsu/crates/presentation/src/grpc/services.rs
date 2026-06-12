@@ -48,6 +48,7 @@ fn operation_to_proto(op: domain::entities::operation::Operation) -> OperationRe
         description: op.description,
         parent_ids: op.parent_ids.iter().map(|id| id.to_string()).collect(),
         created_at: op.created_at.timestamp(),
+        ipfs_content_id: op.ipfs_content_id.map(|cid| cid.into_inner()),
     }
 }
 

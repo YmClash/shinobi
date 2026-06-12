@@ -96,7 +96,7 @@ async fn main() -> anyhow::Result<()> {
         };
 
     // Genjutsu: IPFS Content Store (optionnel — graceful degradation)
-    let _content_store: Option<Arc<dyn domain::ports::content_store::ContentStore>> =
+    let content_store: Option<Arc<dyn domain::ports::content_store::ContentStore>> =
         match IpfsContentStore::new(&config.ipfs_api_url) {
             Ok(store) => {
                 info!(
@@ -120,6 +120,7 @@ async fn main() -> anyhow::Result<()> {
         vcs.clone(),
         repo.clone(),
         event_publisher,
+        content_store,
     ));
     let get_operation = Arc::new(GetOperationUseCase::new(repo.clone()));
     let list_operations = Arc::new(ListOperationsUseCase::new(repo.clone()));
@@ -194,20 +195,20 @@ async fn shutdown_signal() {
 /// Affiche la bannière de démarrage SHINOBI.
 fn print_banner() {
     let banner = r#"
-    ╔══════════════════════════════════════════════╗
-    ║                                              ║
-    ║   ███████╗██╗  ██╗██╗███╗   ██╗ ██████╗     ║
-    ║   ██╔════╝██║  ██║██║████╗  ██║██╔═══██╗    ║
-    ║   ███████╗███████║██║██╔██╗ ██║██║   ██║    ║
-    ║   ╚════██║██╔══██║██║██║╚██╗██║██║   ██║    ║
-    ║   ███████║██║  ██║██║██║ ╚████║╚██████╔╝    ║
-    ║   ╚══════╝╚═╝  ╚═╝╚═╝╚═╝  ╚═══╝ ╚═════╝     ║
-    ║                                              ║
-    ║   ⚙️  TAIJUTSU — Moteur Central v0.1.0       ║
-    ║   ⚡ Ninpo (gRPC) + Axum (REST)              ║
-    ║   🥷 Next-Gen VCS for Human/AI Collaboration ║
-    ║                                              ║
-    ╚══════════════════════════════════════════════╝
+    ╔═══════════════════════════════════════════════════════════════╗
+    ║                                                               ║
+    ║   ███████╗██╗  ██╗██╗███╗   ██╗ ██████╗ ██████╗ ██╗           ║
+    ║   ██╔════╝██║  ██║██║████╗  ██║██╔═══██╗██╔══██╗██║           ║
+    ║   ███████╗███████║██║██╔██╗ ██║██║   ██║██████╔╝██║           ║
+    ║   ╚════██║██╔══██║██║██║╚██╗██║██║   ██║██╔══██╗██║           ║
+    ║   ███████║██║  ██║██║██║ ╚████║╚██████╔╝██████╔╝██║           ║
+    ║   ╚══════╝╚═╝  ╚═╝╚═╝╚═╝  ╚═══╝ ╚═════╝ ╚═════╝ ╚═╝           ║
+    ║                                                               ║
+    ║   ⚙️  TAIJUTSU — Moteur Central v0.5.0                        ║
+    ║   ⚡ Ninpo (gRPC) + Axum (REST) + Prometheus                  ║
+    ║   🥷 Next-Gen VCS for Human/AI Collaboration                   ║
+    ║                                                               ║
+    ╚═══════════════════════════════════════════════════════════════╝
     "#;
     println!("{banner}");
 }

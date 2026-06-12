@@ -49,6 +49,8 @@ pub struct OperationJson {
     pub id: Uuid,
     pub author_id: Uuid,
     pub content_id: String,
+    /// CID IPFS distribué — null si non synchronisé (Genjutsu).
+    pub ipfs_content_id: Option<String>,
     pub description: String,
     pub parent_ids: Vec<Uuid>,
     pub created_at: DateTime<Utc>,
@@ -60,6 +62,7 @@ impl From<Operation> for OperationJson {
             id: op.id,
             author_id: op.author_id,
             content_id: op.content_id.into_inner(),
+            ipfs_content_id: op.ipfs_content_id.map(|cid| cid.into_inner()),
             description: op.description,
             parent_ids: op.parent_ids,
             created_at: op.created_at,
@@ -70,7 +73,13 @@ impl From<Operation> for OperationJson {
 // ─── Routeur ─────────────────────────────────────
 
 /// Construit le routeur Axum principal avec les use cases injectés.
+///
+/// Intègre automatiquement le middleware Prometheus pour les métriques HTTP.
+/// La route `/metrics` expose les métriques au format Prometheus scrape.
 pub fn create_router(state: SharedState) -> Router {
+    // ── Prometheus Middleware ───────────────────────
+    let (prometheus_layer, metric_handle) = axum_prometheus::PrometheusMetricLayer::pair();
+
     Router::new()
         // Health & status (sans état)
         .route("/health", get(health_check))
@@ -81,7 +90,11 @@ pub fn create_router(state: SharedState) -> Router {
             post(create_operation_handler).get(list_operations_handler),
         )
         .route("/api/v1/operations/{id}", get(get_operation_handler))
+        // ── Métriques Prometheus ────────────────────
+        .route("/metrics", get(move || async move { metric_handle.render() }))
         .with_state(state)
+        // Le layer doit être appliqué APRÈS .with_state() pour couvrir toutes les routes
+        .layer(prometheus_layer)
 }
 
 // ─── Handlers ────────────────────────────────────

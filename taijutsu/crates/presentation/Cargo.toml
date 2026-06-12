@@ -11,6 +11,7 @@ application = { path = "../application" }
 # — API REST —
 axum  = { workspace = true }
 tokio = { workspace = true }
+axum-prometheus = { workspace = true }
 
 # — gRPC (Ninpo) —
 tonic = { workspace = true }

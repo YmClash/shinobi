@@ -45,8 +45,8 @@ use jj_lib::tree_builder::TreeBuilder; // Trait requis pour .store(), .view() su
 /// Handle interne vers un workspace jj ouvert.
 /// Encapsule les types jj-lib pour qu'ils ne fuient pas vers le domain.
 struct WorkspaceHandle {
-    #[allow(dead_code)] // Phase 4 : accès au working copy
-    workspace: jj_lib::workspace::Workspace,
+    #[allow(dead_code)] // Phase 4 : accès au working copy (pas utilisé pour les ops VCS)
+    workspace: Option<jj_lib::workspace::Workspace>,
     repo: Arc<jj_lib::repo::ReadonlyRepo>,
     #[allow(dead_code)] // Phase 4 : signature des commits (UserSettings::signature())
     settings: jj_lib::settings::UserSettings,
@@ -208,25 +208,62 @@ impl VcsEngine for JujutsuEngine {
                 ))
             })?;
 
-            // pollster::block_on exécute le futur async de Workspace::init_simple
-            // de manière synchrone, puisque nous sommes déjà dans spawn_blocking.
-            let (workspace, repo) = pollster::block_on(
-                jj_lib::workspace::Workspace::init_simple(&settings, &workspace_path),
-            )
-            .map_err(|e| DomainError::VcsError(format!("Init workspace failed: {e}")))?;
+            let jj_dir = workspace_path.join(".jj");
 
-            info!(
-                path = %workspace_path.display(),
-                "Workspace jj initialisé (SimpleBackend)"
-            );
+            if jj_dir.exists() {
+                // ── Workspace existant → rouvrir le repo ────────────────
+                // jj-lib refuse init_simple si .jj/ existe déjà.
+                // On charge le repo directement via RepoLoader.
+                // Note : `WorkspaceHandle.workspace` est `#[allow(dead_code)]`
+                // — on ne l'utilise pas pour les opérations VCS.
+                info!(
+                    path = %workspace_path.display(),
+                    "Workspace jj existant détecté — réouverture (skip init)"
+                );
 
-            // parking_lot::Mutex::lock() — synchrone, pas de .await requis,
-            // et jamais de poisoning en cas de panic dans d'autres threads.
-            *handle_arc.lock() = Some(WorkspaceHandle {
-                workspace,
-                repo,
-                settings,
-            });
+                // RepoLoader::init_from_file_system lit les fichiers `type`
+                // dans .jj/repo/store, .jj/repo/op_store, etc. et charge
+                // les bons backends via StoreFactories::default().
+                let store_factories = jj_lib::repo::StoreFactories::default();
+                let repo_loader = jj_lib::repo::RepoLoader::init_from_file_system(
+                    &settings,
+                    &jj_dir.join("repo"),
+                    &store_factories,
+                )
+                .map_err(|e| {
+                    DomainError::VcsError(format!("RepoLoader init_from_file_system failed: {e}"))
+                })?;
+
+                let repo = pollster::block_on(repo_loader.load_at_head())
+                    .map_err(|e| {
+                        DomainError::VcsError(format!("RepoLoader load_at_head failed: {e}"))
+                    })?;
+
+                *handle_arc.lock() = Some(WorkspaceHandle {
+                    workspace: None,
+                    repo,
+                    settings,
+                });
+            } else {
+                // ── Nouveau workspace → init_simple ─────────────────────
+                let (workspace, repo) = pollster::block_on(
+                    jj_lib::workspace::Workspace::init_simple(&settings, &workspace_path),
+                )
+                .map_err(|e| {
+                    DomainError::VcsError(format!("Init workspace failed: {e}"))
+                })?;
+
+                info!(
+                    path = %workspace_path.display(),
+                    "Workspace jj initialisé (SimpleBackend — nouveau)"
+                );
+
+                *handle_arc.lock() = Some(WorkspaceHandle {
+                    workspace: Some(workspace),
+                    repo,
+                    settings,
+                });
+            };
 
             Ok::<(), DomainError>(())
         })

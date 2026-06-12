@@ -62,6 +62,8 @@ message OperationResponse {
     string description = 4;
     repeated string parent_ids = 5;
     int64  created_at  = 6;
+    // CID IPFS distribué (Genjutsu) — vide si non synchronisé.
+    optional string ipfs_content_id = 7;
 }
 
 message ListOperationsResponse {
