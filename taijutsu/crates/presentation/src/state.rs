@@ -8,6 +8,7 @@ use std::sync::Arc;
 use application::use_cases::create_operation::CreateOperationUseCase;
 use application::use_cases::get_operation::GetOperationUseCase;
 use application::use_cases::list_operations::ListOperationsUseCase;
+use application::use_cases::search_chunks::SearchChunksUseCase;
 
 /// État applicatif partagé entre les couches de présentation.
 ///
@@ -23,4 +24,7 @@ pub struct SharedState {
 
     /// Use case: lister les opérations avec filtrage.
     pub list_operations: Arc<ListOperationsUseCase>,
+
+    /// Use case: interroger la mémoire sémantique de l'IA.
+    pub search_chunks: Arc<SearchChunksUseCase>,
 }

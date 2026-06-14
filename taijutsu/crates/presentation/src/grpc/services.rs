@@ -10,6 +10,7 @@ use uuid::Uuid;
 
 use application::use_cases::create_operation::CreateOperationCommand;
 use application::use_cases::list_operations::ListFilter;
+use application::use_cases::search_chunks::ChunkSearchFilter;
 
 use crate::errors::domain_error_to_status;
 use crate::state::SharedState;
@@ -21,8 +22,9 @@ pub mod proto {
 
 use proto::shinobi_service_server::ShinobiService;
 use proto::{
-    CreateOperationRequest, GetOperationRequest, ListOperationsRequest,
-    ListOperationsResponse, OperationResponse, PingRequest, PingResponse,
+    ChunkListResponse, ChunkResponse, CreateOperationRequest, GetChunksRequest,
+    GetOperationRequest, ListOperationsRequest, ListOperationsResponse, OperationResponse,
+    PingRequest, PingResponse, SearchChunksRequest,
 };
 
 /// Implémentation du service gRPC ShinobiService.
@@ -49,6 +51,19 @@ fn operation_to_proto(op: domain::entities::operation::Operation) -> OperationRe
         parent_ids: op.parent_ids.iter().map(|id| id.to_string()).collect(),
         created_at: op.created_at.timestamp(),
         ipfs_content_id: op.ipfs_content_id.map(|cid| cid.into_inner()),
+    }
+}
+
+/// Convertit un `StoredChunk` domaine en réponse Protobuf.
+fn chunk_to_proto(chunk: domain::ports::chunk_repository::StoredChunk) -> ChunkResponse {
+    ChunkResponse {
+        kind: chunk.kind,
+        name: chunk.name.unwrap_or_default(),
+        content: chunk.content,
+        start_line: chunk.start_line as i32,
+        end_line: chunk.end_line as i32,
+        file_path: chunk.file_path,
+        language: chunk.language,
     }
 }
 
@@ -165,6 +180,85 @@ impl ShinobiService for ShinobiServiceImpl {
 
         let response = ListOperationsResponse {
             operations: operations.into_iter().map(operation_to_proto).collect(),
+        };
+
+        Ok(Response::new(response))
+    }
+
+    // ── Tensai: Mémoire IA ─────────────────────────
+
+    /// GetChunksByOperation — Récupérer les fragments sémantiques d'une opération.
+    async fn get_chunks_by_operation(
+        &self,
+        request: Request<GetChunksRequest>,
+    ) -> Result<Response<ChunkListResponse>, Status> {
+        let req = request.into_inner();
+
+        info!(
+            operation_id = %req.operation_id,
+            file_path = %req.file_path,
+            "Ninpo: GetChunksByOperation reçu (Tensai)"
+        );
+
+        let operation_id = req
+            .operation_id
+            .parse::<Uuid>()
+            .map_err(|e| Status::invalid_argument(format!("operation_id invalide: {e}")))?;
+
+        let filter = if req.file_path.is_empty() {
+            ChunkSearchFilter::ByOperation { operation_id }
+        } else {
+            ChunkSearchFilter::ByFile {
+                operation_id,
+                file_path: req.file_path,
+            }
+        };
+
+        let result = self
+            .state
+            .search_chunks
+            .execute(filter)
+            .await
+            .map_err(domain_error_to_status)?;
+
+        let response = ChunkListResponse {
+            chunks: result.chunks.into_iter().map(chunk_to_proto).collect(),
+            count: result.count as i32,
+        };
+
+        Ok(Response::new(response))
+    }
+
+    /// SearchChunksByName — Rechercher des symboles par nom.
+    async fn search_chunks_by_name(
+        &self,
+        request: Request<SearchChunksRequest>,
+    ) -> Result<Response<ChunkListResponse>, Status> {
+        let req = request.into_inner();
+
+        info!(
+            name = %req.name,
+            "Ninpo: SearchChunksByName reçu (Tensai)"
+        );
+
+        if req.name.is_empty() {
+            return Err(Status::invalid_argument(
+                "Le nom du symbole ne peut pas être vide",
+            ));
+        }
+
+        let filter = ChunkSearchFilter::ByName { name: req.name };
+
+        let result = self
+            .state
+            .search_chunks
+            .execute(filter)
+            .await
+            .map_err(domain_error_to_status)?;
+
+        let response = ChunkListResponse {
+            chunks: result.chunks.into_iter().map(chunk_to_proto).collect(),
+            count: result.count as i32,
         };
 
         Ok(Response::new(response))

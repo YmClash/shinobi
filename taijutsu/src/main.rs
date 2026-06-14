@@ -3,8 +3,9 @@
 //! Point d'entrée du backend. Initialise simultanément :
 //! - **Axum** : serveur HTTP/REST sur le port configurable
 //! - **Tonic** : serveur gRPC (protocole Ninpo) sur le port configurable
+//! - **Tensai Consumer** : agent IA consommant les événements Kafka
 //!
-//! Les deux serveurs tournent en parallèle dans le même runtime Tokio.
+//! Les trois composants tournent en parallèle dans le même runtime Tokio.
 //! Un shutdown gracieux est déclenché via Ctrl+C.
 
 mod config;
@@ -12,17 +13,23 @@ mod config;
 use std::net::SocketAddr;
 use std::sync::Arc;
 
+use futures::FutureExt;
 use sqlx::postgres::PgPoolOptions;
 use tokio::net::TcpListener;
+use tokio_util::sync::CancellationToken;
 use tracing::{error, info, warn};
 use tracing_subscriber::{EnvFilter, layer::SubscriberExt, util::SubscriberInitExt};
 
+use application::use_cases::analyze_operation::AnalyzeOperationUseCase;
 use application::use_cases::create_operation::CreateOperationUseCase;
 use application::use_cases::get_operation::GetOperationUseCase;
 use application::use_cases::list_operations::ListOperationsUseCase;
+use application::use_cases::search_chunks::SearchChunksUseCase;
 use infrastructure::cache::redis_cache::RedisCache;
 use infrastructure::content::ipfs_store::IpfsContentStore;
+use infrastructure::events::kafka_consumer::KafkaEventConsumer;
 use infrastructure::events::kafka_producer::KafkaEventPublisher;
+use infrastructure::persistence::postgres_chunk_repo::PostgresChunkRepository;
 use infrastructure::persistence::postgres_repo::PostgresOperationRepository;
 use infrastructure::vcs::jujutsu_engine::JujutsuEngine;
 use domain::ports::vcs_engine::VcsEngine as _; // Trait import — rend init_workspace() visible
@@ -30,6 +37,7 @@ use presentation::grpc::services::proto::shinobi_service_server::ShinobiServiceS
 use presentation::grpc::services::ShinobiServiceImpl;
 use presentation::rest::routes::create_router;
 use presentation::state::SharedState;
+use tensai::rust_chunker::RustChunker;
 
 use config::Config;
 
@@ -54,8 +62,12 @@ async fn main() -> anyhow::Result<()> {
         vcs_root = %config.vcs_workspace_root,
         kafka_brokers = %config.kafka_brokers,
         ipfs_api_url = %config.ipfs_api_url,
+        tensai_enabled = config.tensai_consumer_enabled,
         "Configuration chargée"
     );
+
+    // ── Token de shutdown gracieux ─────────────────
+    let cancel_token = CancellationToken::new();
 
     // ── Infrastructure (adaptateurs secondaires) ───
     // Fūinjutsu: PostgreSQL
@@ -111,25 +123,31 @@ async fn main() -> anyhow::Result<()> {
             }
         };
 
-    // ── Adaptateurs ────────────────────────────────
-    let repo = Arc::new(PostgresOperationRepository::new(pg_pool));
+    // ── Adaptateurs ────────────────────────────────────────
+    let repo = Arc::new(PostgresOperationRepository::new(pg_pool.clone()));
+    let chunk_repo: Arc<dyn domain::ports::chunk_repository::ChunkRepository> =
+        Arc::new(PostgresChunkRepository::new(pg_pool));
     let vcs = Arc::new(vcs_engine);
+
+    info!("✅ ChunkRepository PostgreSQL initialisé (Mémoire IA)");
 
     // ── Use Cases (couche application) ─────────────
     let create_operation = Arc::new(CreateOperationUseCase::new(
         vcs.clone(),
         repo.clone(),
         event_publisher,
-        content_store,
+        content_store.clone(),
     ));
     let get_operation = Arc::new(GetOperationUseCase::new(repo.clone()));
     let list_operations = Arc::new(ListOperationsUseCase::new(repo.clone()));
+    let search_chunks = Arc::new(SearchChunksUseCase::new(chunk_repo.clone()));
 
     // ── État partagé (DI Container) ────────────────
     let shared_state = SharedState {
         create_operation,
         get_operation,
         list_operations,
+        search_chunks,
     };
 
     // ── Serveur Axum (REST) ────────────────────────
@@ -166,6 +184,70 @@ async fn main() -> anyhow::Result<()> {
             .map_err(|e| anyhow::anyhow!("Tonic server error: {e}"))
     };
 
+    // ── Agent Tensai : Consumer Kafka (optionnel) ──
+    let tensai_consumer_handle = if config.tensai_consumer_enabled {
+        match (&content_store, KafkaEventConsumer::new(
+            &config.kafka_brokers,
+            &config.kafka_topic,
+            &config.kafka_consumer_group,
+            cancel_token.clone(),
+        )) {
+            (Some(cs), Ok(consumer)) => {
+                let analyzer = Arc::new(AnalyzeOperationUseCase::new(
+                    cs.clone(),
+                    Arc::new(RustChunker::new()),
+                    Some(chunk_repo.clone()), // Phase 6B — Persistence des chunks
+                    None, // Phase 7 — EventPublisher pour re-publication
+                ));
+
+                info!(
+                    topic = %config.kafka_topic,
+                    group = %config.kafka_consumer_group,
+                    "🧠 Tensai Agent IA — Consumer Kafka actif"
+                );
+
+                let handle = tokio::spawn(async move {
+                    let handler: domain::ports::event_consumer::OperationHandler =
+                        Box::new(move |operation| {
+                            let analyzer = analyzer.clone();
+                            async move {
+                                match analyzer.execute(&operation).await {
+                                    Ok(_outcome) => {
+                                        // Le logging est déjà fait dans le use case.
+                                    }
+                                    Err(e) => {
+                                        warn!(
+                                            operation_id = %operation.id,
+                                            error = %e,
+                                            "⚠️ Tensai — Erreur d'analyse sémantique"
+                                        );
+                                    }
+                                }
+                            }
+                            .boxed()
+                        });
+
+                    if let Err(e) = consumer.start(handler).await {
+                        error!("❌ Tensai Consumer terminé avec erreur: {e}");
+                    }
+                });
+
+                Some(handle)
+            }
+            (None, _) => {
+                warn!("⚠️ Tensai Consumer désactivé — IPFS (ContentStore) non disponible");
+                None
+            }
+            (_, Err(e)) => {
+                warn!("⚠️ Tensai Consumer désactivé — Kafka non disponible: {e}");
+                None
+            }
+        }
+    } else {
+        info!("ℹ️ Tensai Consumer désactivé par configuration (TENSAI_CONSUMER_ENABLED=false)");
+        None
+    };
+
     // ── Lancement simultané ────────────────────────
     tokio::select! {
         result = rest_server => {
@@ -178,6 +260,16 @@ async fn main() -> anyhow::Result<()> {
                 error!("Serveur gRPC terminé avec erreur: {e}");
             }
         }
+    }
+
+    // ── Shutdown ────────────────────────────────────
+    // Annuler le token pour arrêter le consumer Tensai.
+    cancel_token.cancel();
+
+    // Attendre la fin du consumer (si actif).
+    if let Some(handle) = tensai_consumer_handle {
+        info!("🛑 Attente de l'arrêt du consumer Tensai...");
+        let _ = handle.await;
     }
 
     info!("Taijutsu — Shutdown complet");
@@ -204,8 +296,9 @@ fn print_banner() {
     ║   ███████║██║  ██║██║██║ ╚████║╚██████╔╝██████╔╝██║           ║
     ║   ╚══════╝╚═╝  ╚═╝╚═╝╚═╝  ╚═══╝ ╚═════╝ ╚═════╝ ╚═╝           ║
     ║                                                               ║
-    ║   ⚙️  TAIJUTSU — Moteur Central v0.5.0                        ║
+    ║   ⚙️  TAIJUTSU — Moteur Central v0.6.0                        ║
     ║   ⚡ Ninpo (gRPC) + Axum (REST) + Prometheus                  ║
+    ║   🧠 Tensai Agent IA — Analyse sémantique temps réel           ║
     ║   🥷 Next-Gen VCS for Human/AI Collaboration                   ║
     ║                                                               ║
     ╚═══════════════════════════════════════════════════════════════╝

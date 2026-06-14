@@ -39,6 +39,7 @@ anyhow      = { workspace = true }
 
 # — Événementiel (Nen / Kafka) —
 rdkafka = { workspace = true }
+tokio-util = { workspace = true }
 
 # — Stockage distribué (Genjutsu / IPFS) —
 reqwest = { workspace = true }

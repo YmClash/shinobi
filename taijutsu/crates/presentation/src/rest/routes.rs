@@ -12,7 +12,9 @@ use uuid::Uuid;
 
 use application::use_cases::create_operation::CreateOperationCommand;
 use application::use_cases::list_operations::ListFilter;
+use application::use_cases::search_chunks::ChunkSearchFilter;
 use domain::entities::operation::Operation;
+use domain::ports::chunk_repository::StoredChunk;
 
 use crate::errors::AppError;
 use crate::state::SharedState;
@@ -43,6 +45,20 @@ pub struct ListOperationsQuery {
     pub author_id: Option<Uuid>,
 }
 
+/// Paramètres de query pour GET /api/v1/operations/:id/chunks.
+#[derive(Debug, Deserialize)]
+pub struct ChunksQuery {
+    /// Filtre optionnel par chemin de fichier (ex: "src/main.rs").
+    pub file: Option<String>,
+}
+
+/// Paramètres de query pour GET /api/v1/chunks/search.
+#[derive(Debug, Deserialize)]
+pub struct SearchChunksQuery {
+    /// Nom du symbole recherché.
+    pub name: String,
+}
+
 /// Réponse JSON pour une opération.
 #[derive(Debug, Serialize)]
 pub struct OperationJson {
@@ -70,6 +86,32 @@ impl From<Operation> for OperationJson {
     }
 }
 
+/// Réponse JSON pour un fragment sémantique.
+#[derive(Debug, Serialize)]
+pub struct ChunkJson {
+    pub kind: String,
+    pub name: Option<String>,
+    pub content: String,
+    pub start_line: usize,
+    pub end_line: usize,
+    pub file_path: String,
+    pub language: String,
+}
+
+impl From<StoredChunk> for ChunkJson {
+    fn from(chunk: StoredChunk) -> Self {
+        Self {
+            kind: chunk.kind,
+            name: chunk.name,
+            content: chunk.content,
+            start_line: chunk.start_line,
+            end_line: chunk.end_line,
+            file_path: chunk.file_path,
+            language: chunk.language,
+        }
+    }
+}
+
 // ─── Routeur ─────────────────────────────────────
 
 /// Construit le routeur Axum principal avec les use cases injectés.
@@ -90,6 +132,12 @@ pub fn create_router(state: SharedState) -> Router {
             post(create_operation_handler).get(list_operations_handler),
         )
         .route("/api/v1/operations/{id}", get(get_operation_handler))
+        // ── Tensai: Mémoire IA ─────────────────────
+        .route(
+            "/api/v1/operations/{id}/chunks",
+            get(get_chunks_handler),
+        )
+        .route("/api/v1/chunks/search", get(search_chunks_handler))
         // ── Métriques Prometheus ────────────────────
         .route("/metrics", get(move || async move { metric_handle.render() }))
         .with_state(state)
@@ -117,6 +165,7 @@ async fn status() -> Json<serde_json::Value> {
             "vcs_engine": "jujutsu (ACL)",
             "protocol": "ninpo (gRPC)",
             "persistence": "fūinjutsu (PostgreSQL + Redis)",
+            "tensai": "semantic chunking (Tree-sitter + ChunkRepository)",
         },
         "status": "operational"
     }))
@@ -182,5 +231,64 @@ async fn list_operations_handler(
     Ok(Json(serde_json::json!({
         "operations": operations_json,
         "count": operations_json.len(),
+    })))
+}
+
+// ─── Handlers Tensai (Mémoire IA) ────────────────
+
+/// Récupérer les chunks d'une opération — `GET /api/v1/operations/{id}/chunks`
+///
+/// Paramètres optionnels :
+/// - `?file=src/main.rs` — filtre par fichier
+async fn get_chunks_handler(
+    State(state): State<SharedState>,
+    Path(operation_id): Path<Uuid>,
+    Query(params): Query<ChunksQuery>,
+) -> Result<Json<serde_json::Value>, AppError> {
+    info!(
+        %operation_id,
+        file = ?params.file,
+        "REST: GetChunks reçu (Tensai)"
+    );
+
+    let filter = match params.file {
+        Some(file_path) => ChunkSearchFilter::ByFile {
+            operation_id,
+            file_path,
+        },
+        None => ChunkSearchFilter::ByOperation { operation_id },
+    };
+
+    let result = state.search_chunks.execute(filter).await?;
+    let chunks_json: Vec<ChunkJson> = result.chunks.into_iter().map(ChunkJson::from).collect();
+
+    Ok(Json(serde_json::json!({
+        "operation_id": operation_id,
+        "chunks": chunks_json,
+        "count": result.count,
+    })))
+}
+
+/// Rechercher des symboles par nom — `GET /api/v1/chunks/search?name=User`
+async fn search_chunks_handler(
+    State(state): State<SharedState>,
+    Query(params): Query<SearchChunksQuery>,
+) -> Result<Json<serde_json::Value>, AppError> {
+    info!(
+        name = %params.name,
+        "REST: SearchChunks reçu (Tensai)"
+    );
+
+    let filter = ChunkSearchFilter::ByName {
+        name: params.name.clone(),
+    };
+
+    let result = state.search_chunks.execute(filter).await?;
+    let chunks_json: Vec<ChunkJson> = result.chunks.into_iter().map(ChunkJson::from).collect();
+
+    Ok(Json(serde_json::json!({
+        "query": params.name,
+        "chunks": chunks_json,
+        "count": result.count,
     })))
 }

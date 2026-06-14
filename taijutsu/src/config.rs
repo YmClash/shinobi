@@ -32,6 +32,12 @@ pub struct Config {
 
     /// URL de l'API RPC IPFS / Kubo (Genjutsu). Défaut: "http://127.0.0.1:5001".
     pub ipfs_api_url: String,
+
+    /// Consumer group Kafka pour l'agent Tensai. Défaut: "shinobi-tensai-analyzer".
+    pub kafka_consumer_group: String,
+
+    /// Activer/désactiver le consumer Tensai. Défaut: true.
+    pub tensai_consumer_enabled: bool,
 }
 
 impl Config {
@@ -61,6 +67,12 @@ impl Config {
                 .unwrap_or_else(|_| "shinobi.vcs.operations".to_string()),
             ipfs_api_url: env::var("IPFS_API_URL")
                 .unwrap_or_else(|_| "http://127.0.0.1:5001".to_string()),
+            kafka_consumer_group: env::var("KAFKA_CONSUMER_GROUP")
+                .unwrap_or_else(|_| "shinobi-tensai-analyzer".to_string()),
+            tensai_consumer_enabled: env::var("TENSAI_CONSUMER_ENABLED")
+                .map(|v| v != "false" && v != "0")
+                .unwrap_or(true),
         }
     }
 }
+
