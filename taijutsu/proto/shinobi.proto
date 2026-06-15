@@ -29,6 +29,11 @@ service ShinobiService {
 
     // Rechercher des symboles par nom (fonctions, structs, traits, etc.).
     rpc SearchChunksByName (SearchChunksRequest) returns (ChunkListResponse);
+
+    // ── Phase 7A : Recherche Sémantique RAG ────
+
+    // Rechercher des fragments par similarité sémantique (RAG vectoriel).
+    rpc SemanticSearch (SemanticSearchRequest) returns (SemanticSearchResponse);
 }
 
 // ── Messages Ping ──────────────────────────────
@@ -116,6 +121,46 @@ message ChunkResponse {
 // Réponse contenant une liste de fragments sémantiques.
 message ChunkListResponse {
     repeated ChunkResponse chunks = 1;
+    // Nombre total de résultats.
+    int32 count = 2;
+}
+
+// ── Messages RAG (Phase 7A — Recherche Sémantique) ─────────
+
+// Requête : recherche par similarité sémantique.
+message SemanticSearchRequest {
+    // Requête en langage naturel (ex: "code qui gère la cryptographie").
+    string query = 1;
+    // Nombre maximum de résultats (défaut: 10).
+    int32 limit = 2;
+    // Score minimum de similarité cosinus (0.0 à 1.0, défaut: 0.5).
+    float threshold = 3;
+}
+
+// Fragment sémantique avec score de similarité.
+message SemanticChunkResponse {
+    // Type du fragment.
+    string kind       = 1;
+    // Nom du symbole.
+    string name       = 2;
+    // Contenu brut.
+    string content    = 3;
+    // Ligne de début (1-indexed).
+    int32 start_line  = 4;
+    // Ligne de fin (1-indexed).
+    int32 end_line    = 5;
+    // Chemin du fichier source.
+    string file_path  = 6;
+    // Langage du fichier source.
+    string language   = 7;
+    // Score de similarité cosinus (0.0 à 1.0).
+    float similarity  = 8;
+}
+
+// Réponse de recherche sémantique.
+message SemanticSearchResponse {
+    // Fragments trouvés, triés par similarité descendante.
+    repeated SemanticChunkResponse chunks = 1;
     // Nombre total de résultats.
     int32 count = 2;
 }

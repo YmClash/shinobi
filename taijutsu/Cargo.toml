@@ -110,3 +110,7 @@ axum-prometheus = { version = "0.10" }
 
 # — Shutdown gracieux (consumer Kafka) —
 tokio-util = { version = "0.7", features = ["rt"] }
+
+# — RAG Vectoriel (Phase 7A) —
+fastembed = { version = "4" }
+pgvector = { version = "0.4", features = ["sqlx"] }

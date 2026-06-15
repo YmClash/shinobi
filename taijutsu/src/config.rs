@@ -38,6 +38,12 @@ pub struct Config {
 
     /// Activer/désactiver le consumer Tensai. Défaut: true.
     pub tensai_consumer_enabled: bool,
+
+    /// Activer/désactiver l'embedding vectoriel (Phase 7A). Défaut: true.
+    pub embedding_enabled: bool,
+
+    /// Nombre de dimensions d'embedding (Matryoshka). Défaut: 256.
+    pub embedding_dimensions: usize,
 }
 
 impl Config {
@@ -72,6 +78,13 @@ impl Config {
             tensai_consumer_enabled: env::var("TENSAI_CONSUMER_ENABLED")
                 .map(|v| v != "false" && v != "0")
                 .unwrap_or(true),
+            embedding_enabled: env::var("EMBEDDING_ENABLED")
+                .map(|v| v != "false" && v != "0")
+                .unwrap_or(true),
+            embedding_dimensions: env::var("EMBEDDING_DIMENSIONS")
+                .ok()
+                .and_then(|d| d.parse().ok())
+                .unwrap_or(256),
         }
     }
 }

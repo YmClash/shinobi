@@ -24,7 +24,8 @@ use proto::shinobi_service_server::ShinobiService;
 use proto::{
     ChunkListResponse, ChunkResponse, CreateOperationRequest, GetChunksRequest,
     GetOperationRequest, ListOperationsRequest, ListOperationsResponse, OperationResponse,
-    PingRequest, PingResponse, SearchChunksRequest,
+    PingRequest, PingResponse, SearchChunksRequest, SemanticChunkResponse,
+    SemanticSearchRequest, SemanticSearchResponse,
 };
 
 /// Implémentation du service gRPC ShinobiService.
@@ -64,6 +65,22 @@ fn chunk_to_proto(chunk: domain::ports::chunk_repository::StoredChunk) -> ChunkR
         end_line: chunk.end_line as i32,
         file_path: chunk.file_path,
         language: chunk.language,
+    }
+}
+
+/// Convertit un `SimilarChunk` domaine en réponse Protobuf sémantique.
+fn similar_chunk_to_proto(
+    similar: domain::ports::chunk_repository::SimilarChunk,
+) -> SemanticChunkResponse {
+    SemanticChunkResponse {
+        kind: similar.chunk.kind,
+        name: similar.chunk.name.unwrap_or_default(),
+        content: similar.chunk.content,
+        start_line: similar.chunk.start_line as i32,
+        end_line: similar.chunk.end_line as i32,
+        file_path: similar.chunk.file_path,
+        language: similar.chunk.language,
+        similarity: similar.similarity,
     }
 }
 
@@ -258,6 +275,50 @@ impl ShinobiService for ShinobiServiceImpl {
 
         let response = ChunkListResponse {
             chunks: result.chunks.into_iter().map(chunk_to_proto).collect(),
+            count: result.count as i32,
+        };
+
+        Ok(Response::new(response))
+    }
+
+    // ── Phase 7A: Recherche Sémantique RAG ─────────
+
+    /// SemanticSearch — Recherche par similarité sémantique (RAG vectoriel).
+    async fn semantic_search(
+        &self,
+        request: Request<SemanticSearchRequest>,
+    ) -> Result<Response<SemanticSearchResponse>, Status> {
+        let req = request.into_inner();
+
+        info!(
+            query = %req.query,
+            limit = req.limit,
+            threshold = req.threshold,
+            "Ninpo: SemanticSearch reçu (Tensai RAG)"
+        );
+
+        if req.query.is_empty() {
+            return Err(Status::invalid_argument(
+                "La requête de recherche ne peut pas être vide",
+            ));
+        }
+
+        let limit = if req.limit > 0 { req.limit as usize } else { 10 };
+        let threshold = if req.threshold > 0.0 { req.threshold } else { 0.5 };
+
+        let result = self
+            .state
+            .search_chunks
+            .execute_semantic(&req.query, limit, threshold)
+            .await
+            .map_err(domain_error_to_status)?;
+
+        let response = SemanticSearchResponse {
+            chunks: result
+                .chunks
+                .into_iter()
+                .map(similar_chunk_to_proto)
+                .collect(),
             count: result.count as i32,
         };
 

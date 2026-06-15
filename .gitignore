@@ -137,3 +137,6 @@ CODEX_BOARD.md
 
 # ── Workspace JJ ────────────────────────────
 taijutsu/workspace
+
+# -- Embeddings model --
+taijutsu/.fastembed_cache

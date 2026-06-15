@@ -2,12 +2,17 @@
 //!
 //! Ce trait donne une **mémoire permanente** à l'agent IA Tensai.
 //! Les fragments sont persistés dans PostgreSQL et interrogeables
-//! par opération, fichier, ou nom de symbole.
+//! par opération, fichier, nom de symbole, ou **similarité sémantique** (RAG).
 //!
 //! ## Pattern Hexagonal
 //! Le domaine ne connaît PAS le crate `tensai` (pas de dépendance cyclique).
 //! Il définit `StoredChunk` comme entité de persistence.
 //! La couche application convertit `tensai::SemanticChunk` → `StoredChunk`.
+//!
+//! ## Phase 7A — Évolution Vectorielle
+//! Chaque `StoredChunk` peut désormais porter un vecteur d'embedding
+//! (256 dimensions, Nomic-Embed-Text-v1.5 Matryoshka) permettant
+//! la recherche par similarité cosinus via pgvector.
 
 use async_trait::async_trait;
 use serde::{Deserialize, Serialize};
@@ -35,6 +40,23 @@ pub struct StoredChunk {
     pub file_path: String,
     /// Langage du fichier source (ex: "rust").
     pub language: String,
+    /// Vecteur d'embedding (Phase 7A — Nomic 256d Matryoshka).
+    /// `None` si le chunk a été créé avant Phase 7A ou si l'embedding
+    /// est désactivé.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub embedding: Option<Vec<f32>>,
+}
+
+/// Résultat de recherche par similarité sémantique.
+///
+/// Contient le chunk trouvé et son score de similarité cosinus
+/// (0.0 = aucune similarité, 1.0 = identique).
+#[derive(Debug, Clone)]
+pub struct SimilarChunk {
+    /// Le fragment sémantique trouvé.
+    pub chunk: StoredChunk,
+    /// Score de similarité cosinus (0.0 à 1.0).
+    pub similarity: f32,
 }
 
 /// Contrat de persistence pour les fragments sémantiques (Mémoire IA).
@@ -47,6 +69,10 @@ pub struct StoredChunk {
 ///
 /// ## Queries
 /// Toutes les queries utilisent des index dédiés pour des lookups rapides.
+///
+/// ## Recherche Sémantique (Phase 7A)
+/// `search_similar()` utilise pgvector (index HNSW) pour trouver les chunks
+/// les plus proches d'un vecteur d'embedding par similarité cosinus.
 #[async_trait]
 pub trait ChunkRepository: Send + Sync {
     /// Persiste un lot de chunks sémantiques pour une opération.
@@ -90,4 +116,20 @@ pub trait ChunkRepository: Send + Sync {
         &self,
         operation_id: &Uuid,
     ) -> Result<usize, DomainError>;
+
+    /// Recherche les chunks les plus similaires par embedding vectoriel.
+    ///
+    /// Utilise l'index HNSW pgvector pour une recherche O(log n)
+    /// par similarité cosinus. Seuls les chunks avec embedding sont considérés.
+    ///
+    /// # Arguments
+    /// - `embedding` : vecteur de requête (même dimension que les chunks stockés)
+    /// - `limit` : nombre maximum de résultats
+    /// - `threshold` : score minimum de similarité (0.0 à 1.0)
+    async fn search_similar(
+        &self,
+        embedding: &[f32],
+        limit: usize,
+        threshold: f32,
+    ) -> Result<Vec<SimilarChunk>, DomainError>;
 }

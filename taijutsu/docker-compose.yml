@@ -6,7 +6,7 @@
 services:
   # ── Fūinjutsu: PostgreSQL ──────────────────
   postgres:
-    image: postgres:17-alpine
+    image: pgvector/pgvector:pg17
     container_name: shinobi-postgres
     environment:
       POSTGRES_DB: shinobi_dev

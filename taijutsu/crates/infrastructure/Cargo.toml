@@ -44,6 +44,10 @@ tokio-util = { workspace = true }
 # — Stockage distribué (Genjutsu / IPFS) —
 reqwest = { workspace = true }
 
+# — RAG Vectoriel (Phase 7A) —
+fastembed = { workspace = true }
+pgvector = { workspace = true }
+
 [dev-dependencies]
 tempfile = { workspace = true }
 tokio = { workspace = true }

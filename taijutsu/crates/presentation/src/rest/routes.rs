@@ -14,7 +14,7 @@ use application::use_cases::create_operation::CreateOperationCommand;
 use application::use_cases::list_operations::ListFilter;
 use application::use_cases::search_chunks::ChunkSearchFilter;
 use domain::entities::operation::Operation;
-use domain::ports::chunk_repository::StoredChunk;
+use domain::ports::chunk_repository::{SimilarChunk, StoredChunk};
 
 use crate::errors::AppError;
 use crate::state::SharedState;
@@ -58,6 +58,22 @@ pub struct SearchChunksQuery {
     /// Nom du symbole recherché.
     pub name: String,
 }
+
+/// Body de la requête POST /api/v1/chunks/semantic-search.
+#[derive(Debug, Deserialize)]
+pub struct SemanticSearchBody {
+    /// Requête en langage naturel.
+    pub query: String,
+    /// Nombre maximum de résultats (défaut: 10).
+    #[serde(default = "default_limit")]
+    pub limit: usize,
+    /// Score minimum de similarité (0.0 à 1.0, défaut: 0.5).
+    #[serde(default = "default_threshold")]
+    pub threshold: f32,
+}
+
+fn default_limit() -> usize { 10 }
+fn default_threshold() -> f32 { 0.5 }
 
 /// Réponse JSON pour une opération.
 #[derive(Debug, Serialize)]
@@ -112,6 +128,34 @@ impl From<StoredChunk> for ChunkJson {
     }
 }
 
+/// Réponse JSON pour un fragment sémantique avec score de similarité (Phase 7A).
+#[derive(Debug, Serialize)]
+pub struct SemanticChunkJson {
+    pub kind: String,
+    pub name: Option<String>,
+    pub content: String,
+    pub start_line: usize,
+    pub end_line: usize,
+    pub file_path: String,
+    pub language: String,
+    pub similarity: f32,
+}
+
+impl From<SimilarChunk> for SemanticChunkJson {
+    fn from(similar: SimilarChunk) -> Self {
+        Self {
+            kind: similar.chunk.kind,
+            name: similar.chunk.name,
+            content: similar.chunk.content,
+            start_line: similar.chunk.start_line,
+            end_line: similar.chunk.end_line,
+            file_path: similar.chunk.file_path,
+            language: similar.chunk.language,
+            similarity: similar.similarity,
+        }
+    }
+}
+
 // ─── Routeur ─────────────────────────────────────
 
 /// Construit le routeur Axum principal avec les use cases injectés.
@@ -138,6 +182,11 @@ pub fn create_router(state: SharedState) -> Router {
             get(get_chunks_handler),
         )
         .route("/api/v1/chunks/search", get(search_chunks_handler))
+        // ── Tensai: Recherche Sémantique RAG (Phase 7A) ──
+        .route(
+            "/api/v1/chunks/semantic-search",
+            post(semantic_search_handler),
+        )
         // ── Métriques Prometheus ────────────────────
         .route("/metrics", get(move || async move { metric_handle.render() }))
         .with_state(state)
@@ -288,6 +337,41 @@ async fn search_chunks_handler(
 
     Ok(Json(serde_json::json!({
         "query": params.name,
+        "chunks": chunks_json,
+        "count": result.count,
+    })))
+}
+
+// ─── Handler Recherche Sémantique (Phase 7A) ─────────
+
+/// Recherche sémantique RAG — `POST /api/v1/chunks/semantic-search`
+///
+/// Transforme la requête en langage naturel en embedding vectoriel,
+/// puis exécute une recherche par similarité cosinus via pgvector.
+async fn semantic_search_handler(
+    State(state): State<SharedState>,
+    Json(body): Json<SemanticSearchBody>,
+) -> Result<Json<serde_json::Value>, AppError> {
+    info!(
+        query = %body.query,
+        limit = body.limit,
+        threshold = body.threshold,
+        "REST: SemanticSearch reçu (Tensai RAG)"
+    );
+
+    let result = state
+        .search_chunks
+        .execute_semantic(&body.query, body.limit, body.threshold)
+        .await?;
+
+    let chunks_json: Vec<SemanticChunkJson> = result
+        .chunks
+        .into_iter()
+        .map(SemanticChunkJson::from)
+        .collect();
+
+    Ok(Json(serde_json::json!({
+        "query": body.query,
         "chunks": chunks_json,
         "count": result.count,
     })))

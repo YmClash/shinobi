@@ -27,6 +27,7 @@ use application::use_cases::list_operations::ListOperationsUseCase;
 use application::use_cases::search_chunks::SearchChunksUseCase;
 use infrastructure::cache::redis_cache::RedisCache;
 use infrastructure::content::ipfs_store::IpfsContentStore;
+use infrastructure::embeddings::nomic_service::NomicEmbedService;
 use infrastructure::events::kafka_consumer::KafkaEventConsumer;
 use infrastructure::events::kafka_producer::KafkaEventPublisher;
 use infrastructure::persistence::postgres_chunk_repo::PostgresChunkRepository;
@@ -63,6 +64,8 @@ async fn main() -> anyhow::Result<()> {
         kafka_brokers = %config.kafka_brokers,
         ipfs_api_url = %config.ipfs_api_url,
         tensai_enabled = config.tensai_consumer_enabled,
+        embedding_enabled = config.embedding_enabled,
+        embedding_dimensions = config.embedding_dimensions,
         "Configuration chargée"
     );
 
@@ -131,6 +134,28 @@ async fn main() -> anyhow::Result<()> {
 
     info!("✅ ChunkRepository PostgreSQL initialisé (Mémoire IA)");
 
+    // RAG: Embedding Service Nomic (Phase 7A — optionnel)
+    let embedding_service: Option<Arc<dyn domain::ports::embedding_service::EmbeddingService>> =
+        if config.embedding_enabled {
+            match NomicEmbedService::new(config.embedding_dimensions) {
+                Ok(service) => {
+                    info!(
+                        model = "nomic-embed-text-v1.5",
+                        dimensions = config.embedding_dimensions,
+                        "✅ EmbeddingService initialisé (Nomic Matryoshka ONNX)"
+                    );
+                    Some(Arc::new(service))
+                }
+                Err(e) => {
+                    warn!("⚠️ EmbeddingService non disponible — RAG désactivé: {e}");
+                    None
+                }
+            }
+        } else {
+            info!("ℹ️ EmbeddingService désactivé par configuration (EMBEDDING_ENABLED=false)");
+            None
+        };
+
     // ── Use Cases (couche application) ─────────────
     let create_operation = Arc::new(CreateOperationUseCase::new(
         vcs.clone(),
@@ -140,7 +165,10 @@ async fn main() -> anyhow::Result<()> {
     ));
     let get_operation = Arc::new(GetOperationUseCase::new(repo.clone()));
     let list_operations = Arc::new(ListOperationsUseCase::new(repo.clone()));
-    let search_chunks = Arc::new(SearchChunksUseCase::new(chunk_repo.clone()));
+    let search_chunks = Arc::new(SearchChunksUseCase::new(
+        chunk_repo.clone(),
+        embedding_service.clone(),
+    ));
 
     // ── État partagé (DI Container) ────────────────
     let shared_state = SharedState {
@@ -197,7 +225,8 @@ async fn main() -> anyhow::Result<()> {
                     cs.clone(),
                     Arc::new(RustChunker::new()),
                     Some(chunk_repo.clone()), // Phase 6B — Persistence des chunks
-                    None, // Phase 7 — EventPublisher pour re-publication
+                    embedding_service.clone(), // Phase 7A — Embedding vectoriel
+                    None, // Slot EventPublisher pour re-publication
                 ));
 
                 info!(
@@ -296,8 +325,9 @@ fn print_banner() {
     ║   ███████║██║  ██║██║██║ ╚████║╚██████╔╝██████╔╝██║           ║
     ║   ╚══════╝╚═╝  ╚═╝╚═╝╚═╝  ╚═══╝ ╚═════╝ ╚═════╝ ╚═╝           ║
     ║                                                               ║
-    ║   ⚙️  TAIJUTSU — Moteur Central v0.6.0                        ║
+    ║   ⚙️  TAIJUTSU — Moteur Central v0.7.0                        ║
     ║   ⚡ Ninpo (gRPC) + Axum (REST) + Prometheus                  ║
+    ║   🧬 RAG Vectoriel (Nomic-Embed-Text-v1.5 + pgvector)          ║
     ║   🧠 Tensai Agent IA — Analyse sémantique temps réel           ║
     ║   🥷 Next-Gen VCS for Human/AI Collaboration                   ║
     ║                                                               ║

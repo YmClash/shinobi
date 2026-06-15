@@ -21,8 +21,9 @@ mod tests {
     use domain::entities::content_id::ContentId;
     use domain::entities::operation::Operation;
     use domain::errors::DomainError;
-    use domain::ports::chunk_repository::{ChunkRepository, StoredChunk};
+    use domain::ports::chunk_repository::{ChunkRepository, SimilarChunk, StoredChunk};
     use domain::ports::content_store::ContentStore;
+    use domain::ports::embedding_service::EmbeddingService;
 
     use tensai::{Chunker, ChunkerError, SemanticChunk};
 
@@ -182,6 +183,42 @@ mod tests {
         ) -> Result<usize, DomainError> {
             Ok(0)
         }
+
+        async fn search_similar(
+            &self,
+            _embedding: &[f32],
+            _limit: usize,
+            _threshold: f32,
+        ) -> Result<Vec<SimilarChunk>, DomainError> {
+            Ok(vec![])
+        }
+    }
+
+    // ── Mock EmbeddingService (Phase 7A) ─────────────
+
+    struct MockEmbeddingService {
+        dimensions: usize,
+    }
+
+    impl MockEmbeddingService {
+        fn new() -> Self {
+            Self { dimensions: 256 }
+        }
+    }
+
+    #[async_trait]
+    impl EmbeddingService for MockEmbeddingService {
+        async fn embed(&self, _text: &str) -> Result<Vec<f32>, DomainError> {
+            Ok(vec![0.1; self.dimensions])
+        }
+
+        async fn embed_batch(&self, texts: &[String]) -> Result<Vec<Vec<f32>>, DomainError> {
+            Ok(texts.iter().map(|_| vec![0.1; self.dimensions]).collect())
+        }
+
+        fn dimensions(&self) -> usize {
+            self.dimensions
+        }
     }
 
     // ── Helpers ──────────────────────────────────────────
@@ -250,14 +287,28 @@ mod tests {
     }
 
     fn build_use_case(store: Arc<dyn ContentStore>) -> AnalyzeOperationUseCase {
-        AnalyzeOperationUseCase::new(store, Arc::new(MockChunker), None, None)
+        AnalyzeOperationUseCase::new(store, Arc::new(MockChunker), None, None, None)
     }
 
     fn build_use_case_with_repo(
         store: Arc<dyn ContentStore>,
         chunk_repo: Arc<dyn ChunkRepository>,
     ) -> AnalyzeOperationUseCase {
-        AnalyzeOperationUseCase::new(store, Arc::new(MockChunker), Some(chunk_repo), None)
+        AnalyzeOperationUseCase::new(store, Arc::new(MockChunker), Some(chunk_repo), None, None)
+    }
+
+    fn build_use_case_with_embedding(
+        store: Arc<dyn ContentStore>,
+        chunk_repo: Arc<dyn ChunkRepository>,
+        embed_svc: Arc<dyn EmbeddingService>,
+    ) -> AnalyzeOperationUseCase {
+        AnalyzeOperationUseCase::new(
+            store,
+            Arc::new(MockChunker),
+            Some(chunk_repo),
+            Some(embed_svc),
+            None,
+        )
     }
 
     // ── Tests Phase 6A ───────────────────────────────────
@@ -436,5 +487,47 @@ mod tests {
             }
             AnalysisOutcome::Skipped { .. } => panic!("Attendu Analyzed"),
         }
+    }
+
+    // ── Tests Phase 7A : Embedding ─────────────────────
+
+    #[tokio::test]
+    async fn test_chunks_embedded_during_analysis() {
+        let blob = make_ipfs_blob(&[
+            ("src/lib.rs", "fn hello() {}"),
+            ("src/model.rs", "struct User { name: String }"),
+        ]);
+        let store = Arc::new(MockContentStore::with_data(blob));
+        let chunk_repo = Arc::new(MockChunkRepository::new());
+        let embed_svc = Arc::new(MockEmbeddingService::new());
+        let use_case = build_use_case_with_embedding(store, chunk_repo.clone(), embed_svc);
+
+        let result = use_case.execute(&op_with_ipfs("QmEmbed")).await;
+        assert!(result.is_ok());
+
+        match result.unwrap() {
+            AnalysisOutcome::Analyzed(report) => {
+                assert!(report.total_chunks >= 2);
+            }
+            AnalysisOutcome::Skipped { .. } => panic!("Attendu Analyzed"),
+        }
+
+        let total = *chunk_repo.total_chunks_saved.lock().await;
+        assert!(total >= 2, "Les chunks embedés doivent être persistés");
+    }
+
+    #[tokio::test]
+    async fn test_analysis_works_without_embedding_service() {
+        let blob = make_ipfs_blob(&[("src/main.rs", "fn main() {}")]);
+        let store = Arc::new(MockContentStore::with_data(blob));
+        let chunk_repo = Arc::new(MockChunkRepository::new());
+        let use_case = build_use_case_with_repo(store, chunk_repo.clone());
+
+        let result = use_case.execute(&op_with_ipfs("QmNoEmbed")).await;
+        assert!(result.is_ok());
+
+        // Les chunks doivent être persistés même sans embedding.
+        let total = *chunk_repo.total_chunks_saved.lock().await;
+        assert!(total >= 1, "Les chunks doivent être persistés sans embedding");
     }
 }

@@ -15,8 +15,12 @@
 //!
 //! ## Phase 6B
 //! - Persistence des chunks dans PostgreSQL via `ChunkRepository` (UNNEST batch).
-//! - Le `EventPublisher` est préparé (slot) mais non branché.
-//! - Phase 7 : re-publication sur `shinobi.tensai.analysis-complete`.
+//!
+//! ## Phase 7A — Évolution Vectorielle
+//! - Chaque chunk est vectorisé via `EmbeddingService` (Nomic 256d Matryoshka).
+//! - Task prefix `search_document:` appliqué pour l'indexation.
+//! - Graceful degradation : si l'embedding est désactivé, les chunks sont
+//!   sauvés sans vecteur (exactement comme en Phase 6B).
 
 use std::sync::Arc;
 use std::time::Instant;
@@ -28,6 +32,7 @@ use domain::entities::operation::Operation;
 use domain::errors::DomainError;
 use domain::ports::chunk_repository::{ChunkRepository, StoredChunk};
 use domain::ports::content_store::ContentStore;
+use domain::ports::embedding_service::EmbeddingService;
 
 use tensai::{Chunker, SemanticChunk};
 
@@ -72,7 +77,11 @@ pub enum AnalysisOutcome {
 /// (UNNEST batch insert). Si le repo est `None`, les chunks sont
 /// seulement loggés (graceful degradation).
 ///
-/// ## Slot EventPublisher (Phase 7)
+/// ## Embedding Vectoriel (Phase 7A)
+/// Si `embedding_service` est fourni, chaque chunk est vectorisé
+/// avant persistence pour la recherche sémantique RAG.
+///
+/// ## Slot EventPublisher
 /// Le champ `event_publisher` est réservé pour la re-publication
 /// d'un événement `shinobi.tensai.analysis-complete` après analyse.
 pub struct AnalyzeOperationUseCase {
@@ -80,9 +89,9 @@ pub struct AnalyzeOperationUseCase {
     chunker: Arc<dyn Chunker>,
     /// Phase 6B — Persistence des chunks dans PostgreSQL.
     chunk_repository: Option<Arc<dyn ChunkRepository>>,
-    // Phase 7 — Re-publication événementielle.
-    // Slot préparé mais non branché : l'agent Tensai pourra publier
-    // un événement `analysis-complete` pour les agents en aval.
+    /// Phase 7A — Embedding vectoriel (Nomic 256d Matryoshka).
+    embedding_service: Option<Arc<dyn EmbeddingService>>,
+    // Slot re-publication événementielle.
     #[allow(dead_code)]
     event_publisher: Option<Arc<dyn domain::ports::event_publisher::EventPublisher>>,
 }
@@ -94,17 +103,20 @@ impl AnalyzeOperationUseCase {
     /// - `content_store` : accès au stockage distribué IPFS (Genjutsu)
     /// - `chunker` : moteur de découpage sémantique (Tree-sitter)
     /// - `chunk_repository` : persistence des chunks (Phase 6B, `None` = log only)
-    /// - `event_publisher` : slot pour re-publication (Phase 7, `None` pour l'instant)
+    /// - `embedding_service` : embedding vectoriel (Phase 7A, `None` = pas de RAG)
+    /// - `event_publisher` : slot pour re-publication (`None` pour l'instant)
     pub fn new(
         content_store: Arc<dyn ContentStore>,
         chunker: Arc<dyn Chunker>,
         chunk_repository: Option<Arc<dyn ChunkRepository>>,
+        embedding_service: Option<Arc<dyn EmbeddingService>>,
         event_publisher: Option<Arc<dyn domain::ports::event_publisher::EventPublisher>>,
     ) -> Self {
         Self {
             content_store,
             chunker,
             chunk_repository,
+            embedding_service,
             event_publisher,
         }
     }
@@ -248,10 +260,10 @@ impl AnalyzeOperationUseCase {
         // Log structuré.
         log_analysis_report(&report);
 
-        // Phase 6B — Persistence des chunks dans PostgreSQL.
+        // Phase 6B + 7A — Persistence des chunks dans PostgreSQL.
         if let Some(repo) = &self.chunk_repository {
             // Conversion SemanticChunk → StoredChunk (frontière application/domain).
-            let stored: Vec<StoredChunk> = report
+            let mut stored: Vec<StoredChunk> = report
                 .chunks
                 .iter()
                 .map(|c| StoredChunk {
@@ -262,8 +274,48 @@ impl AnalyzeOperationUseCase {
                     end_line: c.end_line,
                     file_path: c.file_path.clone(),
                     language: c.language.clone(),
+                    embedding: None, // Sera rempli ci-dessous si embedding_service disponible.
                 })
                 .collect();
+
+            // Phase 7A — Vectorisation des chunks (Nomic 256d Matryoshka).
+            if let Some(embed_svc) = &self.embedding_service {
+                // Construire les textes avec le task prefix Nomic.
+                let texts: Vec<String> = report
+                    .chunks
+                    .iter()
+                    .map(|c| {
+                        format!(
+                            "search_document: {} {}: {}",
+                            format!("{:?}", c.kind).to_lowercase(),
+                            c.name.as_deref().unwrap_or(""),
+                            c.content
+                        )
+                    })
+                    .collect();
+
+                match embed_svc.embed_batch(&texts).await {
+                    Ok(embeddings) => {
+                        // Assigner les embeddings aux StoredChunks.
+                        for (chunk, emb) in stored.iter_mut().zip(embeddings.into_iter()) {
+                            chunk.embedding = Some(emb);
+                        }
+                        info!(
+                            operation_id = %report.operation_id,
+                            embedded_count = stored.len(),
+                            dimensions = embed_svc.dimensions(),
+                            "🧬 Tensai — Chunks vectorisés (Nomic Matryoshka)"
+                        );
+                    }
+                    Err(e) => {
+                        warn!(
+                            operation_id = %report.operation_id,
+                            error = %e,
+                            "⚠️ Tensai — Embedding échoué (non-fatal, chunks sauvés sans vecteur)"
+                        );
+                    }
+                }
+            }
 
             match repo.save_chunks(&report.operation_id, &stored).await {
                 Ok(saved) => {
@@ -283,7 +335,7 @@ impl AnalyzeOperationUseCase {
             }
         }
 
-        // Phase 7 — Re-publication événementielle (slot préparé).
+        // Re-publication événementielle (slot préparé).
         // if let Some(publisher) = &self.event_publisher {
         //     publisher.publish_analysis_complete(&report).await?;
         // }
