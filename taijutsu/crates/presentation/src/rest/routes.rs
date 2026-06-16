@@ -7,7 +7,7 @@ use axum::extract::{Path, Query, State};
 use axum::{Json, Router, routing::get, routing::post};
 use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
-use tracing::info;
+use tracing::{info, warn};
 use uuid::Uuid;
 
 use application::use_cases::create_operation::CreateOperationCommand;
@@ -36,6 +36,18 @@ pub struct CreateOperationBody {
     pub description: String,
     #[serde(default)]
     pub parent_ids: Vec<Uuid>,
+    /// Fichiers à inclure dans l'opération (optionnel).
+    #[serde(default)]
+    pub files: Vec<FileEntryBody>,
+}
+
+/// Entrée de fichier dans le body de la requête.
+#[derive(Debug, Deserialize)]
+pub struct FileEntryBody {
+    /// Chemin du fichier (ex: "src/main.rs").
+    pub path: String,
+    /// Contenu encodé en base64 (RFC 4648).
+    pub content_b64: String,
 }
 
 /// Paramètres de query pour GET /api/v1/operations.
@@ -231,11 +243,26 @@ async fn create_operation_handler(
         "REST: CreateOperation reçu"
     );
 
+    // Décoder les fichiers base64 → bytes bruts.
+    let files: Vec<(String, Vec<u8>)> = body
+        .files
+        .iter()
+        .filter_map(|f| {
+            match decode_base64(&f.content_b64) {
+                Ok(bytes) => Some((f.path.clone(), bytes)),
+                Err(e) => {
+                    warn!(path = %f.path, error = %e, "⚠️ Décodage base64 échoué — fichier ignoré");
+                    None
+                }
+            }
+        })
+        .collect();
+
     let cmd = CreateOperationCommand {
         author_id: body.author_id,
         description: body.description,
         parent_ids: body.parent_ids,
-        files: vec![],
+        files,
     };
 
     let result = state.create_operation.execute(cmd).await?;
@@ -375,4 +402,54 @@ async fn semantic_search_handler(
         "chunks": chunks_json,
         "count": result.count,
     })))
+}
+
+// ── Helpers ───────────────────────────────────────────────────────
+
+/// Décode une chaîne base64 (RFC 4648) en bytes bruts.
+///
+/// Implémentation inline — cohérente avec l'encodeur dans `create_operation.rs`.
+/// Évite l'ajout du crate `base64` pour une seule fonction.
+fn decode_base64(input: &str) -> Result<Vec<u8>, String> {
+    const DECODE_TABLE: [u8; 128] = {
+        let mut table = [255u8; 128];
+        let mut i = 0u8;
+        while i < 26 {
+            table[(b'A' + i) as usize] = i;
+            table[(b'a' + i) as usize] = i + 26;
+            i += 1;
+        }
+        let mut d = 0u8;
+        while d < 10 {
+            table[(b'0' + d) as usize] = d + 52;
+            d += 1;
+        }
+        table[b'+' as usize] = 62;
+        table[b'/' as usize] = 63;
+        table
+    };
+
+    let input = input.trim();
+    let mut result = Vec::with_capacity(input.len() * 3 / 4);
+    let bytes: Vec<u8> = input.bytes().filter(|&b| b != b'=').collect();
+
+    for chunk in bytes.chunks(4) {
+        let mut buf = [0u32; 4];
+        for (i, &b) in chunk.iter().enumerate() {
+            if b >= 128 || DECODE_TABLE[b as usize] == 255 {
+                return Err(format!("Invalid base64 character: {}", b as char));
+            }
+            buf[i] = DECODE_TABLE[b as usize] as u32;
+        }
+        let triple = (buf[0] << 18) | (buf[1] << 12) | (buf[2] << 6) | buf[3];
+        result.push(((triple >> 16) & 0xFF) as u8);
+        if chunk.len() > 2 {
+            result.push(((triple >> 8) & 0xFF) as u8);
+        }
+        if chunk.len() > 3 {
+            result.push((triple & 0xFF) as u8);
+        }
+    }
+
+    Ok(result)
 }

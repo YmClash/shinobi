@@ -34,6 +34,7 @@ use infrastructure::persistence::postgres_chunk_repo::PostgresChunkRepository;
 use infrastructure::persistence::postgres_repo::PostgresOperationRepository;
 use infrastructure::vcs::jujutsu_engine::JujutsuEngine;
 use domain::ports::vcs_engine::VcsEngine as _; // Trait import — rend init_workspace() visible
+use domain::ports::repository::OperationRepository as _; // Trait import — rend list_recent() visible (backfill)
 use presentation::grpc::services::proto::shinobi_service_server::ShinobiServiceServer;
 use presentation::grpc::services::ShinobiServiceImpl;
 use presentation::rest::routes::create_router;
@@ -95,7 +96,11 @@ async fn main() -> anyhow::Result<()> {
 
     // Nen: Kafka Event Publisher (optionnel — graceful degradation)
     let event_publisher: Option<Arc<dyn domain::ports::event_publisher::EventPublisher>> =
-        match KafkaEventPublisher::new(&config.kafka_brokers, &config.kafka_topic) {
+        match KafkaEventPublisher::new(
+            &config.kafka_brokers,
+            &config.kafka_topic,
+            &config.kafka_analysis_topic,
+        ) {
             Ok(publisher) => {
                 info!(
                     brokers = %config.kafka_brokers,
@@ -156,11 +161,11 @@ async fn main() -> anyhow::Result<()> {
             None
         };
 
-    // ── Use Cases (couche application) ─────────────
+    // ── Use Cases (couche application) ───────────
     let create_operation = Arc::new(CreateOperationUseCase::new(
         vcs.clone(),
         repo.clone(),
-        event_publisher,
+        event_publisher.clone(),
         content_store.clone(),
     ));
     let get_operation = Arc::new(GetOperationUseCase::new(repo.clone()));
@@ -169,6 +174,19 @@ async fn main() -> anyhow::Result<()> {
         chunk_repo.clone(),
         embedding_service.clone(),
     ));
+
+    // ── Mode CLI Backfill (Phase 7B) ─────────────
+    let args: Vec<String> = std::env::args().collect();
+    if args.len() > 1 && args[1] == "backfill" {
+        return run_backfill(
+            repo,
+            content_store,
+            chunk_repo,
+            embedding_service,
+            event_publisher,
+        )
+        .await;
+    }
 
     // ── État partagé (DI Container) ────────────────
     let shared_state = SharedState {
@@ -226,7 +244,7 @@ async fn main() -> anyhow::Result<()> {
                     Arc::new(RustChunker::new()),
                     Some(chunk_repo.clone()), // Phase 6B — Persistence des chunks
                     embedding_service.clone(), // Phase 7A — Embedding vectoriel
-                    None, // Slot EventPublisher pour re-publication
+                    event_publisher.clone(), // Phase 7B — Re-publication analysis-complete
                 ));
 
                 info!(
@@ -325,13 +343,101 @@ fn print_banner() {
     ║   ███████║██║  ██║██║██║ ╚████║╚██████╔╝██████╔╝██║           ║
     ║   ╚══════╝╚═╝  ╚═╝╚═╝╚═╝  ╚═══╝ ╚═════╝ ╚═════╝ ╚═╝           ║
     ║                                                               ║
-    ║   ⚙️  TAIJUTSU — Moteur Central v0.7.0                        ║
+    ║   ⚙️  TAIJUTSU — Moteur Central v0.7.1                        ║
     ║   ⚡ Ninpo (gRPC) + Axum (REST) + Prometheus                  ║
     ║   🧬 RAG Vectoriel (Nomic-Embed-Text-v1.5 + pgvector)          ║
-    ║   🧠 Tensai Agent IA — Analyse sémantique temps réel           ║
+    ║   🧠 Tensai Agent IA — Boucle EDA complète                     ║
     ║   🥷 Next-Gen VCS for Human/AI Collaboration                   ║
     ║                                                               ║
     ╚═══════════════════════════════════════════════════════════════╝
     "#;
     println!("{banner}");
+}
+
+// ── Backfill CLI (Phase 7B) ────────────────────────────────────────
+//
+// Re-analyse toutes les opérations existantes avec le pipeline d'embedding.
+// Idempotent : delete_by_operation() est appelé avant save_chunks().
+//
+// Usage : cargo run -- backfill
+
+async fn run_backfill(
+    repo: Arc<PostgresOperationRepository>,
+    content_store: Option<Arc<dyn domain::ports::content_store::ContentStore>>,
+    chunk_repo: Arc<dyn domain::ports::chunk_repository::ChunkRepository>,
+    embedding_service: Option<Arc<dyn domain::ports::embedding_service::EmbeddingService>>,
+    event_publisher: Option<Arc<dyn domain::ports::event_publisher::EventPublisher>>,
+) -> anyhow::Result<()> {
+    info!("\n📦 BACKFILL MODE — Re-analyse de toutes les opérations existantes");
+
+    let cs = match content_store {
+        Some(cs) => cs,
+        None => {
+            error!("❌ Backfill impossible — IPFS (ContentStore) non disponible");
+            return Ok(());
+        }
+    };
+
+    // Charger toutes les opérations existantes.
+    let operations = repo.list_recent(10_000).await?;
+    let total = operations.len();
+
+    info!(total_operations = total, "Opérations chargées");
+
+    let analyzer = AnalyzeOperationUseCase::new(
+        cs,
+        Arc::new(RustChunker::new()),
+        Some(chunk_repo),
+        embedding_service,
+        event_publisher,
+    );
+
+    let mut analyzed = 0usize;
+    let mut skipped = 0usize;
+    let mut errors = 0usize;
+
+    for (i, operation) in operations.iter().enumerate() {
+        let progress = format!("[{}/{}]", i + 1, total);
+
+        match analyzer.execute(operation).await {
+            Ok(application::use_cases::analyze_operation::AnalysisOutcome::Analyzed(report)) => {
+                info!(
+                    progress = %progress,
+                    operation_id = %operation.id,
+                    chunks = report.total_chunks,
+                    duration_ms = report.duration_ms,
+                    "✅ Backfill — Opération analysée"
+                );
+                analyzed += 1;
+            }
+            Ok(application::use_cases::analyze_operation::AnalysisOutcome::Skipped { reason, .. }) => {
+                info!(
+                    progress = %progress,
+                    operation_id = %operation.id,
+                    reason = %reason,
+                    "⏭️ Backfill — Opération skip"
+                );
+                skipped += 1;
+            }
+            Err(e) => {
+                warn!(
+                    progress = %progress,
+                    operation_id = %operation.id,
+                    error = %e,
+                    "⚠️ Backfill — Erreur"
+                );
+                errors += 1;
+            }
+        }
+    }
+
+    info!(
+        total,
+        analyzed,
+        skipped,
+        errors,
+        "\n🏁 BACKFILL TERMINÉ"
+    );
+
+    Ok(())
 }

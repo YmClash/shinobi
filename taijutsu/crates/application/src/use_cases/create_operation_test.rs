@@ -17,7 +17,7 @@ mod tests {
     use domain::entities::operation::Operation;
     use domain::errors::DomainError;
     use domain::ports::content_store::ContentStore;
-    use domain::ports::event_publisher::EventPublisher;
+    use domain::ports::event_publisher::{AnalysisCompleteSummary, EventPublisher};
     use domain::ports::repository::OperationRepository;
     use domain::ports::vcs_engine::VcsEngine;
 
@@ -169,6 +169,13 @@ mod tests {
             operation: &Operation,
         ) -> Result<(), DomainError> {
             self.published.lock().await.push(operation.id);
+            Ok(())
+        }
+
+        async fn publish_analysis_complete(
+            &self,
+            _summary: &AnalysisCompleteSummary,
+        ) -> Result<(), DomainError> {
             Ok(())
         }
     }

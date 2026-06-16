@@ -30,6 +30,11 @@ pub struct Config {
     /// Topic Kafka pour les événements VCS. Défaut: "shinobi.vcs.operations".
     pub kafka_topic: String,
 
+    /// Topic Kafka pour les événements analysis-complete (Phase 7B).
+    /// Défaut: "shinobi.tensai.analysis-complete".
+    /// Topic dédié, séparé du topic VCS pour éviter la boucle infinie.
+    pub kafka_analysis_topic: String,
+
     /// URL de l'API RPC IPFS / Kubo (Genjutsu). Défaut: "http://127.0.0.1:5001".
     pub ipfs_api_url: String,
 
@@ -71,6 +76,8 @@ impl Config {
                 .unwrap_or_else(|_| "localhost:9092".to_string()),
             kafka_topic: env::var("KAFKA_TOPIC")
                 .unwrap_or_else(|_| "shinobi.vcs.operations".to_string()),
+            kafka_analysis_topic: env::var("KAFKA_ANALYSIS_TOPIC")
+                .unwrap_or_else(|_| "shinobi.tensai.analysis-complete".to_string()),
             ipfs_api_url: env::var("IPFS_API_URL")
                 .unwrap_or_else(|_| "http://127.0.0.1:5001".to_string()),
             kafka_consumer_group: env::var("KAFKA_CONSUMER_GROUP")

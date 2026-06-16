@@ -9,6 +9,8 @@
 //! - Mixed : Rust + non-Rust → seuls les .rs sont analysés
 //! - Persistence : chunks persistés via ChunkRepository après analyse
 //! - Graceful degradation : sans ChunkRepository → log uniquement
+//! - Re-publication : événement analysis-complete publié après analyse (Phase 7B)
+//! - Idempotence : delete_by_operation() avant save_chunks() (Phase 7B)
 
 #[cfg(test)]
 mod tests {
@@ -24,6 +26,7 @@ mod tests {
     use domain::ports::chunk_repository::{ChunkRepository, SimilarChunk, StoredChunk};
     use domain::ports::content_store::ContentStore;
     use domain::ports::embedding_service::EmbeddingService;
+    use domain::ports::event_publisher::{AnalysisCompleteSummary, EventPublisher};
 
     use tensai::{Chunker, ChunkerError, SemanticChunk};
 
@@ -132,6 +135,7 @@ mod tests {
     struct MockChunkRepository {
         save_count: Mutex<usize>,
         total_chunks_saved: Mutex<usize>,
+        delete_count: Mutex<usize>,
     }
 
     impl MockChunkRepository {
@@ -139,6 +143,7 @@ mod tests {
             Self {
                 save_count: Mutex::new(0),
                 total_chunks_saved: Mutex::new(0),
+                delete_count: Mutex::new(0),
             }
         }
     }
@@ -191,6 +196,46 @@ mod tests {
             _threshold: f32,
         ) -> Result<Vec<SimilarChunk>, DomainError> {
             Ok(vec![])
+        }
+
+        async fn delete_by_operation(
+            &self,
+            _operation_id: &Uuid,
+        ) -> Result<usize, DomainError> {
+            *self.delete_count.lock().await += 1;
+            Ok(0)
+        }
+    }
+
+    // ── Mock EventPublisher (Phase 7B) ────────────
+
+    struct MockEventPublisher {
+        analysis_published: Mutex<usize>,
+    }
+
+    impl MockEventPublisher {
+        fn new() -> Self {
+            Self {
+                analysis_published: Mutex::new(0),
+            }
+        }
+    }
+
+    #[async_trait]
+    impl EventPublisher for MockEventPublisher {
+        async fn publish_operation_created(
+            &self,
+            _operation: &Operation,
+        ) -> Result<(), DomainError> {
+            Ok(())
+        }
+
+        async fn publish_analysis_complete(
+            &self,
+            _summary: &AnalysisCompleteSummary,
+        ) -> Result<(), DomainError> {
+            *self.analysis_published.lock().await += 1;
+            Ok(())
         }
     }
 
@@ -529,5 +574,49 @@ mod tests {
         // Les chunks doivent être persistés même sans embedding.
         let total = *chunk_repo.total_chunks_saved.lock().await;
         assert!(total >= 1, "Les chunks doivent être persistés sans embedding");
+    }
+
+    // ── Tests Phase 7B : Re-publication + Idempotence ────
+
+    #[tokio::test]
+    async fn test_analysis_complete_event_published() {
+        let blob = make_ipfs_blob(&[
+            ("src/lib.rs", "fn hello() {}"),
+        ]);
+        let store = Arc::new(MockContentStore::with_data(blob));
+        let chunk_repo = Arc::new(MockChunkRepository::new());
+        let publisher = Arc::new(MockEventPublisher::new());
+        let use_case = AnalyzeOperationUseCase::new(
+            store,
+            Arc::new(MockChunker),
+            Some(chunk_repo),
+            None,
+            Some(publisher.clone()),
+        );
+
+        let result = use_case.execute(&op_with_ipfs("QmRepub")).await;
+        assert!(result.is_ok());
+
+        let pub_count = *publisher.analysis_published.lock().await;
+        assert_eq!(pub_count, 1, "L'événement analysis-complete doit être publié");
+    }
+
+    #[tokio::test]
+    async fn test_delete_by_operation_called_before_save() {
+        let blob = make_ipfs_blob(&[
+            ("src/lib.rs", "fn hello() {}"),
+        ]);
+        let store = Arc::new(MockContentStore::with_data(blob));
+        let chunk_repo = Arc::new(MockChunkRepository::new());
+        let use_case = build_use_case_with_repo(store, chunk_repo.clone());
+
+        let result = use_case.execute(&op_with_ipfs("QmIdem")).await;
+        assert!(result.is_ok());
+
+        let delete_count = *chunk_repo.delete_count.lock().await;
+        assert_eq!(delete_count, 1, "delete_by_operation() doit être appelé une fois");
+
+        let save_count = *chunk_repo.save_count.lock().await;
+        assert_eq!(save_count, 1, "save_chunks() doit être appelé une fois");
     }
 }

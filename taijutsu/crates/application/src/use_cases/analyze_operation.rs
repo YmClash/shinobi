@@ -91,8 +91,7 @@ pub struct AnalyzeOperationUseCase {
     chunk_repository: Option<Arc<dyn ChunkRepository>>,
     /// Phase 7A — Embedding vectoriel (Nomic 256d Matryoshka).
     embedding_service: Option<Arc<dyn EmbeddingService>>,
-    // Slot re-publication événementielle.
-    #[allow(dead_code)]
+    /// Phase 7B — Re-publication événementielle (analysis-complete).
     event_publisher: Option<Arc<dyn domain::ports::event_publisher::EventPublisher>>,
 }
 
@@ -104,7 +103,7 @@ impl AnalyzeOperationUseCase {
     /// - `chunker` : moteur de découpage sémantique (Tree-sitter)
     /// - `chunk_repository` : persistence des chunks (Phase 6B, `None` = log only)
     /// - `embedding_service` : embedding vectoriel (Phase 7A, `None` = pas de RAG)
-    /// - `event_publisher` : slot pour re-publication (`None` pour l'instant)
+    /// - `event_publisher` : re-publication analysis-complete (Phase 7B, `None` = pas de re-pub)
     pub fn new(
         content_store: Arc<dyn ContentStore>,
         chunker: Arc<dyn Chunker>,
@@ -261,6 +260,8 @@ impl AnalyzeOperationUseCase {
         log_analysis_report(&report);
 
         // Phase 6B + 7A — Persistence des chunks dans PostgreSQL.
+        let mut embedded_count: usize = 0;
+
         if let Some(repo) = &self.chunk_repository {
             // Conversion SemanticChunk → StoredChunk (frontière application/domain).
             let mut stored: Vec<StoredChunk> = report
@@ -300,9 +301,10 @@ impl AnalyzeOperationUseCase {
                         for (chunk, emb) in stored.iter_mut().zip(embeddings.into_iter()) {
                             chunk.embedding = Some(emb);
                         }
+                        embedded_count = stored.len();
                         info!(
                             operation_id = %report.operation_id,
-                            embedded_count = stored.len(),
+                            embedded_count,
                             dimensions = embed_svc.dimensions(),
                             "🧬 Tensai — Chunks vectorisés (Nomic Matryoshka)"
                         );
@@ -314,6 +316,26 @@ impl AnalyzeOperationUseCase {
                             "⚠️ Tensai — Embedding échoué (non-fatal, chunks sauvés sans vecteur)"
                         );
                     }
+                }
+            }
+
+            // Phase 7B — Idempotence : supprimer les chunks existants avant insertion.
+            // Empêche les doublons si le backfill est relancé ou si un message Kafka est rejoué.
+            match repo.delete_by_operation(&report.operation_id).await {
+                Ok(deleted) if deleted > 0 => {
+                    info!(
+                        operation_id = %report.operation_id,
+                        deleted_chunks = deleted,
+                        "🗑️ Tensai — Chunks précédents supprimés (idempotence)"
+                    );
+                }
+                Ok(_) => {} // Rien à supprimer — première analyse.
+                Err(e) => {
+                    warn!(
+                        operation_id = %report.operation_id,
+                        error = %e,
+                        "⚠️ Tensai — Erreur delete_by_operation (non-fatal)"
+                    );
                 }
             }
 
@@ -335,10 +357,26 @@ impl AnalyzeOperationUseCase {
             }
         }
 
-        // Re-publication événementielle (slot préparé).
-        // if let Some(publisher) = &self.event_publisher {
-        //     publisher.publish_analysis_complete(&report).await?;
-        // }
+        // Phase 7B — Re-publication événementielle (analysis-complete).
+        if let Some(publisher) = &self.event_publisher {
+            let summary = domain::ports::event_publisher::AnalysisCompleteSummary {
+                operation_id: report.operation_id,
+                analyzed_files: report.analyzed_files,
+                skipped_files: report.skipped_files,
+                total_chunks: report.total_chunks,
+                embedded_count,
+                duration_ms: report.duration_ms,
+            };
+
+            // Fire-and-forget : erreur loggée mais non propagée.
+            if let Err(e) = publisher.publish_analysis_complete(&summary).await {
+                warn!(
+                    operation_id = %report.operation_id,
+                    error = %e,
+                    "⚠️ Tensai — Re-publication analysis-complete échouée (non-fatal)"
+                );
+            }
+        }
 
         Ok(AnalysisOutcome::Analyzed(report))
     }

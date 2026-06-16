@@ -269,4 +269,20 @@ impl ChunkRepository for PostgresChunkRepository {
 
         Ok(results)
     }
+
+    #[instrument(skip(self))]
+    async fn delete_by_operation(
+        &self,
+        operation_id: &Uuid,
+    ) -> Result<usize, DomainError> {
+        let result = sqlx::query(
+            "DELETE FROM semantic_chunks WHERE operation_id = $1",
+        )
+        .bind(operation_id)
+        .execute(&self.pool)
+        .await
+        .map_err(|e| DomainError::Persistence(format!("Delete chunks failed: {e}")))?;
+
+        Ok(result.rows_affected() as usize)
+    }
 }

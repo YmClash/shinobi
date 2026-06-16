@@ -132,4 +132,16 @@ pub trait ChunkRepository: Send + Sync {
         limit: usize,
         threshold: f32,
     ) -> Result<Vec<SimilarChunk>, DomainError>;
+
+    /// Supprime tous les chunks d'une opération.
+    ///
+    /// Utilisé pour garantir l'idempotence : avant de ré-analyser une opération
+    /// (backfill ou message Kafka rejoué), on supprime les chunks existants
+    /// pour éviter les doublons (`gen_random_uuid()` produirait des doublons sinon).
+    ///
+    /// Retourne le nombre de chunks supprimés.
+    async fn delete_by_operation(
+        &self,
+        operation_id: &Uuid,
+    ) -> Result<usize, DomainError>;
 }
