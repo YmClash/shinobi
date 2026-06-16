@@ -1,0 +1,53 @@
+[package]
+name = "infrastructure"
+version = "0.1.0"
+edition = "2024"
+description = "SHINOBI — Adaptateurs secondaires (Fūinjutsu, Genjutsu, jj-lib)"
+
+[dependencies]
+domain = { path = "../domain" }
+
+# — Runtime —
+tokio = { workspace = true }
+
+# — Fūinjutsu: Persistence —
+sqlx  = { workspace = true }
+redis = { workspace = true }
+
+# — Moteur VCS —
+jj-lib    = { workspace = true }
+pollster  = { workspace = true }
+
+# — Synchronisation haute performance —
+parking_lot = { workspace = true }
+
+# — Async streams (diff_since) —
+futures = { workspace = true }
+
+# — Sérialisation —
+serde      = { workspace = true }
+serde_json = { workspace = true }
+
+# — Observabilité —
+tracing = { workspace = true }
+
+# — Types —
+uuid        = { workspace = true }
+chrono      = { workspace = true }
+async-trait = { workspace = true }
+anyhow      = { workspace = true }
+
+# — Événementiel (Nen / Kafka) —
+rdkafka = { workspace = true }
+tokio-util = { workspace = true }
+
+# — Stockage distribué (Genjutsu / IPFS) —
+reqwest = { workspace = true }
+
+# — RAG Vectoriel (Phase 7A) —
+fastembed = { workspace = true }
+pgvector = { workspace = true }
+
+[dev-dependencies]
+tempfile = { workspace = true }
+tokio = { workspace = true }

@@ -1,0 +1,16 @@
+[package]
+name = "domain"
+version = "0.1.0"
+edition = "2024"
+description = "SHINOBI — Cœur pur du domaine métier (Entités + Ports)"
+
+[dependencies]
+uuid      = { workspace = true }
+chrono    = { workspace = true }
+serde     = { workspace = true }
+thiserror = { workspace = true }
+async-trait = { workspace = true }
+futures   = { workspace = true }
+
+[dev-dependencies]
+serde_json = { workspace = true }

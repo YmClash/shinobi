@@ -1,0 +1,66 @@
+# ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+# SHINOBI / Taijutsu — .gitignore Rust Workspace
+# ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+# ── Artefacts de build Cargo ───────────────
+/target/
+
+# Cargo.lock : VERSIONNEZ ce fichier pour un binaire/application.
+# Ne pas l'ignorer garantit des builds reproductibles.
+# (décommentez si c'est une bibliothèque publiée sur crates.io)
+# Cargo.lock
+
+# ── Protobuf (code généré) ─────────────────
+# Le code généré par tonic-prost-build vit dans target/
+# On ne versionne jamais le code auto-généré.
+# (déjà couvert par /target/ ci-dessus)
+
+# ── Fichiers de configuration locale ───────
+# Overrides locaux SQLx (connexion DB dev)
+.env
+.env.*
+!.env.example
+sqlx-data.json
+
+# Fichier de config sqlx local (optionnel, selon usage)
+# .sqlx/
+
+# ── Fichiers de débogage ───────────────────
+*.pdb
+*.dSYM/
+*.su
+*.idb
+
+# ── Benchmarks & profiling ─────────────────
+criterion/
+flamegraph.svg
+perf.data
+perf.data.old
+cargo-flamegraph/
+
+# ── Couverture de code ─────────────────────
+/lcov.info
+/cobertura.xml
+/coverage/
+tarpaulin-report.html
+tarpaulin-report.json
+
+# ── Fuzzing ────────────────────────────────
+fuzz/artifacts/
+fuzz/corpus/
+
+# ── IDEs (spécifique Rust) ─────────────────
+# RustRover / CLion
+.idea/
+*.iml
+
+# rust-analyzer cache
+.rust-analyzer/
+
+# ── Système ────────────────────────────────
+.DS_Store
+Thumbs.db
+Desktop.ini
+
+#d Docs
+/Docs

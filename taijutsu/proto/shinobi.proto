@@ -1,0 +1,166 @@
+// ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+// SHINOBI — Protocole Ninpo (gRPC)
+// Définitions Protobuf pour le streaming natif
+// ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+syntax = "proto3";
+
+package shinobi.ninpo;
+
+// Service principal du moteur Taijutsu.
+// Point d'entrée gRPC pour toutes les opérations VCS.
+service ShinobiService {
+    // Vérification de la disponibilité du serveur.
+    rpc Ping (PingRequest) returns (PingResponse);
+
+    // Créer une nouvelle opération VCS (commit/changement).
+    rpc CreateOperation (CreateOperationRequest) returns (OperationResponse);
+
+    // Retrouver une opération par son identifiant.
+    rpc GetOperation (GetOperationRequest) returns (OperationResponse);
+
+    // Lister les opérations avec filtrage optionnel.
+    rpc ListOperations (ListOperationsRequest) returns (ListOperationsResponse);
+
+    // ── Phase 6B : Mémoire IA (Tensai) ─────────
+
+    // Récupérer les fragments sémantiques d'une opération.
+    rpc GetChunksByOperation (GetChunksRequest) returns (ChunkListResponse);
+
+    // Rechercher des symboles par nom (fonctions, structs, traits, etc.).
+    rpc SearchChunksByName (SearchChunksRequest) returns (ChunkListResponse);
+
+    // ── Phase 7A : Recherche Sémantique RAG ────
+
+    // Rechercher des fragments par similarité sémantique (RAG vectoriel).
+    rpc SemanticSearch (SemanticSearchRequest) returns (SemanticSearchResponse);
+}
+
+// ── Messages Ping ──────────────────────────────
+
+message PingRequest {}
+
+message PingResponse {
+    string version = 1;
+    string status  = 2;
+    int64  uptime_seconds = 3;
+}
+
+// ── Messages Operation ─────────────────────────
+
+message CreateOperationRequest {
+    string author_id   = 1;
+    string description = 2;
+    // Identifiants des opérations parentes (merge possible).
+    repeated string parent_ids = 3;
+}
+
+message GetOperationRequest {
+    string id = 1;
+}
+
+message ListOperationsRequest {
+    // Nombre maximum de résultats (défaut: 50).
+    int32 limit = 1;
+    // Filtre optionnel par auteur (UUID). Vide = pas de filtre.
+    string author_id = 2;
+}
+
+// ── Réponses Operation ─────────────────────────
+
+message OperationResponse {
+    string id          = 1;
+    string author_id   = 2;
+    string content_id  = 3;
+    string description = 4;
+    repeated string parent_ids = 5;
+    int64  created_at  = 6;
+    // CID IPFS distribué (Genjutsu) — vide si non synchronisé.
+    optional string ipfs_content_id = 7;
+}
+
+message ListOperationsResponse {
+    repeated OperationResponse operations = 1;
+}
+
+// ── Messages Tensai (Mémoire IA) ───────────────
+
+// Requête : récupérer les chunks d'une opération.
+message GetChunksRequest {
+    // ID de l'opération VCS.
+    string operation_id = 1;
+    // Filtre optionnel par chemin de fichier (ex: "src/main.rs").
+    // Si vide, retourne tous les chunks de l'opération.
+    string file_path = 2;
+}
+
+// Requête : rechercher des symboles par nom.
+message SearchChunksRequest {
+    // Nom du symbole recherché (ex: "User", "create_operation").
+    string name = 1;
+}
+
+// Fragment sémantique de code source (extrait par Tree-sitter).
+message ChunkResponse {
+    // Type du fragment : "function", "struct", "enum", "trait", "impl", etc.
+    string kind       = 1;
+    // Nom du symbole. Vide si le fragment est anonyme.
+    string name       = 2;
+    // Contenu brut du fragment.
+    string content    = 3;
+    // Ligne de début dans le fichier source (1-indexed).
+    int32 start_line  = 4;
+    // Ligne de fin dans le fichier source (1-indexed).
+    int32 end_line    = 5;
+    // Chemin du fichier source (ex: "src/main.rs").
+    string file_path  = 6;
+    // Langage du fichier source (ex: "rust").
+    string language   = 7;
+}
+
+// Réponse contenant une liste de fragments sémantiques.
+message ChunkListResponse {
+    repeated ChunkResponse chunks = 1;
+    // Nombre total de résultats.
+    int32 count = 2;
+}
+
+// ── Messages RAG (Phase 7A — Recherche Sémantique) ─────────
+
+// Requête : recherche par similarité sémantique.
+message SemanticSearchRequest {
+    // Requête en langage naturel (ex: "code qui gère la cryptographie").
+    string query = 1;
+    // Nombre maximum de résultats (défaut: 10).
+    int32 limit = 2;
+    // Score minimum de similarité cosinus (0.0 à 1.0, défaut: 0.5).
+    float threshold = 3;
+}
+
+// Fragment sémantique avec score de similarité.
+message SemanticChunkResponse {
+    // Type du fragment.
+    string kind       = 1;
+    // Nom du symbole.
+    string name       = 2;
+    // Contenu brut.
+    string content    = 3;
+    // Ligne de début (1-indexed).
+    int32 start_line  = 4;
+    // Ligne de fin (1-indexed).
+    int32 end_line    = 5;
+    // Chemin du fichier source.
+    string file_path  = 6;
+    // Langage du fichier source.
+    string language   = 7;
+    // Score de similarité cosinus (0.0 à 1.0).
+    float similarity  = 8;
+}
+
+// Réponse de recherche sémantique.
+message SemanticSearchResponse {
+    // Fragments trouvés, triés par similarité descendante.
+    repeated SemanticChunkResponse chunks = 1;
+    // Nombre total de résultats.
+    int32 count = 2;
+}

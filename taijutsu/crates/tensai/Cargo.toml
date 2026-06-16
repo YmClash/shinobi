@@ -1,0 +1,21 @@
+[package]
+name = "tensai"
+version = "0.1.0"
+edition = "2024"
+description = "SHINOBI — Tensai: découpage sémantique du code (Tree-sitter)"
+
+[dependencies]
+domain = { path = "../domain" }
+
+serde      = { workspace = true }
+serde_json = { workspace = true }
+tracing    = { workspace = true }
+thiserror  = { workspace = true }
+async-trait = { workspace = true }
+
+# — Tree-sitter: parsing AST —
+tree-sitter = "0.25"
+tree-sitter-rust = "0.24"
+
+[dev-dependencies]
+tokio = { workspace = true }
