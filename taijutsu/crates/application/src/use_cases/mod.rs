@@ -3,6 +3,7 @@
 pub mod analyze_operation;
 pub mod create_operation;
 pub mod get_operation;
+pub mod get_operation_diff;
 pub mod list_operations;
 pub mod search_chunks;
 

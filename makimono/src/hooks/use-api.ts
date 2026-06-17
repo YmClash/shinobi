@@ -4,10 +4,16 @@ import { useCallback, useEffect, useRef, useState } from "react";
 import {
   getHealth,
   getStatus,
+  getOperation,
+  getChunksByOperation,
+  getOperationDiff,
   listOperations,
   semanticSearch,
   type HealthResponse,
   type SystemStatus,
+  type Operation,
+  type ChunksResponse,
+  type DiffResponse,
   type OperationsResponse,
   type SemanticSearchResponse,
 } from "@/lib/api";
@@ -148,4 +154,19 @@ export function useSemanticSearch(
   }, []);
 
   return { data, error, loading, clear };
+}
+
+/** Fetches a single operation by ID */
+export function useOperation(id: string) {
+  return useApi<Operation>(() => getOperation(id), [id]);
+}
+
+/** Fetches chunks for an operation */
+export function useOperationChunks(id: string) {
+  return useApi<ChunksResponse>(() => getChunksByOperation(id), [id]);
+}
+
+/** Fetches diff for an operation */
+export function useOperationDiff(id: string) {
+  return useApi<DiffResponse>(() => getOperationDiff(id), [id]);
 }

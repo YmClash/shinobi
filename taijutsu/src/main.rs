@@ -23,6 +23,7 @@ use tracing_subscriber::{EnvFilter, layer::SubscriberExt, util::SubscriberInitEx
 use application::use_cases::analyze_operation::AnalyzeOperationUseCase;
 use application::use_cases::create_operation::CreateOperationUseCase;
 use application::use_cases::get_operation::GetOperationUseCase;
+use application::use_cases::get_operation_diff::GetOperationDiffUseCase;
 use application::use_cases::list_operations::ListOperationsUseCase;
 use application::use_cases::search_chunks::SearchChunksUseCase;
 use infrastructure::cache::redis_cache::RedisCache;
@@ -189,11 +190,17 @@ async fn main() -> anyhow::Result<()> {
     }
 
     // ── État partagé (DI Container) ────────────────
+    let get_operation_diff = Arc::new(GetOperationDiffUseCase::new(
+        repo.clone(),
+        vcs.clone(),
+    ));
+
     let shared_state = SharedState {
         create_operation,
         get_operation,
         list_operations,
         search_chunks,
+        get_operation_diff,
     };
 
     // ── Serveur Axum (REST) ────────────────────────

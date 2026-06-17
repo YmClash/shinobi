@@ -1,5 +1,6 @@
 "use client";
 
+import Link from "next/link";
 import { Card, CardContent } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
 import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
@@ -32,51 +33,59 @@ function truncateId(id: string, len = 8): string {
 
 export function OperationCard({ operation, className = "" }: OperationCardProps) {
   return (
-    <Card className={`glass-card neon-glow hover:border-primary/20 transition-all duration-200 ${className}`}>
-      <CardContent className="p-3">
-        <div className="flex items-start justify-between gap-2">
-          <div className="min-w-0 flex-1">
-            <p className="text-sm font-medium truncate">{operation.description}</p>
-            <div className="flex items-center gap-2 mt-1.5 text-xs text-muted-foreground">
-              <Tooltip>
-                <TooltipTrigger>
-                  <span className="font-mono">{truncateId(operation.author_id)}</span>
-                </TooltipTrigger>
-                <TooltipContent side="top">{operation.author_id}</TooltipContent>
-              </Tooltip>
-              <span>·</span>
-              <span>{timeAgo(operation.created_at)}</span>
+    <Link href={`/operations/${operation.id}`} className="block group">
+      <Card className={`glass-card neon-glow hover:border-primary/30 hover:shadow-md hover:shadow-primary/5 transition-all duration-200 cursor-pointer ${className}`}>
+        <CardContent className="p-3">
+          <div className="flex items-start justify-between gap-2">
+            <div className="min-w-0 flex-1">
+              <p className="text-sm font-medium truncate group-hover:text-primary transition-colors">
+                {operation.description}
+              </p>
+              <div className="flex items-center gap-2 mt-1.5 text-xs text-muted-foreground">
+                <Tooltip>
+                  <TooltipTrigger>
+                    <span className="font-mono">{truncateId(operation.author_id)}</span>
+                  </TooltipTrigger>
+                  <TooltipContent side="top">{operation.author_id}</TooltipContent>
+                </Tooltip>
+                <span>·</span>
+                <span>{timeAgo(operation.created_at)}</span>
+              </div>
             </div>
+            {/* Arrow indicator */}
+            <span className="text-muted-foreground/40 group-hover:text-primary/60 transition-colors text-sm mt-1">
+              →
+            </span>
           </div>
-        </div>
 
-        {/* CIDs */}
-        <div className="flex items-center gap-1.5 mt-2 flex-wrap">
-          <Tooltip>
-            <TooltipTrigger>
-              <Badge variant="outline" className="text-[10px] font-mono px-1.5 py-0">
-                jj:{truncateId(operation.content_id, 10)}
-              </Badge>
-            </TooltipTrigger>
-            <TooltipContent side="top" className="font-mono text-xs max-w-xs break-all">
-              {operation.content_id}
-            </TooltipContent>
-          </Tooltip>
-
-          {operation.ipfs_content_id && (
+          {/* CIDs */}
+          <div className="flex items-center gap-1.5 mt-2 flex-wrap">
             <Tooltip>
               <TooltipTrigger>
-                <Badge variant="secondary" className="text-[10px] font-mono px-1.5 py-0">
-                  ipfs:{truncateId(operation.ipfs_content_id, 10)}
+                <Badge variant="outline" className="text-[10px] font-mono px-1.5 py-0">
+                  jj:{truncateId(operation.content_id, 10)}
                 </Badge>
               </TooltipTrigger>
               <TooltipContent side="top" className="font-mono text-xs max-w-xs break-all">
-                {operation.ipfs_content_id}
+                {operation.content_id}
               </TooltipContent>
             </Tooltip>
-          )}
-        </div>
-      </CardContent>
-    </Card>
+
+            {operation.ipfs_content_id && (
+              <Tooltip>
+                <TooltipTrigger>
+                  <Badge variant="secondary" className="text-[10px] font-mono px-1.5 py-0">
+                    ipfs:{truncateId(operation.ipfs_content_id, 10)}
+                  </Badge>
+                </TooltipTrigger>
+                <TooltipContent side="top" className="font-mono text-xs max-w-xs break-all">
+                  {operation.ipfs_content_id}
+                </TooltipContent>
+              </Tooltip>
+            )}
+          </div>
+        </CardContent>
+      </Card>
+    </Link>
   );
 }

@@ -59,6 +59,13 @@ export interface SemanticSearchResponse {
   count: number;
 }
 
+export interface DiffResponse {
+  operation_id: string;
+  content_id: string;
+  changed_files: string[];
+  count: number;
+}
+
 // ── API Error ────────────────────────────────────────────────
 
 export class ApiError extends Error {
@@ -131,4 +138,10 @@ export async function semanticSearch(
     method: "POST",
     body: JSON.stringify({ query, limit, threshold }),
   });
+}
+
+export async function getOperationDiff(
+  id: string,
+): Promise<DiffResponse> {
+  return apiFetch<DiffResponse>(`/api/v1/operations/${id}/diff`);
 }

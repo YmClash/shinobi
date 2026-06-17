@@ -188,6 +188,8 @@ pub fn create_router(state: SharedState) -> Router {
             post(create_operation_handler).get(list_operations_handler),
         )
         .route("/api/v1/operations/{id}", get(get_operation_handler))
+        // ── VCS Diff ───────────────────────────────
+        .route("/api/v1/operations/{id}/diff", get(get_operation_diff_handler))
         // ── Tensai: Mémoire IA ─────────────────────
         .route(
             "/api/v1/operations/{id}/chunks",
@@ -307,6 +309,25 @@ async fn list_operations_handler(
     Ok(Json(serde_json::json!({
         "operations": operations_json,
         "count": operations_json.len(),
+    })))
+}
+
+// ─── Handler Diff VCS ─────────────────────────────
+
+/// Récupérer les fichiers modifiés par une opération — `GET /api/v1/operations/{id}/diff`
+async fn get_operation_diff_handler(
+    State(state): State<SharedState>,
+    Path(id): Path<Uuid>,
+) -> Result<Json<serde_json::Value>, AppError> {
+    info!(%id, "REST: GetOperationDiff reçu");
+
+    let result = state.get_operation_diff.execute(id).await?;
+
+    Ok(Json(serde_json::json!({
+        "operation_id": result.operation_id,
+        "content_id": result.content_id,
+        "changed_files": result.changed_files,
+        "count": result.changed_files.len(),
     })))
 }
 
