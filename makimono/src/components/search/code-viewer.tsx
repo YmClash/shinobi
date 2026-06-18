@@ -1,9 +1,7 @@
 "use client";
 
-import { Card, CardContent } from "@/components/ui/card";
-import { ScrollArea } from "@/components/ui/scroll-area";
-import { Button } from "@/components/ui/button";
-import { useState } from "react";
+import { useEffect, useState } from "react";
+import { CopyButton } from "@/components/ui/copy-button";
 
 interface CodeViewerProps {
   code: string;
@@ -14,6 +12,17 @@ interface CodeViewerProps {
   className?: string;
 }
 
+/**
+ * Client-side code viewer with Shiki-powered syntax highlighting.
+ *
+ * Fetches highlighted HTML dynamically from a lightweight helper
+ * that calls the Shiki highlighter. The css-variables theme lets
+ * colours adapt to the active Makimono theme automatically.
+ *
+ * This component stays "use client" because it lives inside
+ * stateful parents (SearchResults, FileExplorer) that manage
+ * expansion and file selection.
+ */
 export function CodeViewer({
   code,
   language,
@@ -21,23 +30,37 @@ export function CodeViewer({
   filePath,
   className = "",
 }: CodeViewerProps) {
-  const [copied, setCopied] = useState(false);
+  const [highlightedHtml, setHighlightedHtml] = useState<string | null>(null);
+
+  useEffect(() => {
+    let cancelled = false;
+
+    // Dynamic import so shiki is loaded lazily on the client
+    // only when a CodeViewer is actually rendered.
+    async function highlight() {
+      try {
+        const { codeToHtml } = await import("shiki");
+        const html = await codeToHtml(code, {
+          lang: normalizeLanguage(language),
+          theme: "css-variables",
+        });
+        if (!cancelled) setHighlightedHtml(html);
+      } catch {
+        // Fallback — show raw code if shiki fails
+        if (!cancelled) setHighlightedHtml(null);
+      }
+    }
+
+    highlight();
+    return () => { cancelled = true; };
+  }, [code, language]);
+
   const lines = code.split("\n");
 
-  const handleCopy = async () => {
-    try {
-      await navigator.clipboard.writeText(code);
-      setCopied(true);
-      setTimeout(() => setCopied(false), 2000);
-    } catch {
-      // Fallback — ignore
-    }
-  };
-
   return (
-    <Card className={`overflow-hidden glass-card ${className}`}>
+    <div className={`shiki-block overflow-hidden rounded-lg border border-border/50 ${className}`}>
       {/* Header bar */}
-      <div className="flex items-center justify-between px-3 py-1.5 bg-muted/50 border-b border-border">
+      <div className="flex items-center justify-between px-3 py-1.5 bg-muted/50 border-b border-border/50">
         <div className="flex items-center gap-2 text-xs text-muted-foreground">
           {filePath && (
             <span className="font-mono truncate max-w-[200px]">{filePath}</span>
@@ -46,33 +69,58 @@ export function CodeViewer({
             {language}
           </span>
         </div>
-        <Button
-          variant="ghost"
-          size="sm"
-          onClick={handleCopy}
-          className="h-6 px-2 text-[10px] text-muted-foreground hover:text-foreground"
-        >
-          {copied ? "✓ Copié" : "Copier"}
-        </Button>
+        <CopyButton text={code} />
       </div>
 
       {/* Code content */}
-      <ScrollArea className="max-h-72">
-        <div className="p-3 font-mono text-xs leading-5 overflow-x-auto">
-          <table className="border-collapse w-full">
-            <tbody>
-              {lines.map((line, i) => (
-                <tr key={i} className="hover:bg-muted/30 transition-colors">
-                  <td className="pr-4 text-right text-muted-foreground/50 select-none w-8 align-top">
-                    {startLine + i}
-                  </td>
-                  <td className="whitespace-pre">{line || " "}</td>
-                </tr>
-              ))}
-            </tbody>
-          </table>
-        </div>
-      </ScrollArea>
-    </Card>
+      <div className="shiki-content max-h-72 overflow-auto">
+        {highlightedHtml ? (
+          <div
+            className="p-0 overflow-x-auto text-xs leading-5 font-mono"
+            style={{ counterReset: `line ${startLine - 1}` }}
+            dangerouslySetInnerHTML={{ __html: highlightedHtml }}
+          />
+        ) : (
+          /* Fallback: plain text with line numbers */
+          <div className="p-3 font-mono text-xs leading-5 overflow-x-auto">
+            <table className="border-collapse w-full">
+              <tbody>
+                {lines.map((line, i) => (
+                  <tr key={i} className="hover:bg-muted/30 transition-colors">
+                    <td className="pr-4 text-right text-muted-foreground/50 select-none w-8 align-top">
+                      {startLine + i}
+                    </td>
+                    <td className="whitespace-pre">{line || " "}</td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
+        )}
+      </div>
+    </div>
   );
+}
+
+// ── Language normaliser (shared with shiki.ts) ──────────────
+
+type ShikiLang = string;
+
+function normalizeLanguage(lang: string): ShikiLang {
+  const map: Record<string, string> = {
+    rust: "rust", rs: "rust",
+    typescript: "typescript", ts: "typescript",
+    tsx: "tsx",
+    javascript: "javascript", js: "javascript",
+    jsx: "jsx",
+    css: "css",
+    python: "python", py: "python",
+    json: "json", toml: "toml",
+    yaml: "yaml", yml: "yaml",
+    markdown: "markdown", md: "markdown",
+    bash: "bash", sh: "bash",
+    sql: "sql", html: "html",
+    diff: "diff",
+  };
+  return map[lang.toLowerCase()] ?? "text";
 }

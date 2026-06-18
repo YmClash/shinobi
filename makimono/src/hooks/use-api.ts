@@ -7,6 +7,7 @@ import {
   getOperation,
   getChunksByOperation,
   getOperationDiff,
+  getIpfsContent,
   listOperations,
   semanticSearch,
   type HealthResponse,
@@ -14,6 +15,7 @@ import {
   type Operation,
   type ChunksResponse,
   type DiffResponse,
+  type IpfsContentResponse,
   type OperationsResponse,
   type SemanticSearchResponse,
 } from "@/lib/api";
@@ -169,4 +171,9 @@ export function useOperationChunks(id: string) {
 /** Fetches diff for an operation */
 export function useOperationDiff(id: string) {
   return useApi<DiffResponse>(() => getOperationDiff(id), [id]);
+}
+
+/** Fetches IPFS content for an operation */
+export function useIpfsContent(id: string) {
+  return useApi<IpfsContentResponse>(() => getIpfsContent(id), [id]);
 }

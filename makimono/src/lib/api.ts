@@ -66,6 +66,21 @@ export interface DiffResponse {
   count: number;
 }
 
+export interface IpfsFile {
+  path: string;
+  size: number;
+  content: string;
+  language: string | null;
+}
+
+export interface IpfsContentResponse {
+  operation_id: string;
+  ipfs_cid: string;
+  blob_size: number;
+  files: IpfsFile[];
+  count: number;
+}
+
 // ── API Error ────────────────────────────────────────────────
 
 export class ApiError extends Error {
@@ -144,4 +159,10 @@ export async function getOperationDiff(
   id: string,
 ): Promise<DiffResponse> {
   return apiFetch<DiffResponse>(`/api/v1/operations/${id}/diff`);
+}
+
+export async function getIpfsContent(
+  id: string,
+): Promise<IpfsContentResponse> {
+  return apiFetch<IpfsContentResponse>(`/api/v1/operations/${id}/ipfs`);
 }

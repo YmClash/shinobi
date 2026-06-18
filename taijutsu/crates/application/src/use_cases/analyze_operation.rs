@@ -405,7 +405,10 @@ fn detect_language(path: &str) -> Option<&'static str> {
     let ext = path.rsplit('.').next()?;
     match ext {
         "rs" => Some("rust"),
-        // Phase 7 : ajouter "ts" => "typescript", "py" => "python", etc.
+        "ts" => Some("typescript"),
+        "tsx" => Some("tsx"),
+        "css" => Some("css"),
+        "py" => Some("python"),
         _ => None,
     }
 }

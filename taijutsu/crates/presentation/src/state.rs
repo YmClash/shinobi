@@ -8,6 +8,7 @@ use std::sync::Arc;
 use application::use_cases::create_operation::CreateOperationUseCase;
 use application::use_cases::get_operation::GetOperationUseCase;
 use application::use_cases::get_operation_diff::GetOperationDiffUseCase;
+use application::use_cases::get_ipfs_content::GetIpfsContentUseCase;
 use application::use_cases::list_operations::ListOperationsUseCase;
 use application::use_cases::search_chunks::SearchChunksUseCase;
 
@@ -31,4 +32,8 @@ pub struct SharedState {
 
     /// Use case: récupérer le diff d'une opération VCS.
     pub get_operation_diff: Arc<GetOperationDiffUseCase>,
+
+    /// Use case: récupérer le contenu IPFS d'une opération.
+    pub get_ipfs_content: Arc<GetIpfsContentUseCase>,
 }
+

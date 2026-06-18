@@ -24,6 +24,7 @@ use application::use_cases::analyze_operation::AnalyzeOperationUseCase;
 use application::use_cases::create_operation::CreateOperationUseCase;
 use application::use_cases::get_operation::GetOperationUseCase;
 use application::use_cases::get_operation_diff::GetOperationDiffUseCase;
+use application::use_cases::get_ipfs_content::GetIpfsContentUseCase;
 use application::use_cases::list_operations::ListOperationsUseCase;
 use application::use_cases::search_chunks::SearchChunksUseCase;
 use infrastructure::cache::redis_cache::RedisCache;
@@ -40,7 +41,7 @@ use presentation::grpc::services::proto::shinobi_service_server::ShinobiServiceS
 use presentation::grpc::services::ShinobiServiceImpl;
 use presentation::rest::routes::create_router;
 use presentation::state::SharedState;
-use tensai::rust_chunker::RustChunker;
+use tensai::multi_chunker::MultiChunker;
 
 use config::Config;
 
@@ -195,12 +196,18 @@ async fn main() -> anyhow::Result<()> {
         vcs.clone(),
     ));
 
+    let get_ipfs_content = Arc::new(GetIpfsContentUseCase::new(
+        repo.clone(),
+        content_store.clone(),
+    ));
+
     let shared_state = SharedState {
         create_operation,
         get_operation,
         list_operations,
         search_chunks,
         get_operation_diff,
+        get_ipfs_content,
     };
 
     // ── Serveur Axum (REST) ────────────────────────
@@ -248,7 +255,7 @@ async fn main() -> anyhow::Result<()> {
             (Some(cs), Ok(consumer)) => {
                 let analyzer = Arc::new(AnalyzeOperationUseCase::new(
                     cs.clone(),
-                    Arc::new(RustChunker::new()),
+                    Arc::new(MultiChunker::new()),
                     Some(chunk_repo.clone()), // Phase 6B — Persistence des chunks
                     embedding_service.clone(), // Phase 7A — Embedding vectoriel
                     event_publisher.clone(), // Phase 7B — Re-publication analysis-complete
@@ -350,10 +357,10 @@ fn print_banner() {
     ║   ███████║██║  ██║██║██║ ╚████║╚██████╔╝██████╔╝██║           ║
     ║   ╚══════╝╚═╝  ╚═╝╚═╝╚═╝  ╚═══╝ ╚═════╝ ╚═════╝ ╚═╝           ║
     ║                                                               ║
-    ║   ⚙️  TAIJUTSU — Moteur Central v0.7.1                        ║
+    ║   ⚙️  TAIJUTSU — Moteur Central v0.7.3                        ║
     ║   ⚡ Ninpo (gRPC) + Axum (REST) + Prometheus                  ║
     ║   🧬 RAG Vectoriel (Nomic-Embed-Text-v1.5 + pgvector)          ║
-    ║   🧠 Tensai Agent IA — Boucle EDA complète                     ║
+    ║   🧠 Tensai Polyglotte — Rust·TS·TSX·CSS·Python                ║
     ║   🥷 Next-Gen VCS for Human/AI Collaboration                   ║
     ║                                                               ║
     ╚═══════════════════════════════════════════════════════════════╝
@@ -393,7 +400,7 @@ async fn run_backfill(
 
     let analyzer = AnalyzeOperationUseCase::new(
         cs,
-        Arc::new(RustChunker::new()),
+        Arc::new(MultiChunker::new()),
         Some(chunk_repo),
         embedding_service,
         event_publisher,

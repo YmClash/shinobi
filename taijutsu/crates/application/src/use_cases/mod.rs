@@ -4,6 +4,7 @@ pub mod analyze_operation;
 pub mod create_operation;
 pub mod get_operation;
 pub mod get_operation_diff;
+pub mod get_ipfs_content;
 pub mod list_operations;
 pub mod search_chunks;
 

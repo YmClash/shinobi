@@ -190,6 +190,8 @@ pub fn create_router(state: SharedState) -> Router {
         .route("/api/v1/operations/{id}", get(get_operation_handler))
         // ── VCS Diff ───────────────────────────────
         .route("/api/v1/operations/{id}/diff", get(get_operation_diff_handler))
+        // ── IPFS Content Explorer ──────────────────
+        .route("/api/v1/operations/{id}/ipfs", get(get_ipfs_content_handler))
         // ── Tensai: Mémoire IA ─────────────────────
         .route(
             "/api/v1/operations/{id}/chunks",
@@ -473,4 +475,24 @@ fn decode_base64(input: &str) -> Result<Vec<u8>, String> {
     }
 
     Ok(result)
+}
+
+// ─── Handler IPFS Content Explorer ────────────────
+
+/// Récupérer le contenu IPFS d'une opération — `GET /api/v1/operations/{id}/ipfs`
+async fn get_ipfs_content_handler(
+    State(state): State<SharedState>,
+    Path(id): Path<Uuid>,
+) -> Result<Json<serde_json::Value>, AppError> {
+    info!(%id, "REST: GetIpfsContent reçu");
+
+    let result = state.get_ipfs_content.execute(id).await?;
+
+    Ok(Json(serde_json::json!({
+        "operation_id": result.operation_id,
+        "ipfs_cid": result.ipfs_cid,
+        "blob_size": result.blob_size,
+        "files": result.files,
+        "count": result.files.len(),
+    })))
 }

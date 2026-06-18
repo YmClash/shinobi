@@ -7,8 +7,9 @@ import { useOperation, useOperationChunks, useOperationDiff } from "@/hooks/use-
 import { OperationHeader } from "@/components/operations/operation-header";
 import { FileExplorer } from "@/components/operations/file-explorer";
 import { DiffViewer } from "@/components/operations/diff-viewer";
+import { IpfsExplorer } from "@/components/operations/ipfs-explorer";
 
-type Tab = "chunks" | "diff";
+type Tab = "chunks" | "diff" | "ipfs";
 
 export default function OperationDetailPage() {
   const params = useParams();
@@ -51,6 +52,11 @@ export default function OperationDetailPage() {
       label: "Diff Complet",
       icon: "📝",
       count: diffData?.count,
+    },
+    {
+      id: "ipfs" as Tab,
+      label: "IPFS Explorer",
+      icon: "🌐",
     },
   ];
 
@@ -105,6 +111,10 @@ export default function OperationDetailPage() {
           ) : (
             <DiffViewer changedFiles={diffData?.changed_files ?? []} />
           )
+        )}
+
+        {activeTab === "ipfs" && (
+          <IpfsExplorer operationId={id} />
         )}
       </div>
     </div>
