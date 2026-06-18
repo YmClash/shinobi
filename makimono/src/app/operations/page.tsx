@@ -2,6 +2,7 @@
 
 import { useMemo, useCallback } from "react";
 import { useRouter } from "next/navigation";
+import Link from "next/link";
 import {
   ReactFlow,
   Background,
@@ -187,9 +188,20 @@ export default function OperationsPage() {
         <h1 className="text-lg font-bold tracking-wide">
           🌳 Graphe VCS Jujutsu
         </h1>
-        <span className="text-xs text-muted-foreground">
-          {operations.length} opération{operations.length > 1 ? "s" : ""} · Cliquez sur un nœud pour voir les détails
-        </span>
+        <div className="flex items-center gap-3">
+          <span className="text-xs text-muted-foreground">
+            {operations.length} opération{operations.length > 1 ? "s" : ""} · Cliquez sur un nœud pour voir les détails
+          </span>
+          <Link
+            href="/operations/new"
+            className="inline-flex items-center gap-1.5 px-3 py-1.5 text-xs font-medium rounded-lg
+                       bg-primary text-primary-foreground hover:bg-primary/90
+                       transition-all hover:shadow-lg hover:shadow-primary/20 hover:scale-105 active:scale-95"
+          >
+            <span>⚔️</span>
+            <span>Nouvelle Opération</span>
+          </Link>
+        </div>
       </div>
 
       <div

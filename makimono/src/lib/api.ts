@@ -166,3 +166,34 @@ export async function getIpfsContent(
 ): Promise<IpfsContentResponse> {
   return apiFetch<IpfsContentResponse>(`/api/v1/operations/${id}/ipfs`);
 }
+
+// ── Create Operation ─────────────────────────────────────────
+
+export interface FileEntry {
+  path: string;
+  content_b64: string;
+}
+
+export interface CreateOperationRequest {
+  author_id: string;
+  description: string;
+  parent_ids?: string[];
+  files: FileEntry[];
+}
+
+export async function createOperation(
+  body: CreateOperationRequest,
+): Promise<Operation> {
+  const res = await fetch("/api/v1/operations", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(body),
+  });
+
+  if (!res.ok) {
+    const text = await res.text().catch(() => "Unknown error");
+    throw new ApiError(res.status, text);
+  }
+
+  return res.json() as Promise<Operation>;
+}
