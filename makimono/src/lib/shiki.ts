@@ -1,6 +1,6 @@
 // ═══════════════════════════════════════════════════════════════
 // SHINOBI — Makimono · Shiki Singleton Highlighter
-// Server-side only — uses css-variables theme for Design System integration
+// Server-side only — uses dual themes (vitesse-dark/light) for Design System
 // ═══════════════════════════════════════════════════════════════
 
 import {
@@ -40,7 +40,7 @@ const PRELOADED_LANGS: BundledLanguage[] = [
 function getHighlighter(): Promise<Highlighter> {
   if (!highlighterPromise) {
     highlighterPromise = createHighlighter({
-      themes: ["css-variables"],
+      themes: ["vitesse-dark", "vitesse-light"],
       langs: PRELOADED_LANGS,
     });
   }
@@ -82,9 +82,8 @@ function normalizeLanguage(lang: string): BundledLanguage {
 /**
  * Highlights source code server-side via Shiki.
  *
- * Uses the `css-variables` theme so colours are controlled by
- * CSS custom properties in globals.css / themes.css, adapting
- * automatically to Ninja, Cyberpunk, Glass and Parchemin themes.
+ * Uses dual themes (vitesse-dark / vitesse-light) with CSS
+ * variable overrides so colours adapt to all 4 Makimono themes.
  *
  * @returns HTML string with `<pre class="shiki">` wrapper.
  */
@@ -97,6 +96,9 @@ export async function highlightCode(
 
   return hl.codeToHtml(code, {
     lang,
-    theme: "css-variables",
+    themes: {
+      dark: "vitesse-dark",
+      light: "vitesse-light",
+    },
   });
 }

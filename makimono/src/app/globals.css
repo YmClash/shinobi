@@ -185,69 +185,35 @@ html * {
 }
 
 /* ═══════════════════════════════════════════════════════════════
-   SHIKI — Syntax Highlighting CSS Variables (per-theme mapping)
-   Theme: css-variables → Makimono Design System integration
+   SHIKI — Dual Theme CSS Variables (vitesse-dark / vitesse-light)
+   Dark themes → use --shiki-dark inline colors
+   Light themes → use --shiki-light inline colors
    ═══════════════════════════════════════════════════════════════ */
 
-/* ── Ninja (default — dark, blood red accents) ─────────────── */
-[data-theme="ninja"],
-:root {
-  --shiki-color-text: oklch(0.88 0.01 80);
-  --shiki-color-background: oklch(0.13 0.005 285);
-  --shiki-token-constant: oklch(0.72 0.16 30);
-  --shiki-token-string: oklch(0.72 0.14 140);
-  --shiki-token-comment: oklch(0.5 0.02 80);
-  --shiki-token-keyword: oklch(0.65 0.22 25);
-  --shiki-token-parameter: oklch(0.8 0.1 60);
-  --shiki-token-function: oklch(0.78 0.14 210);
-  --shiki-token-string-expression: oklch(0.72 0.14 140);
-  --shiki-token-punctuation: oklch(0.6 0.01 80);
-  --shiki-token-link: oklch(0.65 0.15 250);
+/* ── Dark themes (Ninja, Cyberpunk, Glass) — use dark variant ─ */
+[data-theme="ninja"] .shiki,
+[data-theme="cyberpunk"] .shiki,
+[data-theme="glass"] .shiki,
+:root .shiki {
+  background-color: var(--shiki-dark-bg, #121212) !important;
+  color: var(--shiki-dark, #dbd7ca) !important;
 }
 
-/* ── Cyberpunk (neon magenta/cyan on deep dark) ────────────── */
-[data-theme="cyberpunk"] {
-  --shiki-color-text: oklch(0.9 0.03 200);
-  --shiki-color-background: oklch(0.1 0.025 290);
-  --shiki-token-constant: oklch(0.8 0.18 195);
-  --shiki-token-string: oklch(0.75 0.15 155);
-  --shiki-token-comment: oklch(0.5 0.06 270);
-  --shiki-token-keyword: oklch(0.72 0.25 310);
-  --shiki-token-parameter: oklch(0.82 0.12 195);
-  --shiki-token-function: oklch(0.78 0.2 195);
-  --shiki-token-string-expression: oklch(0.75 0.15 155);
-  --shiki-token-punctuation: oklch(0.6 0.05 270);
-  --shiki-token-link: oklch(0.75 0.18 195);
+[data-theme="ninja"] .shiki span,
+[data-theme="cyberpunk"] .shiki span,
+[data-theme="glass"] .shiki span,
+:root .shiki span {
+  color: var(--shiki-dark) !important;
 }
 
-/* ── Glassmorphism (cool blue/purple on frosted dark) ──────── */
-[data-theme="glass"] {
-  --shiki-color-text: oklch(0.92 0.01 260);
-  --shiki-color-background: oklch(0.2 0.025 260 / 50%);
-  --shiki-token-constant: oklch(0.75 0.15 280);
-  --shiki-token-string: oklch(0.72 0.14 140);
-  --shiki-token-comment: oklch(0.55 0.03 260);
-  --shiki-token-keyword: oklch(0.7 0.18 260);
-  --shiki-token-parameter: oklch(0.82 0.1 240);
-  --shiki-token-function: oklch(0.78 0.14 200);
-  --shiki-token-string-expression: oklch(0.72 0.14 140);
-  --shiki-token-punctuation: oklch(0.6 0.02 260);
-  --shiki-token-link: oklch(0.65 0.18 280);
+/* ── Light theme (Parchemin/Scroll) — use light variant ─────── */
+[data-theme="scroll"] .shiki {
+  background-color: var(--shiki-light-bg, #ffffff) !important;
+  color: var(--shiki-light, #393a34) !important;
 }
 
-/* ── Parchemin / Scroll (warm sepia on parchment) ──────────── */
-[data-theme="scroll"] {
-  --shiki-color-text: oklch(0.3 0.03 50);
-  --shiki-color-background: oklch(0.94 0.02 78);
-  --shiki-token-constant: oklch(0.45 0.12 30);
-  --shiki-token-string: oklch(0.4 0.1 145);
-  --shiki-token-comment: oklch(0.6 0.04 55);
-  --shiki-token-keyword: oklch(0.4 0.14 300);
-  --shiki-token-parameter: oklch(0.35 0.08 50);
-  --shiki-token-function: oklch(0.38 0.12 220);
-  --shiki-token-string-expression: oklch(0.4 0.1 145);
-  --shiki-token-punctuation: oklch(0.5 0.03 50);
-  --shiki-token-link: oklch(0.42 0.12 250);
+[data-theme="scroll"] .shiki span {
+  color: var(--shiki-light) !important;
 }
 
 /* ── Shiki block styling ───────────────────────────────────── */

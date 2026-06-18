@@ -2,6 +2,7 @@
 
 import { useEffect, useState } from "react";
 import { CopyButton } from "@/components/ui/copy-button";
+import type { Highlighter } from "shiki";
 
 interface CodeViewerProps {
   code: string;
@@ -10,6 +11,38 @@ interface CodeViewerProps {
   endLine?: number;
   filePath?: string;
   className?: string;
+}
+
+// ── Client-side singleton ────────────────────────────
+
+let highlighterPromise: Promise<Highlighter> | null = null;
+const loadedLangs = new Set<string>();
+
+async function getHighlighter(lang: string): Promise<Highlighter> {
+  if (!highlighterPromise) {
+    highlighterPromise = import("shiki").then(({ createHighlighter }) =>
+      createHighlighter({
+        themes: ["vitesse-dark", "vitesse-light"],
+        langs: [lang],
+      })
+    );
+    const hl = await highlighterPromise;
+    loadedLangs.add(lang);
+    return hl;
+  }
+
+  const hl = await highlighterPromise;
+
+  if (!loadedLangs.has(lang)) {
+    try {
+      await hl.loadLanguage(lang as Parameters<typeof hl.loadLanguage>[0]);
+    } catch {
+      // Fallback to plaintext if grammar not found
+    }
+    loadedLangs.add(lang);
+  }
+
+  return hl;
 }
 
 /**
@@ -35,18 +68,20 @@ export function CodeViewer({
   useEffect(() => {
     let cancelled = false;
 
-    // Dynamic import so shiki is loaded lazily on the client
-    // only when a CodeViewer is actually rendered.
     async function highlight() {
       try {
-        const { codeToHtml } = await import("shiki");
-        const html = await codeToHtml(code, {
-          lang: normalizeLanguage(language),
-          theme: "css-variables",
+        const lang = normalizeLanguage(language);
+        const hl = await getHighlighter(lang);
+        const html = hl.codeToHtml(code, {
+          lang,
+          themes: {
+            dark: "vitesse-dark",
+            light: "vitesse-light",
+          },
         });
         if (!cancelled) setHighlightedHtml(html);
-      } catch {
-        // Fallback — show raw code if shiki fails
+      } catch (err) {
+        console.warn("[CodeViewer] Shiki failed, using fallback:", err);
         if (!cancelled) setHighlightedHtml(null);
       }
     }
