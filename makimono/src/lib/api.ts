@@ -81,6 +81,25 @@ export interface IpfsContentResponse {
   count: number;
 }
 
+// ── Oracle Review Types (Phase 9) ────────────────────────────
+
+export interface Review {
+  id: string;
+  reviewer: string;
+  model: string;
+  summary: string;
+  content: string;
+  score: number | null;
+  duration_ms: number;
+  created_at: string;
+}
+
+export interface ReviewsResponse {
+  operation_id: string;
+  reviews: Review[];
+  count: number;
+}
+
 // ── API Error ────────────────────────────────────────────────
 
 export class ApiError extends Error {
@@ -196,4 +215,12 @@ export async function createOperation(
   }
 
   return res.json() as Promise<Operation>;
+}
+
+// ── Oracle Reviews (Phase 9) ─────────────────────────────────
+
+export async function getOperationReviews(
+  id: string,
+): Promise<ReviewsResponse> {
+  return apiFetch<ReviewsResponse>(`/api/v1/operations/${id}/reviews`);
 }

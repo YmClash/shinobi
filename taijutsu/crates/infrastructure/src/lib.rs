@@ -15,5 +15,6 @@ pub mod cache;
 pub mod content;
 pub mod embeddings;
 pub mod events;
+pub mod llm;
 pub mod persistence;
 pub mod vcs;

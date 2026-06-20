@@ -9,6 +9,7 @@ use application::use_cases::create_operation::CreateOperationUseCase;
 use application::use_cases::get_operation::GetOperationUseCase;
 use application::use_cases::get_operation_diff::GetOperationDiffUseCase;
 use application::use_cases::get_ipfs_content::GetIpfsContentUseCase;
+use application::use_cases::get_reviews::GetReviewsUseCase;
 use application::use_cases::list_operations::ListOperationsUseCase;
 use application::use_cases::search_chunks::SearchChunksUseCase;
 
@@ -35,5 +36,9 @@ pub struct SharedState {
 
     /// Use case: récupérer le contenu IPFS d'une opération.
     pub get_ipfs_content: Arc<GetIpfsContentUseCase>,
+
+    /// Use case: récupérer les code reviews de l'Oracle.
+    pub get_reviews: Arc<GetReviewsUseCase>,
 }
+
 

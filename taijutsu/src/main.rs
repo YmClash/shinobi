@@ -25,15 +25,20 @@ use application::use_cases::create_operation::CreateOperationUseCase;
 use application::use_cases::get_operation::GetOperationUseCase;
 use application::use_cases::get_operation_diff::GetOperationDiffUseCase;
 use application::use_cases::get_ipfs_content::GetIpfsContentUseCase;
+use application::use_cases::get_reviews::GetReviewsUseCase;
 use application::use_cases::list_operations::ListOperationsUseCase;
+use application::use_cases::review_operation::ReviewOperationUseCase;
 use application::use_cases::search_chunks::SearchChunksUseCase;
 use infrastructure::cache::redis_cache::RedisCache;
 use infrastructure::content::ipfs_store::IpfsContentStore;
 use infrastructure::embeddings::nomic_service::NomicEmbedService;
 use infrastructure::events::kafka_consumer::KafkaEventConsumer;
 use infrastructure::events::kafka_producer::KafkaEventPublisher;
+use infrastructure::events::oracle_consumer::OracleKafkaConsumer;
+use infrastructure::llm::ollama_service::OllamaService;
 use infrastructure::persistence::postgres_chunk_repo::PostgresChunkRepository;
 use infrastructure::persistence::postgres_repo::PostgresOperationRepository;
+use infrastructure::persistence::postgres_review_repo::PostgresReviewRepository;
 use infrastructure::vcs::jujutsu_engine::JujutsuEngine;
 use domain::ports::vcs_engine::VcsEngine as _; // Trait import — rend init_workspace() visible
 use domain::ports::repository::OperationRepository as _; // Trait import — rend list_recent() visible (backfill)
@@ -69,6 +74,9 @@ async fn main() -> anyhow::Result<()> {
         tensai_enabled = config.tensai_consumer_enabled,
         embedding_enabled = config.embedding_enabled,
         embedding_dimensions = config.embedding_dimensions,
+        ollama_url = %config.ollama_url,
+        ollama_model = %config.ollama_model,
+        oracle_enabled = config.oracle_consumer_enabled,
         "Configuration chargée"
     );
 
@@ -136,10 +144,13 @@ async fn main() -> anyhow::Result<()> {
     // ── Adaptateurs ────────────────────────────────────────
     let repo = Arc::new(PostgresOperationRepository::new(pg_pool.clone()));
     let chunk_repo: Arc<dyn domain::ports::chunk_repository::ChunkRepository> =
-        Arc::new(PostgresChunkRepository::new(pg_pool));
+        Arc::new(PostgresChunkRepository::new(pg_pool.clone()));
+    let review_repo: Arc<dyn domain::ports::review_repository::ReviewRepository> =
+        Arc::new(PostgresReviewRepository::new(pg_pool));
     let vcs = Arc::new(vcs_engine);
 
     info!("✅ ChunkRepository PostgreSQL initialisé (Mémoire IA)");
+    info!("✅ ReviewRepository PostgreSQL initialisé (Oracle Reviews)");
 
     // RAG: Embedding Service Nomic (Phase 7A — optionnel)
     let embedding_service: Option<Arc<dyn domain::ports::embedding_service::EmbeddingService>> =
@@ -161,6 +172,23 @@ async fn main() -> anyhow::Result<()> {
         } else {
             info!("ℹ️ EmbeddingService désactivé par configuration (EMBEDDING_ENABLED=false)");
             None
+        };
+
+    // Oracle: Ollama LLM Service (Phase 9 — optionnel)
+    let llm_service: Option<Arc<dyn domain::ports::llm_service::LlmService>> =
+        match OllamaService::new(&config.ollama_url, &config.ollama_model) {
+            Ok(service) => {
+                info!(
+                    url = %config.ollama_url,
+                    model = %config.ollama_model,
+                    "✅ OllamaService initialisé (LLM local)"
+                );
+                Some(Arc::new(service))
+            }
+            Err(e) => {
+                warn!("⚠️ Ollama non disponible — Oracle Reviews désactivé: {e}");
+                None
+            }
         };
 
     // ── Use Cases (couche application) ───────────
@@ -201,6 +229,10 @@ async fn main() -> anyhow::Result<()> {
         content_store.clone(),
     ));
 
+    let get_reviews = Arc::new(GetReviewsUseCase::new(
+        review_repo.clone(),
+    ));
+
     let shared_state = SharedState {
         create_operation,
         get_operation,
@@ -208,6 +240,7 @@ async fn main() -> anyhow::Result<()> {
         search_chunks,
         get_operation_diff,
         get_ipfs_content,
+        get_reviews,
     };
 
     // ── Serveur Axum (REST) ────────────────────────
@@ -309,6 +342,88 @@ async fn main() -> anyhow::Result<()> {
         None
     };
 
+    // ── Agent Oracle : Consumer Kafka analysis-complete (Phase 9) ──
+    let oracle_consumer_handle = if config.oracle_consumer_enabled {
+        match (&content_store, &llm_service, OracleKafkaConsumer::new(
+            &config.kafka_brokers,
+            &config.kafka_analysis_topic,  // Écoute le topic analysis-complete
+            &config.oracle_consumer_group,
+            cancel_token.clone(),
+        )) {
+            (Some(cs), Some(llm), Ok(consumer)) => {
+                let reviewer = Arc::new(ReviewOperationUseCase::new(
+                    repo.clone(),
+                    vcs.clone(),
+                    llm.clone(),
+                    review_repo.clone(),
+                    cs.clone(),
+                ));
+
+                info!(
+                    topic = %config.kafka_analysis_topic,
+                    group = %config.oracle_consumer_group,
+                    model = %config.ollama_model,
+                    "🔮 Oracle Reviewer — Consumer Kafka actif"
+                );
+
+                let handle = tokio::spawn(async move {
+                    let handler: infrastructure::events::oracle_consumer::OracleHandler =
+                        Box::new(move |operation_id| {
+                            let reviewer = reviewer.clone();
+                            async move {
+                                match reviewer.execute(operation_id).await {
+                                    Ok(application::use_cases::review_operation::ReviewOutcome::Reviewed { review_id, duration_ms, .. }) => {
+                                        info!(
+                                            operation_id = %operation_id,
+                                            review_id = %review_id,
+                                            duration_ms,
+                                            "🔮 Oracle — Review produite avec succès"
+                                        );
+                                    }
+                                    Ok(application::use_cases::review_operation::ReviewOutcome::Skipped { reason, .. }) => {
+                                        info!(
+                                            operation_id = %operation_id,
+                                            reason = %reason,
+                                            "🔮 Oracle — Opération ignorée"
+                                        );
+                                    }
+                                    Err(e) => {
+                                        warn!(
+                                            operation_id = %operation_id,
+                                            error = %e,
+                                            "⚠️ Oracle — Erreur de code review"
+                                        );
+                                    }
+                                }
+                            }
+                            .boxed()
+                        });
+
+                    if let Err(e) = consumer.start(handler).await {
+                        error!("❌ Oracle Consumer terminé avec erreur: {e}");
+                    }
+                });
+
+                Some(handle)
+            }
+            (None, _, _) => {
+                warn!("⚠️ Oracle Consumer désactivé — IPFS (ContentStore) non disponible");
+                None
+            }
+            (_, None, _) => {
+                warn!("⚠️ Oracle Consumer désactivé — Ollama (LlmService) non disponible");
+                None
+            }
+            (_, _, Err(e)) => {
+                warn!("⚠️ Oracle Consumer désactivé — Kafka non disponible: {e}");
+                None
+            }
+        }
+    } else {
+        info!("ℹ️ Oracle Consumer désactivé par configuration (ORACLE_CONSUMER_ENABLED=false)");
+        None
+    };
+
     // ── Lancement simultané ────────────────────────
     tokio::select! {
         result = rest_server => {
@@ -324,12 +439,18 @@ async fn main() -> anyhow::Result<()> {
     }
 
     // ── Shutdown ────────────────────────────────────
-    // Annuler le token pour arrêter le consumer Tensai.
+    // Annuler le token pour arrêter les consumers.
     cancel_token.cancel();
 
-    // Attendre la fin du consumer (si actif).
+    // Attendre la fin du consumer Tensai (si actif).
     if let Some(handle) = tensai_consumer_handle {
         info!("🛑 Attente de l'arrêt du consumer Tensai...");
+        let _ = handle.await;
+    }
+
+    // Attendre la fin du consumer Oracle (si actif).
+    if let Some(handle) = oracle_consumer_handle {
+        info!("🛑 Attente de l'arrêt du consumer Oracle...");
         let _ = handle.await;
     }
 
@@ -357,10 +478,11 @@ fn print_banner() {
     ║   ███████║██║  ██║██║██║ ╚████║╚██████╔╝██████╔╝██║           ║
     ║   ╚══════╝╚═╝  ╚═╝╚═╝╚═╝  ╚═══╝ ╚═════╝ ╚═════╝ ╚═╝           ║
     ║                                                               ║
-    ║   ⚙️  TAIJUTSU — Moteur Central v0.7.3                        ║
+    ║   ⚙️  TAIJUTSU — Moteur Central v0.9.0                        ║
     ║   ⚡ Ninpo (gRPC) + Axum (REST) + Prometheus                  ║
     ║   🧬 RAG Vectoriel (Nomic-Embed-Text-v1.5 + pgvector)          ║
     ║   🧠 Tensai Polyglotte — Rust·TS·TSX·CSS·Python                ║
+    ║   🔮 Oracle Reviewer — Code Review IA (Ollama)                 ║
     ║   🥷 Next-Gen VCS for Human/AI Collaboration                   ║
     ║                                                               ║
     ╚═══════════════════════════════════════════════════════════════╝

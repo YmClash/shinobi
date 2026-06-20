@@ -8,6 +8,7 @@ import {
   getChunksByOperation,
   getOperationDiff,
   getIpfsContent,
+  getOperationReviews,
   listOperations,
   semanticSearch,
   type HealthResponse,
@@ -17,6 +18,7 @@ import {
   type DiffResponse,
   type IpfsContentResponse,
   type OperationsResponse,
+  type ReviewsResponse,
   type SemanticSearchResponse,
 } from "@/lib/api";
 
@@ -176,4 +178,9 @@ export function useOperationDiff(id: string) {
 /** Fetches IPFS content for an operation */
 export function useIpfsContent(id: string) {
   return useApi<IpfsContentResponse>(() => getIpfsContent(id), [id]);
+}
+
+/** Fetches Oracle reviews for an operation — auto-polls every 5 seconds */
+export function useOperationReviews(id: string) {
+  return useApi<ReviewsResponse>(() => getOperationReviews(id), [id], 5_000);
 }

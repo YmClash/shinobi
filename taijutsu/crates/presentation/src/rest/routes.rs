@@ -15,6 +15,7 @@ use application::use_cases::list_operations::ListFilter;
 use application::use_cases::search_chunks::ChunkSearchFilter;
 use domain::entities::operation::Operation;
 use domain::ports::chunk_repository::{SimilarChunk, StoredChunk};
+use domain::ports::review_repository::OperationReview;
 
 use crate::errors::AppError;
 use crate::state::SharedState;
@@ -168,6 +169,34 @@ impl From<SimilarChunk> for SemanticChunkJson {
     }
 }
 
+/// Réponse JSON pour une code review IA (Phase 9 — Oracle).
+#[derive(Debug, Serialize)]
+pub struct ReviewJson {
+    pub id: Uuid,
+    pub reviewer: String,
+    pub model: String,
+    pub summary: String,
+    pub content: String,
+    pub score: Option<f32>,
+    pub duration_ms: u64,
+    pub created_at: chrono::DateTime<chrono::Utc>,
+}
+
+impl From<OperationReview> for ReviewJson {
+    fn from(review: OperationReview) -> Self {
+        Self {
+            id: review.id,
+            reviewer: review.reviewer,
+            model: review.model,
+            summary: review.summary,
+            content: review.content,
+            score: review.score,
+            duration_ms: review.duration_ms,
+            created_at: review.created_at,
+        }
+    }
+}
+
 // ─── Routeur ─────────────────────────────────────
 
 /// Construit le routeur Axum principal avec les use cases injectés.
@@ -190,6 +219,8 @@ pub fn create_router(state: SharedState) -> Router {
         .route("/api/v1/operations/{id}", get(get_operation_handler))
         // ── VCS Diff ───────────────────────────────
         .route("/api/v1/operations/{id}/diff", get(get_operation_diff_handler))
+        // ── Oracle: Code Reviews IA ────────────────
+        .route("/api/v1/operations/{id}/reviews", get(get_reviews_handler))
         // ── IPFS Content Explorer ──────────────────
         .route("/api/v1/operations/{id}/ipfs", get(get_ipfs_content_handler))
         // ── Tensai: Mémoire IA ─────────────────────
@@ -494,5 +525,28 @@ async fn get_ipfs_content_handler(
         "blob_size": result.blob_size,
         "files": result.files,
         "count": result.files.len(),
+    })))
+}
+
+// ─── Handler Oracle Reviews (Phase 9) ─────────────────
+
+/// Récupérer les code reviews d'une opération — `GET /api/v1/operations/{id}/reviews`
+async fn get_reviews_handler(
+    State(state): State<SharedState>,
+    Path(id): Path<Uuid>,
+) -> Result<Json<serde_json::Value>, AppError> {
+    info!(%id, "REST: GetReviews reçu (Oracle)");
+
+    let result = state.get_reviews.execute(id).await?;
+    let reviews_json: Vec<ReviewJson> = result
+        .reviews
+        .into_iter()
+        .map(ReviewJson::from)
+        .collect();
+
+    Ok(Json(serde_json::json!({
+        "operation_id": id,
+        "reviews": reviews_json,
+        "count": result.count,
     })))
 }

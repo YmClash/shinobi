@@ -8,6 +8,7 @@ import { OperationHeader } from "@/components/operations/operation-header";
 import { FileExplorer } from "@/components/operations/file-explorer";
 import { DiffViewer } from "@/components/operations/diff-viewer";
 import { IpfsExplorer } from "@/components/operations/ipfs-explorer";
+import { OracleReview } from "@/components/operations/oracle-review";
 
 type Tab = "chunks" | "diff" | "ipfs";
 
@@ -65,6 +66,9 @@ export default function OperationDetailPage() {
       {/* ── Header ──────────────────────────── */}
       <OperationHeader operation={operation} />
 
+      {/* ── Oracle Review (auto-revealed) ──── */}
+      <OracleReview operationId={id} />
+
       {/* ── Tabs ────────────────────────────── */}
       <div className="flex gap-1 border-b border-border/50 pb-px">
         {tabs.map((tab) => (
@@ -120,3 +124,4 @@ export default function OperationDetailPage() {
     </div>
   );
 }
+
