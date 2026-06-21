@@ -184,16 +184,33 @@ impl ReviewOperationUseCase {
 
         let llm_response = self.llm.generate(&prompt, system).await?;
 
-        // 6. Construire la review.
-        let summary = extract_summary(&llm_response.content);
+        // 6. Extraire le score et nettoyer le contenu.
+        let raw_content = &llm_response.content;
+        let score = extract_score(raw_content);
+        let clean_content = clean_score_tags(raw_content);
+        let summary = extract_summary(&clean_content);
+
+        if let Some(s) = score {
+            info!(
+                operation_id = %operation_id,
+                score = s,
+                "🔮 Oracle — Score extrait"
+            );
+        } else {
+            warn!(
+                operation_id = %operation_id,
+                "🔮 Oracle — Score non trouvé dans la réponse LLM"
+            );
+        }
+
         let review = OperationReview {
             id: Uuid::new_v4(),
             operation_id,
             reviewer: "oracle".to_string(),
             model: llm_response.model.clone(),
             summary,
-            content: llm_response.content.clone(),
-            score: None, // Le score pourrait être extrait du LLM dans une version future.
+            content: clean_content,
+            score,
             duration_ms: llm_response.duration_ms,
             created_at: Utc::now(),
         };
@@ -254,10 +271,13 @@ struct IpfsFileEntry {
 // ── Prompts ───────────────────────────────────────────────────────────
 
 /// Prompt système pour l'Oracle Reviewer.
-const SYSTEM_PROMPT: &str = r#"Tu es un développeur senior bienveillant et expérimenté qui fait des code reviews.
+///
+/// Phase 9.1 : prompt strict qui force le LLM à émettre un score
+/// déterministe entre `<score>` et `</score>` à la fin de sa réponse.
+const SYSTEM_PROMPT: &str = r#"Tu es un ingénieur logiciel senior impitoyable mais juste.
+Tu fais des code reviews rigoureuses, concises et constructives.
 
-Règles :
-- Sois concis et constructif. Pas de flatterie vide.
+Règles STRICTES :
 - Utilise le format Markdown avec des emojis pour structurer ta review.
 - Identifie les points suivants :
   1. ✅ **Points forts** — Ce qui est bien fait
@@ -266,7 +286,15 @@ Règles :
   4. 💡 **Recommandations** — Bonnes pratiques à appliquer
 - Si le code est bon, dis-le simplement. Pas besoin d'inventer des problèmes.
 - Réponds en français.
-- Commence ta réponse par un résumé d'une seule phrase."#;
+- Commence ta réponse par un résumé d'une seule phrase.
+- TERMINE TOUJOURS ta réponse par la ligne suivante, sans exception :
+<score>X.XX</score>
+où X.XX est un nombre entre 0.00 et 1.00 représentant la qualité globale du code.
+  - 0.90-1.00 : Code exemplaire, prêt pour la production
+  - 0.70-0.89 : Bon code avec des améliorations mineures
+  - 0.50-0.69 : Code acceptable mais avec des problèmes notables
+  - 0.30-0.49 : Code problématique nécessitant des corrections
+  - 0.00-0.29 : Code dangereux, refactoring urgent requis"#;
 
 /// Construit le prompt utilisateur à partir du contexte de l'opération.
 fn build_prompt(
@@ -333,6 +361,41 @@ fn extract_summary(content: &str) -> String {
         .chars()
         .take(200)
         .collect()
+}
+
+/// Extrait le score `<score>X.XX</score>` de la réponse LLM.
+///
+/// Recherche la **dernière** occurrence (le LLM peut répéter des balises
+/// dans ses exemples). Retourne `None` si le format est absent ou invalide.
+fn extract_score(content: &str) -> Option<f32> {
+    let start_tag = "<score>";
+    let end_tag = "</score>";
+    let start = content.rfind(start_tag)? + start_tag.len();
+    let end_offset = content[start..].find(end_tag)?;
+    let score_str = content[start..start + end_offset].trim();
+    let score: f32 = score_str.parse().ok()?;
+    Some(score.clamp(0.0, 1.0))
+}
+
+/// Nettoie les balises `<score>...</score>` du contenu Markdown.
+///
+/// Le frontend Makimono reçoit le Markdown propre via l'API JSON
+/// et le score comme valeur `f32` structurée dans le champ `score`.
+fn clean_score_tags(content: &str) -> String {
+    if let Some(start) = content.rfind("<score>") {
+        let end = content[start..]
+            .find("</score>")
+            .map(|i| start + i + "</score>".len())
+            .unwrap_or(content.len());
+        let mut cleaned = String::with_capacity(content.len());
+        cleaned.push_str(&content[..start]);
+        if end < content.len() {
+            cleaned.push_str(&content[end..]);
+        }
+        cleaned.trim_end().to_string()
+    } else {
+        content.to_string()
+    }
 }
 
 /// Détecte le langage à partir de l'extension du fichier.

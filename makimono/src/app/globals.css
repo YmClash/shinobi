@@ -256,7 +256,7 @@ html * {
 }
 
 /* ═══════════════════════════════════════════════════════════════
-   ORACLE REVIEW — Agent IA Code Review (Phase 9)
+   ORACLE REVIEW — Agent IA Code Review (Phase 9 + 9.1 Scoring)
    ═══════════════════════════════════════════════════════════════ */
 
 @keyframes oracle-slide-in {
@@ -276,6 +276,16 @@ html * {
   to { transform: rotate(360deg); }
 }
 
+@keyframes oracle-pulse-green {
+  0%, 100% { filter: drop-shadow(0 0 4px oklch(0.72 0.22 150 / 40%)); }
+  50% { filter: drop-shadow(0 0 12px oklch(0.72 0.22 150 / 70%)); }
+}
+
+@keyframes oracle-pulse-red {
+  0%, 100% { filter: drop-shadow(0 0 6px oklch(0.60 0.25 25 / 50%)); }
+  50% { filter: drop-shadow(0 0 18px oklch(0.60 0.25 25 / 80%)); }
+}
+
 /* ── Container ─────────────────────────────────────────────── */
 .oracle-review-container {
   position: relative;
@@ -284,9 +294,10 @@ html * {
   padding: 1rem 1.25rem;
   background: var(--card);
   overflow: hidden;
+  transition: border-color 0.4s ease, box-shadow 0.4s ease;
 }
 
-/* Subtle gradient accent on the left border */
+/* Default gradient accent on the left border */
 .oracle-review-container::before {
   content: "";
   position: absolute;
@@ -301,6 +312,26 @@ html * {
     oklch(0.58 0.20 340)
   );
   border-radius: 3px 0 0 3px;
+  transition: background 0.4s ease, box-shadow 0.4s ease;
+}
+
+/* ── Tier-based container border coloring ──────────────────── */
+.oracle-tier-green .oracle-review-container::before,
+.oracle-tier-green.oracle-review-container::before {
+  background: linear-gradient(180deg, oklch(0.72 0.22 150), oklch(0.62 0.20 160), oklch(0.72 0.22 150));
+  box-shadow: 0 0 6px oklch(0.72 0.22 150 / 30%);
+}
+
+.oracle-tier-yellow .oracle-review-container::before,
+.oracle-tier-yellow.oracle-review-container::before {
+  background: linear-gradient(180deg, oklch(0.75 0.18 80), oklch(0.68 0.16 70), oklch(0.75 0.18 80));
+  box-shadow: 0 0 6px oklch(0.75 0.18 80 / 30%);
+}
+
+.oracle-tier-red .oracle-review-container::before,
+.oracle-tier-red.oracle-review-container::before {
+  background: linear-gradient(180deg, oklch(0.60 0.25 25), oklch(0.50 0.22 15), oklch(0.60 0.25 25));
+  box-shadow: 0 0 8px oklch(0.60 0.25 25 / 40%);
 }
 
 .oracle-hidden {
@@ -374,23 +405,104 @@ html * {
   color: oklch(0.72 0.12 200);
 }
 
-.oracle-badge-score {
-  font-weight: 700;
+/* ═══════════════════════════════════════════════════════════════
+   SCORE GAUGE — Jauge Thermique Circulaire (Phase 9.1)
+   ═══════════════════════════════════════════════════════════════ */
+
+.oracle-gauge-section {
+  display: flex;
+  align-items: center;
+  gap: 0.75rem;
+  margin-top: 0.75rem;
+  padding: 0.5rem 0.75rem;
+  border-radius: 8px;
+  background: var(--muted);
 }
 
-.oracle-score-green {
-  background: oklch(0.55 0.18 150 / 20%);
-  color: oklch(0.72 0.18 150);
+/* ── Gauge container ───────────────────────────────────────── */
+.oracle-gauge {
+  position: relative;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  flex-shrink: 0;
 }
 
-.oracle-score-yellow {
-  background: oklch(0.55 0.15 80 / 20%);
-  color: oklch(0.72 0.15 80);
+.oracle-gauge-svg {
+  display: block;
 }
 
-.oracle-score-red {
-  background: oklch(0.55 0.18 25 / 20%);
-  color: oklch(0.72 0.18 25);
+/* Track (background circle) */
+.oracle-gauge-track {
+  color: var(--border);
+  opacity: 0.4;
+}
+
+/* Progress (filled arc) */
+.oracle-gauge-progress {
+  transition: stroke-dashoffset 1.2s cubic-bezier(0.4, 0, 0.2, 1);
+}
+
+/* Percentage text centered in gauge */
+.oracle-gauge-text {
+  position: absolute;
+  inset: 0;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  font-size: 0.85rem;
+  font-weight: 800;
+  font-family: var(--font-mono);
+  letter-spacing: -0.02em;
+}
+
+/* ── Gauge tier colors ─────────────────────────────────────── */
+.oracle-gauge-green .oracle-gauge-progress {
+  color: oklch(0.72 0.22 150);
+}
+.oracle-gauge-green .oracle-gauge-text {
+  color: oklch(0.72 0.22 150);
+}
+.oracle-gauge-green {
+  animation: oracle-pulse-green 3s ease-in-out infinite;
+}
+
+.oracle-gauge-yellow .oracle-gauge-progress {
+  color: oklch(0.75 0.18 80);
+}
+.oracle-gauge-yellow .oracle-gauge-text {
+  color: oklch(0.75 0.18 80);
+}
+
+.oracle-gauge-red .oracle-gauge-progress {
+  color: oklch(0.60 0.25 25);
+}
+.oracle-gauge-red .oracle-gauge-text {
+  color: oklch(0.60 0.25 25);
+}
+.oracle-gauge-red {
+  animation: oracle-pulse-red 2s ease-in-out infinite;
+}
+
+/* ── Score label ───────────────────────────────────────────── */
+.oracle-score-label {
+  display: flex;
+  align-items: center;
+  gap: 0.35rem;
+  font-size: 0.72rem;
+  font-weight: 600;
+}
+
+.oracle-score-label-green {
+  color: oklch(0.72 0.22 150);
+}
+
+.oracle-score-label-yellow {
+  color: oklch(0.75 0.18 80);
+}
+
+.oracle-score-label-red {
+  color: oklch(0.60 0.25 25);
 }
 
 /* ── Summary ───────────────────────────────────────────────── */
@@ -496,6 +608,10 @@ html * {
   border-color: oklch(0.5 0.03 260 / 20%);
 }
 
+[data-theme="glass"] .oracle-gauge-section {
+  background: oklch(0.15 0.02 260 / 50%);
+}
+
 [data-theme="cyberpunk"] .oracle-review-container {
   border-color: oklch(0.72 0.25 310 / 30%);
   box-shadow: 0 0 12px oklch(0.72 0.25 310 / 10%),
@@ -512,6 +628,11 @@ html * {
   box-shadow: 0 0 8px oklch(0.72 0.25 310 / 50%);
 }
 
+[data-theme="cyberpunk"] .oracle-gauge-section {
+  background: oklch(0.1 0.03 310 / 40%);
+  border: 1px solid oklch(0.72 0.25 310 / 15%);
+}
+
 [data-theme="scroll"] .oracle-review-container {
   border-color: oklch(0.55 0.05 60 / 30%);
   background: oklch(0.97 0.01 80 / 80%);
@@ -524,4 +645,19 @@ html * {
     oklch(0.55 0.10 40),
     oklch(0.45 0.08 60)
   );
+}
+
+[data-theme="scroll"] .oracle-gauge-section {
+  background: oklch(0.93 0.02 80 / 80%);
+}
+
+/* Tier overrides for cyberpunk (neon glow on tier borders) */
+[data-theme="cyberpunk"] .oracle-tier-green.oracle-review-container {
+  box-shadow: 0 0 12px oklch(0.72 0.22 150 / 15%),
+              inset 0 0 20px oklch(0.72 0.22 150 / 3%);
+}
+
+[data-theme="cyberpunk"] .oracle-tier-red.oracle-review-container {
+  box-shadow: 0 0 16px oklch(0.60 0.25 25 / 20%),
+              inset 0 0 20px oklch(0.60 0.25 25 / 5%);
 }

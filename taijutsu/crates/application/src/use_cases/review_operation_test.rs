@@ -169,6 +169,11 @@ async fn test_review_nominal() {
     let op = make_operation(true, true);
     let op_id = op.id;
 
+    let review_repo = Arc::new(MockReviewRepo {
+        saved: Mutex::new(vec![]),
+        deleted_count: 0,
+    });
+
     let uc = ReviewOperationUseCase::new(
         Arc::new(MockOperationRepo {
             operation: Some(op),
@@ -177,12 +182,9 @@ async fn test_review_nominal() {
             changed_files: vec!["src/main.rs".to_string()],
         }),
         Arc::new(MockLlmService {
-            response: "Code de bonne qualité.\n\n## ✅ Points forts\nBien structuré.".to_string(),
+            response: "Code de bonne qualité.\n\n## ✅ Points forts\nBien structuré.\n\n<score>0.85</score>".to_string(),
         }),
-        Arc::new(MockReviewRepo {
-            saved: Mutex::new(vec![]),
-            deleted_count: 0,
-        }),
+        review_repo.clone(),
         Arc::new(MockContentStore {
             blob: Some(make_ipfs_blob()),
         }),
@@ -197,6 +199,14 @@ async fn test_review_nominal() {
             panic!("Expected Reviewed, got Skipped: {reason}");
         }
     }
+
+    // Vérifier que le score a été extrait et le contenu nettoyé.
+    let saved = review_repo.saved.lock().await;
+    assert_eq!(saved.len(), 1);
+    assert_eq!(saved[0].score, Some(0.85));
+    assert!(!saved[0].content.contains("<score>"));
+    assert!(!saved[0].content.contains("</score>"));
+    assert!(saved[0].content.contains("Bien structuré"));
 }
 
 #[tokio::test]
@@ -301,4 +311,40 @@ async fn test_build_prompt_includes_files() {
     assert!(prompt.contains("Test commit"));
     assert!(prompt.contains("src/main.rs"));
     assert!(prompt.contains("code review"));
+}
+
+#[tokio::test]
+async fn test_extract_score_valid() {
+    // Score standard en fin de réponse.
+    assert_eq!(super::extract_score("Bonne review\n\n<score>0.85</score>"), Some(0.85));
+    // Score avec espaces internes.
+    assert_eq!(super::extract_score("Review\n<score> 0.72 </score>"), Some(0.72));
+    // Score à la limite haute (clampé à 1.0).
+    assert_eq!(super::extract_score("Code parfait\n<score>1.50</score>"), Some(1.0));
+    // Score à la limite basse (clampé à 0.0).
+    assert_eq!(super::extract_score("Danger\n<score>-0.5</score>"), Some(0.0));
+}
+
+#[tokio::test]
+async fn test_extract_score_missing() {
+    // Pas de balise score.
+    assert_eq!(super::extract_score("Review sans score"), None);
+    // Balise ouvrante sans fermante.
+    assert_eq!(super::extract_score("Review <score>0.5"), None);
+    // Contenu non-numérique.
+    assert_eq!(super::extract_score("<score>excellent</score>"), None);
+}
+
+#[tokio::test]
+async fn test_clean_score_tags() {
+    let content = "Code bien structuré.\n\n## Points forts\n- OK\n\n<score>0.85</score>";
+    let cleaned = super::clean_score_tags(content);
+    assert!(!cleaned.contains("<score>"));
+    assert!(!cleaned.contains("</score>"));
+    assert!(cleaned.contains("Points forts"));
+    assert!(cleaned.ends_with("- OK"));
+
+    // Contenu sans score — retourne l'original.
+    let no_score = "Review sans score";
+    assert_eq!(super::clean_score_tags(no_score), no_score);
 }

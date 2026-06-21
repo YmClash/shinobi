@@ -7,6 +7,16 @@ import { Skeleton } from "@/components/ui/skeleton";
 import { useOperationReviews } from "@/hooks/use-api";
 import type { Review } from "@/lib/api";
 
+// ── Types ───────────────────────────────────────────────────
+
+type ScoreTier = "green" | "yellow" | "red";
+
+function getScoreTier(score: number): ScoreTier {
+  if (score >= 0.8) return "green";
+  if (score >= 0.5) return "yellow";
+  return "red";
+}
+
 // ── Composant principal ─────────────────────────────────────
 
 interface OracleReviewProps {
@@ -53,10 +63,11 @@ export function OracleReview({ operationId }: OracleReviewProps) {
   if (!hasReviews) return null;
 
   const review = data!.reviews[0]; // La plus récente (triée DESC).
+  const scoreTier = review.score !== null ? getScoreTier(review.score) : null;
 
   return (
     <div
-      className={`oracle-review-container ${isVisible ? "oracle-visible" : "oracle-hidden"}`}
+      className={`oracle-review-container ${isVisible ? "oracle-visible" : "oracle-hidden"} ${scoreTier ? `oracle-tier-${scoreTier}` : ""}`}
     >
       {/* ── Header ──────────────────────────── */}
       <div className="oracle-header">
@@ -65,9 +76,16 @@ export function OracleReview({ operationId }: OracleReviewProps) {
         <div className="oracle-badges">
           <ModelBadge model={review.model} />
           <DurationBadge durationMs={review.duration_ms} />
-          {review.score !== null && <ScoreBadge score={review.score} />}
         </div>
       </div>
+
+      {/* ── Score Gauge ──────────────────────── */}
+      {review.score !== null && (
+        <div className="oracle-gauge-section">
+          <ScoreGauge score={review.score} />
+          <ScoreLabel score={review.score} />
+        </div>
+      )}
 
       {/* ── Summary ─────────────────────────── */}
       <div className="oracle-summary">{review.summary}</div>
@@ -134,6 +152,86 @@ export function OracleReview({ operationId }: OracleReviewProps) {
   );
 }
 
+// ── Jauge Thermique Circulaire (SVG) ────────────────────────
+
+const GAUGE_SIZE = 72;
+const GAUGE_STROKE = 5;
+const GAUGE_RADIUS = (GAUGE_SIZE - GAUGE_STROKE) / 2;
+const GAUGE_CIRCUMFERENCE = 2 * Math.PI * GAUGE_RADIUS;
+
+function ScoreGauge({ score }: { score: number }) {
+  const [animated, setAnimated] = useState(false);
+  const percent = Math.round(score * 100);
+  const tier = getScoreTier(score);
+  const offset = GAUGE_CIRCUMFERENCE * (1 - score);
+
+  // Déclenche l'animation après le mount pour la transition CSS.
+  useEffect(() => {
+    const timer = setTimeout(() => setAnimated(true), 50);
+    return () => clearTimeout(timer);
+  }, []);
+
+  return (
+    <div className={`oracle-gauge oracle-gauge-${tier}`}>
+      <svg
+        width={GAUGE_SIZE}
+        height={GAUGE_SIZE}
+        viewBox={`0 0 ${GAUGE_SIZE} ${GAUGE_SIZE}`}
+        className="oracle-gauge-svg"
+      >
+        {/* Track (fond) */}
+        <circle
+          cx={GAUGE_SIZE / 2}
+          cy={GAUGE_SIZE / 2}
+          r={GAUGE_RADIUS}
+          fill="none"
+          stroke="currentColor"
+          strokeWidth={GAUGE_STROKE}
+          className="oracle-gauge-track"
+        />
+        {/* Progress (valeur) */}
+        <circle
+          cx={GAUGE_SIZE / 2}
+          cy={GAUGE_SIZE / 2}
+          r={GAUGE_RADIUS}
+          fill="none"
+          stroke="currentColor"
+          strokeWidth={GAUGE_STROKE}
+          strokeDasharray={GAUGE_CIRCUMFERENCE}
+          strokeDashoffset={animated ? offset : GAUGE_CIRCUMFERENCE}
+          strokeLinecap="round"
+          className="oracle-gauge-progress"
+          transform={`rotate(-90 ${GAUGE_SIZE / 2} ${GAUGE_SIZE / 2})`}
+        />
+      </svg>
+      {/* Score au centre */}
+      <span className="oracle-gauge-text">{percent}%</span>
+    </div>
+  );
+}
+
+// ── Score Label ─────────────────────────────────────────────
+
+function ScoreLabel({ score }: { score: number }) {
+  const tier = getScoreTier(score);
+  const labels: Record<ScoreTier, string> = {
+    green: "Code de qualité",
+    yellow: "Améliorations suggérées",
+    red: "Attention requise",
+  };
+  const icons: Record<ScoreTier, string> = {
+    green: "✅",
+    yellow: "⚠️",
+    red: "🚨",
+  };
+  return (
+    <div className={`oracle-score-label oracle-score-label-${tier}`}>
+      <span>{icons[tier]}</span>
+      <span>{labels[tier]}</span>
+    </div>
+  );
+}
+
 // ── Sous-composants (Badges) ────────────────────────────────
 
 function ModelBadge({ model }: { model: string }) {
@@ -149,21 +247,6 @@ function DurationBadge({ durationMs }: { durationMs: number }) {
   return (
     <span className="oracle-badge oracle-badge-duration">
       ⏱️ {seconds}s
-    </span>
-  );
-}
-
-function ScoreBadge({ score }: { score: number }) {
-  const percent = Math.round(score * 100);
-  const color =
-    score >= 0.8
-      ? "oracle-score-green"
-      : score >= 0.5
-        ? "oracle-score-yellow"
-        : "oracle-score-red";
-  return (
-    <span className={`oracle-badge oracle-badge-score ${color}`}>
-      {percent}%
     </span>
   );
 }
