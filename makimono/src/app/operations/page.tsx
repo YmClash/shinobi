@@ -18,6 +18,7 @@ import "@xyflow/react/dist/style.css";
 
 import { useOperations } from "@/hooks/use-api";
 import { CommitNode, type CommitNodeData } from "@/components/operations/commit-node";
+import { ScoreSparkline } from "@/components/operations/score-sparkline";
 import { Skeleton } from "@/components/ui/skeleton";
 import type { Operation } from "@/lib/api";
 
@@ -203,6 +204,9 @@ export default function OperationsPage() {
           </Link>
         </div>
       </div>
+
+      {/* ── Sparkline ECG (Phase 9.2) ────────────── */}
+      <ScoreSparkline />
 
       <div
         className="rounded-lg border border-border/50 overflow-hidden glass-card"

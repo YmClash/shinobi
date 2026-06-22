@@ -41,6 +41,20 @@ pub struct OperationReview {
     pub created_at: DateTime<Utc>,
 }
 
+/// Point de score pour la sparkline (Phase 9.2 — Électrocardiogramme).
+///
+/// Projection légère de `OperationReview` contenant uniquement les données
+/// nécessaires au graphique de tendance (pas de contenu Markdown).
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
+pub struct ScorePoint {
+    /// ID de l'opération VCS associée.
+    pub operation_id: Uuid,
+    /// Score de qualité (0.0 à 1.0).
+    pub score: f32,
+    /// Date de la review.
+    pub created_at: DateTime<Utc>,
+}
+
 /// Contrat de persistence des code reviews IA.
 ///
 /// Conçu pour le pattern agent actif : les reviews sont produites
@@ -61,4 +75,11 @@ pub trait ReviewRepository: Send + Sync {
     ///
     /// Retourne le nombre de reviews supprimées.
     async fn delete_by_operation(&self, operation_id: &Uuid) -> Result<u64, DomainError>;
+
+    /// Récupère les N derniers scores (non-null) pour la sparkline.
+    ///
+    /// Filtre les reviews avec `score IS NOT NULL` — seules les reviews
+    /// Phase 9.1+ ont un score déterministe.
+    async fn find_recent_scores(&self, limit: usize) -> Result<Vec<ScorePoint>, DomainError>;
 }
+

@@ -9,6 +9,7 @@ import {
   getOperationDiff,
   getIpfsContent,
   getOperationReviews,
+  getScoreHistory,
   listOperations,
   semanticSearch,
   type HealthResponse,
@@ -19,6 +20,7 @@ import {
   type IpfsContentResponse,
   type OperationsResponse,
   type ReviewsResponse,
+  type ScoreHistoryResponse,
   type SemanticSearchResponse,
 } from "@/lib/api";
 
@@ -183,4 +185,9 @@ export function useIpfsContent(id: string) {
 /** Fetches Oracle reviews for an operation — auto-polls every 5 seconds */
 export function useOperationReviews(id: string) {
   return useApi<ReviewsResponse>(() => getOperationReviews(id), [id], 5_000);
+}
+
+/** Fetches score history for the sparkline — auto-refreshes every 15 seconds */
+export function useScoreHistory(limit = 10) {
+  return useApi<ScoreHistoryResponse>(() => getScoreHistory(limit), [limit], 15_000);
 }

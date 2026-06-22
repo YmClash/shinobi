@@ -661,3 +661,157 @@ html * {
   box-shadow: 0 0 16px oklch(0.60 0.25 25 / 20%),
               inset 0 0 20px oklch(0.60 0.25 25 / 5%);
 }
+
+/* ═══════════════════════════════════════════════════════════════
+   SCORE SPARKLINE — Électrocardiogramme du Projet (Phase 9.2)
+   ═══════════════════════════════════════════════════════════════ */
+
+.sparkline-container {
+  display: flex;
+  align-items: center;
+  gap: 0.75rem;
+  padding: 0.5rem 0.85rem;
+  border-radius: 10px;
+  border: 1px solid var(--border);
+  background: var(--card);
+  animation: fade-in-up 0.5s ease-out forwards;
+}
+
+.sparkline-ecg-icon {
+  font-size: 1.1rem;
+  line-height: 1;
+  flex-shrink: 0;
+}
+
+/* ── Chart area ────────────────────────────────────────────── */
+.sparkline-chart {
+  flex: 1;
+  min-width: 120px;
+  max-width: 280px;
+  height: 48px;
+}
+
+/* Override Recharts default styles for integration */
+.sparkline-chart .recharts-surface {
+  overflow: visible;
+}
+
+/* ── Metrics (right side) ──────────────────────────────────── */
+.sparkline-metrics {
+  display: flex;
+  align-items: center;
+  gap: 0.6rem;
+  flex-shrink: 0;
+}
+
+.sparkline-average {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 0;
+}
+
+.sparkline-average-value {
+  font-family: var(--font-mono);
+  font-size: 0.85rem;
+  font-weight: 800;
+  letter-spacing: -0.02em;
+  color: var(--foreground);
+}
+
+.sparkline-average-label {
+  font-size: 0.55rem;
+  font-weight: 500;
+  color: var(--muted-foreground);
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+}
+
+/* ── Trend indicator ───────────────────────────────────────── */
+.sparkline-trend {
+  display: flex;
+  align-items: center;
+  gap: 0.2rem;
+  font-size: 0.6rem;
+  font-weight: 600;
+  padding: 0.15rem 0.45rem;
+  border-radius: 9999px;
+}
+
+.sparkline-trend-icon {
+  font-size: 0.75rem;
+  font-weight: 800;
+}
+
+.sparkline-trend-label {
+  display: none;
+}
+
+@media (min-width: 768px) {
+  .sparkline-trend-label {
+    display: inline;
+  }
+}
+
+.sparkline-trend-rising {
+  background: oklch(0.55 0.18 150 / 15%);
+  color: oklch(0.72 0.22 150);
+}
+
+.sparkline-trend-stable {
+  background: oklch(0.55 0.1 200 / 15%);
+  color: oklch(0.72 0.12 200);
+}
+
+.sparkline-trend-falling {
+  background: oklch(0.55 0.18 25 / 15%);
+  color: oklch(0.60 0.25 25);
+}
+
+/* ── Count badge ───────────────────────────────────────────── */
+.sparkline-count {
+  font-size: 0.55rem;
+  color: var(--muted-foreground);
+  white-space: nowrap;
+}
+
+/* ── Tooltip ───────────────────────────────────────────────── */
+.sparkline-tooltip {
+  background: var(--card);
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  padding: 0.35rem 0.55rem;
+  box-shadow: 0 4px 12px oklch(0 0 0 / 20%);
+}
+
+.sparkline-tooltip-score {
+  font-family: var(--font-mono);
+  font-size: 0.85rem;
+  font-weight: 800;
+}
+
+.sparkline-tooltip-meta {
+  display: flex;
+  flex-direction: column;
+  gap: 0.1rem;
+  font-size: 0.55rem;
+  color: var(--muted-foreground);
+}
+
+/* ── Theme-specific sparkline ──────────────────────────────── */
+[data-theme="glass"] .sparkline-container {
+  backdrop-filter: blur(16px) saturate(180%);
+  -webkit-backdrop-filter: blur(16px) saturate(180%);
+  background: oklch(0.2 0.02 260 / 50%);
+  border-color: oklch(0.5 0.03 260 / 15%);
+}
+
+[data-theme="cyberpunk"] .sparkline-container {
+  border-color: oklch(0.72 0.25 310 / 20%);
+  box-shadow: 0 0 8px oklch(0.72 0.25 310 / 8%);
+}
+
+[data-theme="scroll"] .sparkline-container {
+  border-color: oklch(0.55 0.05 60 / 25%);
+  background: oklch(0.97 0.01 80 / 80%);
+}

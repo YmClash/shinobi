@@ -26,6 +26,7 @@ use application::use_cases::get_operation::GetOperationUseCase;
 use application::use_cases::get_operation_diff::GetOperationDiffUseCase;
 use application::use_cases::get_ipfs_content::GetIpfsContentUseCase;
 use application::use_cases::get_reviews::GetReviewsUseCase;
+use application::use_cases::get_score_history::GetScoreHistoryUseCase;
 use application::use_cases::list_operations::ListOperationsUseCase;
 use application::use_cases::review_operation::ReviewOperationUseCase;
 use application::use_cases::search_chunks::SearchChunksUseCase;
@@ -233,6 +234,10 @@ async fn main() -> anyhow::Result<()> {
         review_repo.clone(),
     ));
 
+    let get_score_history = Arc::new(GetScoreHistoryUseCase::new(
+        review_repo.clone(),
+    ));
+
     let shared_state = SharedState {
         create_operation,
         get_operation,
@@ -241,6 +246,7 @@ async fn main() -> anyhow::Result<()> {
         get_operation_diff,
         get_ipfs_content,
         get_reviews,
+        get_score_history,
     };
 
     // ── Serveur Axum (REST) ────────────────────────

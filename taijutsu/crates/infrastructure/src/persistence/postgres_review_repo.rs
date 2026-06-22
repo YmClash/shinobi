@@ -10,7 +10,7 @@ use tracing::instrument;
 use uuid::Uuid;
 
 use domain::errors::DomainError;
-use domain::ports::review_repository::{OperationReview, ReviewRepository};
+use domain::ports::review_repository::{OperationReview, ReviewRepository, ScorePoint};
 
 /// Repository PostgreSQL pour les code reviews de l'Oracle.
 pub struct PostgresReviewRepository {
@@ -82,6 +82,25 @@ impl ReviewRepository for PostgresReviewRepository {
 
         Ok(result.rows_affected())
     }
+
+    #[instrument(skip(self))]
+    async fn find_recent_scores(&self, limit: usize) -> Result<Vec<ScorePoint>, DomainError> {
+        let rows = sqlx::query_as::<_, ScorePointRow>(
+            r#"
+            SELECT operation_id, score, created_at
+            FROM operation_reviews
+            WHERE score IS NOT NULL
+            ORDER BY created_at DESC
+            LIMIT $1
+            "#,
+        )
+        .bind(limit as i64)
+        .fetch_all(&self.pool)
+        .await
+        .map_err(|e| DomainError::Persistence(format!("find_recent_scores failed: {e}")))?;
+
+        Ok(rows.into_iter().map(|r| r.into()).collect())
+    }
 }
 
 // ── Row mapping (sqlx) ───────────────────────────────────────────────
@@ -115,3 +134,22 @@ impl From<ReviewRow> for OperationReview {
         }
     }
 }
+
+/// Projection légère pour la sparkline (Phase 9.2).
+#[derive(sqlx::FromRow)]
+struct ScorePointRow {
+    operation_id: Uuid,
+    score: f32,
+    created_at: DateTime<Utc>,
+}
+
+impl From<ScorePointRow> for ScorePoint {
+    fn from(row: ScorePointRow) -> Self {
+        Self {
+            operation_id: row.operation_id,
+            score: row.score,
+            created_at: row.created_at,
+        }
+    }
+}
+

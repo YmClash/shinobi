@@ -104,6 +104,9 @@ impl ReviewRepository for MockReviewRepo {
     async fn delete_by_operation(&self, _operation_id: &Uuid) -> Result<u64, DomainError> {
         Ok(self.deleted_count)
     }
+    async fn find_recent_scores(&self, _limit: usize) -> Result<Vec<domain::ports::review_repository::ScorePoint>, DomainError> {
+        Ok(vec![])
+    }
 }
 
 struct MockContentStore {

@@ -10,6 +10,7 @@ use application::use_cases::get_operation::GetOperationUseCase;
 use application::use_cases::get_operation_diff::GetOperationDiffUseCase;
 use application::use_cases::get_ipfs_content::GetIpfsContentUseCase;
 use application::use_cases::get_reviews::GetReviewsUseCase;
+use application::use_cases::get_score_history::GetScoreHistoryUseCase;
 use application::use_cases::list_operations::ListOperationsUseCase;
 use application::use_cases::search_chunks::SearchChunksUseCase;
 
@@ -39,6 +40,9 @@ pub struct SharedState {
 
     /// Use case: récupérer les code reviews de l'Oracle.
     pub get_reviews: Arc<GetReviewsUseCase>,
+
+    /// Use case: historique des scores Oracle (Phase 9.2 — Sparkline).
+    pub get_score_history: Arc<GetScoreHistoryUseCase>,
 }
 
 

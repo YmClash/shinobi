@@ -100,6 +100,21 @@ export interface ReviewsResponse {
   count: number;
 }
 
+// ── Score History Types (Phase 9.2 — Sparkline) ──────────────
+
+export interface ScorePoint {
+  operation_id: string;
+  score: number;
+  created_at: string;
+}
+
+export interface ScoreHistoryResponse {
+  scores: ScorePoint[];
+  count: number;
+  average: number | null;
+  trend: "rising" | "falling" | "stable";
+}
+
 // ── API Error ────────────────────────────────────────────────
 
 export class ApiError extends Error {
@@ -223,4 +238,10 @@ export async function getOperationReviews(
   id: string,
 ): Promise<ReviewsResponse> {
   return apiFetch<ReviewsResponse>(`/api/v1/operations/${id}/reviews`);
+}
+
+// ── Score History (Phase 9.2 — Sparkline) ────────────────────
+
+export async function getScoreHistory(limit = 10): Promise<ScoreHistoryResponse> {
+  return apiFetch<ScoreHistoryResponse>(`/api/v1/reviews/scores?limit=${limit}`);
 }

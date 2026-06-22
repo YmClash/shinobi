@@ -221,6 +221,8 @@ pub fn create_router(state: SharedState) -> Router {
         .route("/api/v1/operations/{id}/diff", get(get_operation_diff_handler))
         // ── Oracle: Code Reviews IA ────────────────
         .route("/api/v1/operations/{id}/reviews", get(get_reviews_handler))
+        // ── Oracle: Sparkline Scores (Phase 9.2) ──
+        .route("/api/v1/reviews/scores", get(get_score_history_handler))
         // ── IPFS Content Explorer ──────────────────
         .route("/api/v1/operations/{id}/ipfs", get(get_ipfs_content_handler))
         // ── Tensai: Mémoire IA ─────────────────────
@@ -548,5 +550,34 @@ async fn get_reviews_handler(
         "operation_id": id,
         "reviews": reviews_json,
         "count": result.count,
+    })))
+}
+
+// ─── Handler Score History (Phase 9.2) ───────────────
+
+/// Paramètres de query pour GET /api/v1/reviews/scores.
+#[derive(Debug, Deserialize)]
+pub struct ScoreHistoryQuery {
+    /// Nombre de scores à récupérer (défaut: 10).
+    #[serde(default = "default_score_limit")]
+    pub limit: usize,
+}
+
+fn default_score_limit() -> usize { 10 }
+
+/// Récupérer l'historique des scores Oracle — `GET /api/v1/reviews/scores?limit=10`
+async fn get_score_history_handler(
+    State(state): State<SharedState>,
+    Query(params): Query<ScoreHistoryQuery>,
+) -> Result<Json<serde_json::Value>, AppError> {
+    info!(limit = params.limit, "REST: GetScoreHistory reçu (Sparkline)");
+
+    let result = state.get_score_history.execute(params.limit).await?;
+
+    Ok(Json(serde_json::json!({
+        "scores": result.scores,
+        "count": result.count,
+        "average": result.average,
+        "trend": result.trend,
     })))
 }
