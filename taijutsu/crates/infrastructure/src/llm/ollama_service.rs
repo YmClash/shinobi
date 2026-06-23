@@ -21,6 +21,8 @@
 
 use std::time::{Duration, Instant};
 
+use metrics::{counter, histogram};
+
 use async_trait::async_trait;
 use serde::{Deserialize, Serialize};
 use tracing::{info, warn};
@@ -159,7 +161,15 @@ impl LlmService for OllamaService {
             }
         };
 
-        let duration_ms = start.elapsed().as_millis() as u64;
+        let duration = start.elapsed();
+        let duration_ms = duration.as_millis() as u64;
+        let duration_secs = duration.as_secs_f64();
+
+        // ── Métriques Prometheus ──────────────────────
+        histogram!("llm_inference_duration_seconds", "model" => self.model.clone())
+            .record(duration_secs);
+        counter!("llm_inference_total", "model" => self.model.clone())
+            .increment(1);
 
         info!(
             model = %self.model,

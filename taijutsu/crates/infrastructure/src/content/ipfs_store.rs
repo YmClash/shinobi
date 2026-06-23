@@ -20,7 +20,10 @@
 //! Toutes les erreurs HTTP/réseau sont mappées vers `DomainError::StorageError`.
 //! Le client est construit une seule fois (lazy connection pooling).
 
+use std::time::Instant;
+
 use async_trait::async_trait;
+use metrics::{counter, histogram};
 use reqwest::multipart;
 use serde::Deserialize;
 use tracing::{info, warn};
@@ -94,6 +97,8 @@ impl ContentStore for IpfsContentStore {
     /// Utilise `POST /api/v0/add` avec un body `multipart/form-data`.
     /// Kubo hashe le contenu (SHA-256 par défaut) et retourne le CID.
     async fn store(&self, data: &[u8]) -> Result<ContentId, DomainError> {
+        let start = Instant::now();
+        let data_size = data.len();
         let url = format!("{}/api/v0/add", self.api_url);
 
         // Construire le multipart form avec le blob en tant que fichier
@@ -130,8 +135,16 @@ impl ContentStore for IpfsContentStore {
 
         let cid = ContentId::new(&add_response.hash);
 
+        // ── Métriques Prometheus ──────────────────────
+        let duration_secs = start.elapsed().as_secs_f64();
+        histogram!("ipfs_storage_duration_seconds").record(duration_secs);
+        counter!("ipfs_storage_bytes_total").increment(data_size as u64);
+        counter!("ipfs_operations_total", "operation" => "store").increment(1);
+
         info!(
             cid = %cid,
+            size = data_size,
+            duration_ms = start.elapsed().as_millis() as u64,
             "✅ Contenu stocké sur IPFS (Genjutsu)"
         );
 
@@ -143,6 +156,7 @@ impl ContentStore for IpfsContentStore {
     /// Utilise `POST /api/v0/cat?arg=<CID>`.
     /// Le contenu est streamé en mémoire et retourné comme `Vec<u8>`.
     async fn retrieve(&self, cid: &ContentId) -> Result<Vec<u8>, DomainError> {
+        let start = Instant::now();
         let url = format!("{}/api/v0/cat?arg={}", self.api_url, cid.as_str());
 
         let response = self
@@ -166,9 +180,14 @@ impl ContentStore for IpfsContentStore {
             DomainError::StorageError(format!("IPFS cat response read failed: {e}"))
         })?;
 
+        // ── Métriques Prometheus ──────────────────────
+        histogram!("ipfs_retrieval_duration_seconds").record(start.elapsed().as_secs_f64());
+        counter!("ipfs_operations_total", "operation" => "retrieve").increment(1);
+
         info!(
             cid = %cid,
             size = bytes.len(),
+            duration_ms = start.elapsed().as_millis() as u64,
             "✅ Contenu récupéré depuis IPFS (Genjutsu)"
         );
 

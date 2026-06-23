@@ -12,6 +12,7 @@
 use rdkafka::config::ClientConfig;
 use rdkafka::consumer::{Consumer, StreamConsumer};
 use rdkafka::Message;
+use metrics::counter;
 use tokio_util::sync::CancellationToken;
 use tracing::{error, info, warn};
 use uuid::Uuid;
@@ -129,6 +130,10 @@ impl OracleKafkaConsumer {
                                         "📨 Oracle — Événement analysis-complete reçu"
                                     );
 
+                                    // Métriques Prometheus
+                                    counter!("kafka_messages_consumed_total", "consumer" => "oracle", "topic" => self.topic.clone())
+                                        .increment(1);
+
                                     handler(summary.operation_id).await;
                                 }
                                 Err(e) => {
@@ -146,6 +151,8 @@ impl OracleKafkaConsumer {
                                 error = %e,
                                 "❌ Oracle — Erreur Kafka recv()"
                             );
+                            counter!("kafka_consumer_errors_total", "consumer" => "oracle")
+                                .increment(1);
                             tokio::time::sleep(std::time::Duration::from_secs(1)).await;
                         }
                     }

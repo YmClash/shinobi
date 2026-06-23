@@ -1,0 +1,280 @@
+# ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+# SHINOBI — Docker Compose Production
+# ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+#
+# Stack complet : 7 services + 2 observabilité
+#
+# Architecture réseau (Zero Trust) :
+#   - Taijutsu : aucun port exposé (interne uniquement)
+#   - Makimono : seul point d'accès public (:3001)
+#   - Dojutsu  : dashboard observabilité (:3002)
+#
+# Usage :
+#   docker compose -f docker-compose.prod.yml build
+#   docker compose -f docker-compose.prod.yml up -d
+#   docker compose -f docker-compose.prod.yml down
+#
+# Accès :
+#   Frontend  → http://localhost:3001
+#   Grafana   → http://localhost:3002 (admin/shinobi)
+#   Prometheus → interne uniquement (prometheus:9090)
+
+services:
+
+  # ═══════════════════════════════════════════════
+  #  APPLICATIONS
+  # ═══════════════════════════════════════════════
+
+  # ── Taijutsu : Backend Rust ───────────────────
+  # Zero Trust : aucun port exposé sur l'hôte.
+  # Accessible uniquement via le réseau interne shinobi.
+  taijutsu:
+    build:
+      context: ./taijutsu
+      dockerfile: Dockerfile
+    container_name: shinobi-taijutsu
+    # PAS de ports: exposés — Zero Trust Network
+    environment:
+      # Fūinjutsu: PostgreSQL (nom DNS Docker)
+      DATABASE_URL: postgres://shinobi:shinobi@postgres:5432/shinobi_dev
+      # Fūinjutsu: Redis
+      REDIS_URL: redis://redis:6379
+      # VCS Workspace (volume persistant)
+      VCS_WORKSPACE_ROOT: /app/workspace
+      # Ports serveur (internes)
+      REST_PORT: "3000"
+      GRPC_PORT: "50051"
+      # Nen: Kafka (nom DNS Docker)
+      KAFKA_BROKERS: kafka:9092
+      KAFKA_TOPIC: shinobi.vcs.operations
+      KAFKA_ANALYSIS_TOPIC: shinobi.tensai.analysis-complete
+      # Genjutsu: IPFS
+      IPFS_API_URL: http://ipfs:5001
+      # Tensai: Agent IA Consumer
+      KAFKA_CONSUMER_GROUP: shinobi-tensai-analyzer
+      TENSAI_CONSUMER_ENABLED: "true"
+      # RAG Vectoriel
+      EMBEDDING_ENABLED: "true"
+      EMBEDDING_DIMENSIONS: "256"
+      # Oracle: Ollama LLM
+      OLLAMA_URL: http://ollama:11434
+      OLLAMA_MODEL: granite3-dense:2b
+      ORACLE_CONSUMER_ENABLED: "true"
+      ORACLE_CONSUMER_GROUP: shinobi-oracle-reviewer
+      # Observabilité
+      RUST_LOG: info,taijutsu=debug,domain=debug,application=debug
+    volumes:
+      - vcs_workspace:/app/workspace
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+      kafka:
+        condition: service_healthy
+      ipfs:
+        condition: service_healthy
+      ollama:
+        condition: service_healthy
+    networks:
+      - shinobi
+    restart: unless-stopped
+
+  # ── Makimono : Frontend Next.js ───────────────
+  # Seul point d'accès public — fait le pont vers Taijutsu.
+  makimono:
+    build:
+      context: ./makimono
+      dockerfile: Dockerfile
+      args:
+        TAIJUTSU_URL: http://taijutsu:3000
+    container_name: shinobi-makimono
+    ports:
+      - "3001:3001"
+    environment:
+      NODE_ENV: production
+      TAIJUTSU_URL: http://taijutsu:3000
+    depends_on:
+      taijutsu:
+        condition: service_healthy
+    networks:
+      - shinobi
+    restart: unless-stopped
+
+  # ═══════════════════════════════════════════════
+  #  INFRASTRUCTURE
+  # ═══════════════════════════════════════════════
+
+  # ── Fūinjutsu: PostgreSQL + pgvector ──────────
+  postgres:
+    image: pgvector/pgvector:pg17
+    container_name: shinobi-postgres
+    environment:
+      POSTGRES_DB: shinobi_dev
+      POSTGRES_USER: shinobi
+      POSTGRES_PASSWORD: shinobi
+    volumes:
+      - pgdata:/var/lib/postgresql/data
+    healthcheck:
+      test: [ "CMD-SHELL", "pg_isready -U shinobi -d shinobi_dev" ]
+      interval: 5s
+      timeout: 5s
+      retries: 5
+    networks:
+      - shinobi
+    restart: unless-stopped
+
+  # ── Fūinjutsu: Redis ──────────────────────────
+  redis:
+    image: redis:8-alpine
+    container_name: shinobi-redis
+    volumes:
+      - redisdata:/data
+    healthcheck:
+      test: [ "CMD", "redis-cli", "ping" ]
+      interval: 5s
+      timeout: 5s
+      retries: 5
+    networks:
+      - shinobi
+    restart: unless-stopped
+
+  # ── Nen: Apache Kafka (KRaft) ─────────────────
+  kafka:
+    image: apache/kafka:latest
+    container_name: shinobi-kafka
+    environment:
+      - KAFKA_NODE_ID=1
+      - KAFKA_PROCESS_ROLES=broker,controller
+      - KAFKA_CONTROLLER_QUORUM_VOTERS=1@kafka:9093
+      - KAFKA_CONTROLLER_LISTENER_NAMES=CONTROLLER
+      # Listener interne Docker uniquement (pas de port hôte)
+      - KAFKA_LISTENERS=PLAINTEXT://:9092,CONTROLLER://:9093
+      - KAFKA_ADVERTISED_LISTENERS=PLAINTEXT://kafka:9092
+      - KAFKA_LISTENER_SECURITY_PROTOCOL_MAP=CONTROLLER:PLAINTEXT,PLAINTEXT:PLAINTEXT
+      - KAFKA_OFFSETS_TOPIC_REPLICATION_FACTOR=1
+      - KAFKA_TRANSACTION_STATE_LOG_REPLICATION_FACTOR=1
+      - KAFKA_TRANSACTION_STATE_LOG_MIN_ISR=1
+      - CLUSTER_ID=shinobi-kafka-kraft-cluster-01
+    volumes:
+      - kafkadata:/tmp/kraft-combined-logs
+    healthcheck:
+      test: [ "CMD-SHELL", "/opt/kafka/bin/kafka-topics.sh --bootstrap-server localhost:9092 --list || exit 1" ]
+      interval: 10s
+      timeout: 10s
+      retries: 5
+      start_period: 30s
+    networks:
+      - shinobi
+    restart: unless-stopped
+
+  # ── Genjutsu: IPFS (Kubo) ────────────────────
+  ipfs:
+    image: ipfs/kubo:latest
+    container_name: shinobi-ipfs
+    volumes:
+      - ipfsdata:/data/ipfs
+    healthcheck:
+      test: [ "CMD-SHELL", "ipfs id || exit 1" ]
+      interval: 10s
+      timeout: 10s
+      retries: 5
+      start_period: 15s
+    networks:
+      - shinobi
+    restart: unless-stopped
+
+  # ── Oracle: Ollama (LLM local) ───────────────
+  ollama:
+    image: ollama/ollama:latest
+    container_name: shinobi-ollama
+    volumes:
+      - ollama_data:/root/.ollama
+    healthcheck:
+      test: ["CMD", "ollama", "list"]
+      interval: 10s
+      timeout: 10s
+      retries: 5
+      start_period: 60s
+    networks:
+      - shinobi
+    restart: unless-stopped
+
+  # ═══════════════════════════════════════════════
+  #  OBSERVABILITÉ
+  # ═══════════════════════════════════════════════
+
+  # ── Dojutsu: Prometheus ────────────────────────────────
+  prometheus:
+    image: prom/prometheus:latest
+    container_name: shinobi-prometheus
+    volumes:
+      - ./dojutsu/prometheus.yml:/etc/prometheus/prometheus.yml:ro
+      - prometheus_data:/prometheus
+    command:
+      - "--config.file=/etc/prometheus/prometheus.yml"
+      - "--storage.tsdb.retention.time=30d"
+    healthcheck:
+      test: [ "CMD-SHELL", "wget -q --spider http://localhost:9090/-/healthy || exit 1" ]
+      interval: 10s
+      timeout: 5s
+      retries: 3
+    networks:
+      - shinobi
+    restart: unless-stopped
+
+  # ── Dojutsu: Grafana ───────────────────────────────────
+  grafana:
+    image: grafana/grafana:latest
+    container_name: shinobi-grafana
+    ports:
+      - "3002:3000"
+    environment:
+      GF_SECURITY_ADMIN_USER: admin
+      GF_SECURITY_ADMIN_PASSWORD: shinobi
+      GF_USERS_ALLOW_SIGN_UP: "false"
+      GF_DASHBOARDS_DEFAULT_HOME_DASHBOARD_PATH: /var/lib/grafana/dashboards/shinobi.json
+    volumes:
+      - ./dojutsu/grafana/provisioning:/etc/grafana/provisioning:ro
+      - ./dojutsu/grafana/dashboards:/var/lib/grafana/dashboards:ro
+      - grafana_data:/var/lib/grafana
+    depends_on:
+      prometheus:
+        condition: service_healthy
+    healthcheck:
+      test: [ "CMD-SHELL", "wget -q --spider http://localhost:3000/api/health || exit 1" ]
+      interval: 10s
+      timeout: 5s
+      retries: 3
+    networks:
+      - shinobi
+    restart: unless-stopped
+
+# ═══════════════════════════════════════════════
+#  VOLUMES PERSISTANTS
+# ═══════════════════════════════════════════════
+volumes:
+  pgdata:
+    name: shinobi-pgdata
+  redisdata:
+    name: shinobi-redisdata
+  kafkadata:
+    name: shinobi-kafkadata
+  ipfsdata:
+    name: shinobi-ipfsdata
+  ollama_data:
+    name: shinobi-ollama
+  vcs_workspace:
+    name: shinobi-vcs-workspace
+  prometheus_data:
+    name: shinobi-prometheus
+  grafana_data:
+    name: shinobi-grafana
+
+# ═══════════════════════════════════════════════
+#  RÉSEAU
+# ═══════════════════════════════════════════════
+networks:
+  shinobi:
+    name: shinobi
+    driver: bridge

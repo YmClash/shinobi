@@ -92,6 +92,14 @@ async fn main() -> anyhow::Result<()> {
         .await?;
     info!("✅ PostgreSQL connecté");
 
+    // Auto-migration : applique les migrations SQL pendantes au démarrage.
+    // Garantit qu'un volume PostgreSQL vierge (premier `docker compose up`)
+    // est automatiquement provisionné sans intervention manuelle.
+    sqlx::migrate!("./migrations")
+        .run(&pg_pool)
+        .await?;
+    info!("✅ Migrations SQL appliquées");
+
     // Fūinjutsu: Redis
     let _redis_cache = RedisCache::connect(&config.redis_url).await?;
     info!("✅ Redis connecté");

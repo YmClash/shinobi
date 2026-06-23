@@ -2678,6 +2678,7 @@ dependencies = [
  "fastembed",
  "futures",
  "jj-lib",
+ "metrics",
  "parking_lot",
  "pgvector",
  "pollster",

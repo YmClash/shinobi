@@ -17,6 +17,7 @@
 use rdkafka::config::ClientConfig;
 use rdkafka::consumer::{Consumer, StreamConsumer};
 use rdkafka::Message;
+use metrics::counter;
 use tokio_util::sync::CancellationToken;
 use tracing::{error, info, warn};
 
@@ -147,6 +148,10 @@ impl KafkaEventConsumer {
                                         "📨 Tensai — Opération reçue de Kafka"
                                     );
 
+                                    // Métriques Prometheus
+                                    counter!("kafka_messages_consumed_total", "consumer" => "tensai", "topic" => self.topic.clone())
+                                        .increment(1);
+
                                     // Invoquer le handler (analyse sémantique).
                                     handler(operation).await;
                                 }
@@ -165,6 +170,8 @@ impl KafkaEventConsumer {
                                 error = %e,
                                 "❌ Tensai — Erreur Kafka recv()"
                             );
+                            counter!("kafka_consumer_errors_total", "consumer" => "tensai")
+                                .increment(1);
                             // Petite pause avant de réessayer pour éviter un busy-loop.
                             tokio::time::sleep(std::time::Duration::from_secs(1)).await;
                         }
