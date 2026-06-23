@@ -292,17 +292,17 @@
       "description": "Durée d'inférence Ollama (granite3-dense:2b)",
       "targets": [
         {
-          "expr": "histogram_quantile(0.50, rate(llm_inference_duration_seconds_bucket[5m]))",
+          "expr": "llm_inference_duration_seconds{quantile=\"0.5\"}",
           "legendFormat": "P50",
           "refId": "A"
         },
         {
-          "expr": "histogram_quantile(0.95, rate(llm_inference_duration_seconds_bucket[5m]))",
+          "expr": "llm_inference_duration_seconds{quantile=\"0.95\"}",
           "legendFormat": "P95",
           "refId": "B"
         },
         {
-          "expr": "histogram_quantile(0.99, rate(llm_inference_duration_seconds_bucket[5m]))",
+          "expr": "llm_inference_duration_seconds{quantile=\"0.99\"}",
           "legendFormat": "P99",
           "refId": "C"
         }
@@ -340,7 +340,7 @@
           "refId": "A"
         },
         {
-          "expr": "histogram_quantile(0.95, rate(llm_inference_duration_seconds_bucket[5m]))",
+          "expr": "llm_inference_duration_seconds{quantile=\"0.95\"}",
           "legendFormat": "🔮 Oracle P95 (LLM)",
           "refId": "B"
         }
@@ -513,12 +513,12 @@
       "description": "Temps d'écriture et lecture IPFS",
       "targets": [
         {
-          "expr": "histogram_quantile(0.95, rate(ipfs_storage_duration_seconds_bucket[5m]))",
+          "expr": "ipfs_storage_duration_seconds{quantile=\"0.95\"}",
           "legendFormat": "Store P95",
           "refId": "A"
         },
         {
-          "expr": "histogram_quantile(0.95, rate(ipfs_retrieval_duration_seconds_bucket[5m]))",
+          "expr": "ipfs_retrieval_duration_seconds{quantile=\"0.95\"}",
           "legendFormat": "Retrieve P95",
           "refId": "B"
         }
