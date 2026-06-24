@@ -71,6 +71,8 @@ export interface IpfsFile {
   size: number;
   content: string;
   language: string | null;
+  /** Per-file IPFS CID (Phase 8.1 Merkle DAG only; null for legacy blobs). */
+  cid: string | null;
 }
 
 export interface IpfsContentResponse {

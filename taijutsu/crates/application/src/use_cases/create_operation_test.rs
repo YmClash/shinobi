@@ -113,10 +113,12 @@ mod tests {
     // ── Mock ContentStore (IPFS) ─────────────────────────
 
     struct MockContentStore {
-        /// CID à retourner par store()
+        /// CID à retourner par store() et store_dag()
         cid: String,
         /// Compteur d'appels à store()
         store_count: Mutex<usize>,
+        /// Compteur d'appels à store_dag() (Phase 8.1)
+        dag_store_count: Mutex<usize>,
     }
 
     impl MockContentStore {
@@ -124,6 +126,7 @@ mod tests {
             Self {
                 cid: cid.to_string(),
                 store_count: Mutex::new(0),
+                dag_store_count: Mutex::new(0),
             }
         }
     }
@@ -145,6 +148,26 @@ mod tests {
 
         async fn pin(&self, _cid: &ContentId) -> Result<(), DomainError> {
             Ok(())
+        }
+
+        async fn store_dag(
+            &self,
+            description: &str,
+            files: &[(String, Vec<u8>)],
+        ) -> Result<(ContentId, domain::ports::content_store::DagManifest), DomainError> {
+            *self.dag_store_count.lock().await += 1;
+            let manifest = domain::ports::content_store::DagManifest {
+                version: 1,
+                description: description.to_string(),
+                files: files.iter().map(|(path, content)| {
+                    domain::ports::content_store::DagFileLink {
+                        path: path.clone(),
+                        cid: format!("QmFile_{}", path.replace('/', "_")),
+                        size: content.len(),
+                    }
+                }).collect(),
+            };
+            Ok((ContentId::new(&self.cid), manifest))
         }
     }
 
@@ -247,9 +270,9 @@ mod tests {
         assert!(op.has_ipfs_content(), "Avec fichiers + ContentStore → IPFS CID présent");
         assert_eq!(op.ipfs_content_id.as_ref().unwrap().as_str(), "QmIpfsCidSync");
 
-        // ContentStore.store() doit avoir été appelé
-        let count = *store.store_count.lock().await;
-        assert_eq!(count, 1, "store() devrait être appelé une fois");
+        // ContentStore.store_dag() doit avoir été appelé (Phase 8.1)
+        let count = *store.dag_store_count.lock().await;
+        assert_eq!(count, 1, "store_dag() devrait être appelé une fois");
     }
 
     #[tokio::test]
@@ -287,8 +310,8 @@ mod tests {
         let op = result.unwrap().operation;
         assert!(!op.has_ipfs_content(), "Pas de fichiers → pas de sync IPFS");
 
-        let count = *store.store_count.lock().await;
-        assert_eq!(count, 0, "store() ne devrait PAS être appelé sans fichiers");
+        let count = *store.dag_store_count.lock().await;
+        assert_eq!(count, 0, "store_dag() ne devrait PAS être appelé sans fichiers");
     }
 
     #[tokio::test]

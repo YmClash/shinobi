@@ -30,6 +30,8 @@ use domain::ports::repository::OperationRepository;
 use domain::ports::review_repository::{OperationReview, ReviewRepository};
 use domain::ports::vcs_engine::VcsEngine;
 
+use super::resolve_ipfs::resolve_ipfs_files;
+
 /// Use case: produire une code review IA pour une opération VCS.
 ///
 /// L'Oracle utilise un LLM local (Ollama) pour analyser le diff
@@ -133,23 +135,18 @@ impl ReviewOperationUseCase {
             });
         }
 
-        // 3. Récupérer le code source depuis IPFS.
+        // 3. Récupérer le code source depuis IPFS (dual-format via Type Tag, Phase 8.1).
         let source_files = match &operation.ipfs_content_id {
             Some(ipfs_cid) => {
-                match self.content_store.retrieve(ipfs_cid).await {
-                    Ok(blob) => {
-                        // Décoder le blob JSON → fichiers.
-                        match serde_json::from_slice::<Vec<IpfsFileEntry>>(&blob) {
-                            Ok(files) => files,
-                            Err(e) => {
-                                warn!(
-                                    operation_id = %operation_id,
-                                    error = %e,
-                                    "⚠️ Oracle — Décodage blob IPFS échoué"
-                                );
-                                Vec::new()
+                match resolve_ipfs_files(self.content_store.as_ref(), ipfs_cid).await {
+                    Ok(resolved) => {
+                        resolved.into_iter().map(|f| {
+                            let content_str = String::from_utf8_lossy(&f.content).to_string();
+                            ResolvedSourceFile {
+                                path: f.path,
+                                content: content_str,
                             }
-                        }
+                        }).collect()
                     }
                     Err(e) => {
                         warn!(
@@ -259,13 +256,10 @@ impl ReviewOperationUseCase {
 
 // ── Types internes ────────────────────────────────────────────────────
 
-/// Entrée de fichier dans le blob JSON IPFS.
-#[derive(Debug, serde::Deserialize)]
-struct IpfsFileEntry {
+/// Fichier source résolu depuis IPFS pour le prompt LLM.
+struct ResolvedSourceFile {
     path: String,
-    content_b64: String,
-    #[allow(dead_code)]
-    size: usize,
+    content: String,
 }
 
 // ── Prompts ───────────────────────────────────────────────────────────
@@ -300,7 +294,7 @@ où X.XX est un nombre entre 0.00 et 1.00 représentant la qualité globale du c
 fn build_prompt(
     description: &str,
     changed_files: &[String],
-    source_files: &[IpfsFileEntry],
+    source_files: &[ResolvedSourceFile],
 ) -> String {
     let mut prompt = String::with_capacity(4096);
 
@@ -316,7 +310,7 @@ fn build_prompt(
     }
     prompt.push('\n');
 
-    // Section code source (depuis IPFS, décodé du base64).
+    // Section code source (depuis IPFS, raw bytes déjà décodés).
     if !source_files.is_empty() {
         prompt.push_str("## Code Source\n\n");
 
@@ -324,17 +318,11 @@ fn build_prompt(
             // Détecter le langage pour le syntax highlighting dans le prompt.
             let lang = detect_language(&file.path).unwrap_or("text");
 
-            // Décoder le contenu base64.
-            let content = match base64_decode(&file.content_b64) {
-                Ok(bytes) => String::from_utf8_lossy(&bytes).to_string(),
-                Err(_) => continue,
-            };
-
             // Limiter la taille du code pour rester dans les limites du contexte LLM.
-            let truncated = if content.len() > 3000 {
-                format!("{}...\n[tronqué — {} octets au total]", &content[..3000], content.len())
+            let truncated = if file.content.len() > 3000 {
+                format!("{}...\n[tronqué — {} octets au total]", &file.content[..3000], file.content.len())
             } else {
-                content
+                file.content.clone()
             };
 
             prompt.push_str(&format!("### `{}`\n", file.path));
@@ -416,34 +404,6 @@ fn detect_language(path: &str) -> Option<&'static str> {
         "html" => Some("html"),
         _ => None,
     }
-}
-
-// ── Base64 décodeur RFC 4648 ─────────────────────────────────────────
-
-fn base64_decode(input: &str) -> Result<Vec<u8>, String> {
-    let input = input.trim_end_matches('=');
-    let mut output = Vec::with_capacity(input.len() * 3 / 4);
-    let mut buf: u32 = 0;
-    let mut bits: u32 = 0;
-
-    for ch in input.chars() {
-        let val = match ch {
-            'A'..='Z' => (ch as u32) - ('A' as u32),
-            'a'..='z' => (ch as u32) - ('a' as u32) + 26,
-            '0'..='9' => (ch as u32) - ('0' as u32) + 52,
-            '+' => 62,
-            '/' => 63,
-            _ => return Err(format!("Caractère base64 invalide: {ch}")),
-        };
-        buf = (buf << 6) | val;
-        bits += 6;
-        if bits >= 8 {
-            bits -= 8;
-            output.push(((buf >> bits) & 0xFF) as u8);
-        }
-    }
-
-    Ok(output)
 }
 
 // ── Tests ─────────────────────────────────────────────────────────────

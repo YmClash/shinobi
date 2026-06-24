@@ -1,7 +1,12 @@
-//! Use Case: GetIpfsContent — Retrieve and decode IPFS blob for an operation.
+//! Use Case: GetIpfsContent — Retrieve and decode IPFS content for an operation.
 //!
-//! Fetches the blob stored in IPFS (Genjutsu) for a given operation,
-//! decodes the JSON, and returns the individual files with metadata.
+//! Fetches the content stored in IPFS (Genjutsu) for a given operation
+//! and returns the individual files with metadata.
+//!
+//! ## Phase 8.1 — Dual-Format (Type Tag)
+//! Utilise `resolve_ipfs_files()` qui détecte automatiquement le format :
+//! - **Merkle DAG** (Phase 8.1) : manifeste JSON + fichiers individuels (raw bytes)
+//! - **Legacy Blob** (Phase 5) : blob JSON monolithique (base64)
 
 use std::sync::Arc;
 use tracing::info;
@@ -12,13 +17,17 @@ use domain::errors::DomainError;
 use domain::ports::content_store::ContentStore;
 use domain::ports::repository::OperationRepository;
 
-/// A decoded file from the IPFS blob.
+use super::resolve_ipfs::resolve_ipfs_files;
+
+/// A decoded file from IPFS.
 #[derive(Debug, Serialize)]
 pub struct IpfsFile {
     pub path: String,
     pub size: usize,
     pub content: String,
     pub language: Option<String>,
+    /// CID IPFS individuel du fichier (uniquement pour le format Merkle DAG).
+    pub cid: Option<String>,
 }
 
 /// Result of fetching IPFS content for an operation.
@@ -57,30 +66,27 @@ impl GetIpfsContentUseCase {
         let cs = self.content_store.as_ref()
             .ok_or_else(|| DomainError::StorageError("IPFS ContentStore unavailable".to_string()))?;
 
-        let blob = cs.retrieve(&ipfs_cid).await?;
-        let blob_size = blob.len();
+        // Phase 8.1 — Résolution dual-format via Type Tag
+        let resolved = resolve_ipfs_files(cs.as_ref(), &ipfs_cid).await?;
+        let blob_size: usize = resolved.iter().map(|f| f.size).sum();
 
         info!(
             operation_id = %operation_id,
             ipfs_cid = %ipfs_cid,
+            file_count = resolved.len(),
             blob_size,
-            "📥 IPFS Content retrieved"
+            "📥 IPFS Content resolved"
         );
 
-        // Decode blob JSON → file entries
-        let entries: Vec<RawFileEntry> = serde_json::from_slice(&blob).map_err(|e| {
-            DomainError::Internal(format!("IPFS blob JSON decode failed: {e}"))
-        })?;
-
-        let files: Vec<IpfsFile> = entries.into_iter().filter_map(|entry| {
-            let decoded = base64_decode(&entry.content_b64).ok()?;
-            let content = String::from_utf8(decoded).ok()?;
-            let language = detect_language(&entry.path);
+        let files: Vec<IpfsFile> = resolved.into_iter().filter_map(|f| {
+            let content = String::from_utf8(f.content).ok()?;
+            let language = detect_language(&f.path);
             Some(IpfsFile {
-                path: entry.path,
-                size: entry.size,
+                path: f.path,
+                size: f.size,
                 content,
                 language,
+                cid: f.cid,
             })
         }).collect();
 
@@ -91,13 +97,6 @@ impl GetIpfsContentUseCase {
             files,
         })
     }
-}
-
-#[derive(serde::Deserialize)]
-struct RawFileEntry {
-    path: String,
-    content_b64: String,
-    size: usize,
 }
 
 fn detect_language(path: &str) -> Option<String> {
@@ -118,24 +117,4 @@ fn detect_language(path: &str) -> Option<String> {
         "sql" => Some("sql".into()),
         _ => None,
     }
-}
-
-fn base64_decode(input: &str) -> Result<Vec<u8>, String> {
-    let input = input.trim_end_matches('=');
-    let mut output = Vec::with_capacity(input.len() * 3 / 4);
-    let mut buf: u32 = 0;
-    let mut bits: u32 = 0;
-    for ch in input.chars() {
-        let val = match ch {
-            'A'..='Z' => (ch as u32) - ('A' as u32),
-            'a'..='z' => (ch as u32) - ('a' as u32) + 26,
-            '0'..='9' => (ch as u32) - ('0' as u32) + 52,
-            '+' => 62, '/' => 63,
-            _ => return Err(format!("Invalid base64 char: {ch}")),
-        };
-        buf = (buf << 6) | val;
-        bits += 6;
-        if bits >= 8 { bits -= 8; output.push(((buf >> bits) & 0xFF) as u8); }
-    }
-    Ok(output)
 }

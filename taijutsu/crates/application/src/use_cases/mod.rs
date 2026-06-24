@@ -8,6 +8,7 @@ pub mod get_ipfs_content;
 pub mod get_reviews;
 pub mod get_score_history;
 pub mod list_operations;
+pub mod resolve_ipfs;
 pub mod review_operation;
 pub mod search_chunks;
 

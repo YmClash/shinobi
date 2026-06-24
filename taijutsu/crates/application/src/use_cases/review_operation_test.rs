@@ -130,6 +130,20 @@ impl ContentStore for MockContentStore {
     async fn pin(&self, _cid: &ContentId) -> Result<(), DomainError> {
         Ok(())
     }
+    async fn store_dag(
+        &self,
+        _description: &str,
+        _files: &[(String, Vec<u8>)],
+    ) -> Result<(ContentId, domain::ports::content_store::DagManifest), DomainError> {
+        Ok((
+            ContentId::new("mock-dag-cid"),
+            domain::ports::content_store::DagManifest {
+                version: 1,
+                description: String::new(),
+                files: vec![],
+            },
+        ))
+    }
 }
 
 // ── Helpers ───────────────────────────────────────────────────────────

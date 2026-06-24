@@ -119,6 +119,11 @@ export function IpfsExplorer({ operationId }: IpfsExplorerProps) {
                     <span className="text-[10px] text-muted-foreground">
                       {formatBytes(file.size)}
                     </span>
+                    {file.cid && (
+                      <Badge variant="outline" className="text-[9px] font-mono px-1.5 py-0 bg-emerald-500/10 text-emerald-400 border-emerald-500/25 max-w-[120px] truncate" title={file.cid}>
+                        🔗 {file.cid.slice(0, 12)}…
+                      </Badge>
+                    )}
                     {file.language && (
                       <Badge variant="secondary" className="text-[10px] px-1.5 py-0">
                         {file.language}

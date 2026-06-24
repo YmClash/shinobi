@@ -8,7 +8,7 @@ CREATE EXTENSION IF NOT EXISTS "uuid-ossp";
 -- Table des opérations VCS (commits/changements atomiques).
 -- Chaque opération est immuable : les corrections se font
 -- par de nouvelles opérations pointant vers les parentes.
-CREATE TABLE operations (
+CREATE TABLE IF NOT EXISTS operations (
     id          UUID        PRIMARY KEY,
     author_id   UUID        NOT NULL,
     content_id  TEXT        NOT NULL,
@@ -21,8 +21,8 @@ CREATE TABLE operations (
 );
 
 -- Index pour les requêtes fréquentes
-CREATE INDEX idx_operations_author  ON operations (author_id);
-CREATE INDEX idx_operations_created ON operations (created_at DESC);
-CREATE INDEX idx_operations_parent  ON operations USING GIN (parent_ids);
+CREATE INDEX IF NOT EXISTS idx_operations_author  ON operations (author_id);
+CREATE INDEX IF NOT EXISTS idx_operations_created ON operations (created_at DESC);
+CREATE INDEX IF NOT EXISTS idx_operations_parent  ON operations USING GIN (parent_ids);
 
 COMMENT ON TABLE operations IS 'Opérations VCS atomiques du graphe de versioning SHINOBI';

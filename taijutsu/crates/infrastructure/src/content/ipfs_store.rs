@@ -15,6 +15,11 @@
 //! | `retrieve()`  | `POST /api/v0/cat?arg=<CID>`      |
 //! | `exists()`    | `POST /api/v0/block/stat?arg=<CID>`|
 //! | `pin()`       | `POST /api/v0/pin/add?arg=<CID>`  |
+//! | `store_dag()` | N × `/api/v0/add` (fichiers raw) + 1 × `/api/v0/add` (manifeste) |
+//!
+//! ## Phase 8.1 — Merkle DAG IPLD
+//! `store_dag()` stocke chaque fichier comme un nœud IPFS indépendant
+//! (raw bytes, pas de base64) puis crée un manifeste DAG-JSON racine.
 //!
 //! ## Gestion d'erreurs
 //! Toutes les erreurs HTTP/réseau sont mappées vers `DomainError::StorageError`.
@@ -30,7 +35,7 @@ use tracing::{info, warn};
 
 use domain::entities::content_id::ContentId;
 use domain::errors::DomainError;
-use domain::ports::content_store::ContentStore;
+use domain::ports::content_store::{ContentStore, DagFileLink, DagManifest};
 
 /// Réponse JSON de Kubo pour `POST /api/v0/add`.
 ///
@@ -88,26 +93,18 @@ impl IpfsContentStore {
             api_url: api_url.trim_end_matches('/').to_string(),
         })
     }
-}
 
-#[async_trait]
-impl ContentStore for IpfsContentStore {
-    /// Stocke un blob de données sur IPFS et retourne son CID.
+    /// Stocke un blob brut sur IPFS via `/api/v0/add` et retourne le CID.
     ///
-    /// Utilise `POST /api/v0/add` avec un body `multipart/form-data`.
-    /// Kubo hashe le contenu (SHA-256 par défaut) et retourne le CID.
-    async fn store(&self, data: &[u8]) -> Result<ContentId, DomainError> {
-        let start = Instant::now();
-        let data_size = data.len();
+    /// Méthode interne utilisée par `store()` et `store_dag()`
+    /// pour éviter la duplication du code HTTP multipart.
+    async fn ipfs_add(&self, data: &[u8], file_name: &str) -> Result<ContentId, DomainError> {
         let url = format!("{}/api/v0/add", self.api_url);
 
-        // Construire le multipart form avec le blob en tant que fichier
         let part = multipart::Part::bytes(data.to_vec())
-            .file_name("blob")
+            .file_name(file_name.to_string())
             .mime_str("application/octet-stream")
-            .map_err(|e| {
-                DomainError::StorageError(format!("Multipart MIME error: {e}"))
-            })?;
+            .map_err(|e| DomainError::StorageError(format!("Multipart MIME error: {e}")))?;
 
         let form = multipart::Form::new().part("file", part);
 
@@ -117,9 +114,7 @@ impl ContentStore for IpfsContentStore {
             .multipart(form)
             .send()
             .await
-            .map_err(|e| {
-                DomainError::StorageError(format!("IPFS add request failed: {e}"))
-            })?;
+            .map_err(|e| DomainError::StorageError(format!("IPFS add request failed: {e}")))?;
 
         if !response.status().is_success() {
             let status = response.status();
@@ -133,7 +128,21 @@ impl ContentStore for IpfsContentStore {
             DomainError::StorageError(format!("IPFS add response parse failed: {e}"))
         })?;
 
-        let cid = ContentId::new(&add_response.hash);
+        Ok(ContentId::new(&add_response.hash))
+    }
+}
+
+#[async_trait]
+impl ContentStore for IpfsContentStore {
+    /// Stocke un blob de données sur IPFS et retourne son CID.
+    ///
+    /// Utilise `POST /api/v0/add` avec un body `multipart/form-data`.
+    /// Kubo hashe le contenu (SHA-256 par défaut) et retourne le CID.
+    async fn store(&self, data: &[u8]) -> Result<ContentId, DomainError> {
+        let start = Instant::now();
+        let data_size = data.len();
+
+        let cid = self.ipfs_add(data, "blob").await?;
 
         // ── Métriques Prometheus ──────────────────────
         let duration_secs = start.elapsed().as_secs_f64();
@@ -251,6 +260,78 @@ impl ContentStore for IpfsContentStore {
         );
 
         Ok(())
+    }
+
+    /// Stocke un ensemble de fichiers comme un Merkle DAG IPLD.
+    ///
+    /// ## Flux (Phase 8.1)
+    /// 1. Chaque fichier est stocké comme un nœud IPFS indépendant (raw bytes)
+    /// 2. Un manifeste DAG-JSON est construit avec les CIDs des fichiers
+    /// 3. Le manifeste est stocké sur IPFS (il devient la racine du DAG)
+    /// 4. Le CID du manifeste est retourné
+    ///
+    /// ## Déduplication
+    /// Fichiers identiques entre commits → même CID → IPFS ne re-stocke pas.
+    async fn store_dag(
+        &self,
+        description: &str,
+        files: &[(String, Vec<u8>)],
+    ) -> Result<(ContentId, DagManifest), DomainError> {
+        let start = Instant::now();
+        let file_count = files.len();
+        let mut links: Vec<DagFileLink> = Vec::with_capacity(file_count);
+        let mut total_bytes: usize = 0;
+
+        // 1. Stocker chaque fichier comme un nœud IPFS indépendant (raw bytes).
+        for (path, content) in files {
+            let file_cid = self.ipfs_add(content, path).await?;
+            let file_size = content.len();
+            total_bytes += file_size;
+
+            info!(
+                path = %path,
+                cid = %file_cid,
+                size = file_size,
+                "📄 Fichier stocké sur IPFS (nœud DAG)"
+            );
+
+            links.push(DagFileLink {
+                path: path.clone(),
+                cid: file_cid.to_string(),
+                size: file_size,
+            });
+        }
+
+        // 2. Construire le manifeste DAG-JSON.
+        let manifest = DagManifest {
+            version: 1,
+            description: description.to_string(),
+            files: links,
+        };
+
+        // 3. Sérialiser et stocker le manifeste sur IPFS.
+        let manifest_json = serde_json::to_vec(&manifest).map_err(|e| {
+            DomainError::StorageError(format!("DAG manifest serialization failed: {e}"))
+        })?;
+
+        let root_cid = self.ipfs_add(&manifest_json, "manifest.json").await?;
+
+        // ── Métriques Prometheus (DAG) ──────────────────
+        let duration_secs = start.elapsed().as_secs_f64();
+        histogram!("ipfs_dag_store_duration_seconds").record(duration_secs);
+        counter!("ipfs_dag_files_stored_total").increment(file_count as u64);
+        counter!("ipfs_storage_bytes_total").increment(total_bytes as u64);
+
+        info!(
+            root_cid = %root_cid,
+            file_count,
+            total_bytes,
+            manifest_size = manifest_json.len(),
+            duration_ms = start.elapsed().as_millis() as u64,
+            "✅ Merkle DAG IPLD stocké sur IPFS (Genjutsu)"
+        );
+
+        Ok((root_cid, manifest))
     }
 }
 
