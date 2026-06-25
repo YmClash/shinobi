@@ -146,8 +146,9 @@ dojutsu/grafana/data/
 nen/data/
 nen/logs/
 
-# Codex
+# Codex & Documentation locale
 CODEX_BOARD.md
+Docs/
 
 # ── Workspace JJ ────────────────────────────
 taijutsu/workspace
