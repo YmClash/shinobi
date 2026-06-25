@@ -98,11 +98,23 @@ impl IpfsContentStore {
     ///
     /// Méthode interne utilisée par `store()` et `store_dag()`
     /// pour éviter la duplication du code HTTP multipart.
+    ///
+    /// ## Note Kubo
+    /// Si `file_name` contient des `/`, Kubo crée des entrées de répertoire
+    /// et retourne un NDJSON (une ligne JSON par nœud). On utilise le basename
+    /// pour éviter ça, et on parse la première ligne non-vide en fallback.
     async fn ipfs_add(&self, data: &[u8], file_name: &str) -> Result<ContentId, DomainError> {
         let url = format!("{}/api/v0/add", self.api_url);
 
+        // Utiliser le basename pour éviter que Kubo crée des répertoires intermédiaires.
+        let safe_name = file_name
+            .rsplit('/')
+            .next()
+            .unwrap_or(file_name)
+            .to_string();
+
         let part = multipart::Part::bytes(data.to_vec())
-            .file_name(file_name.to_string())
+            .file_name(safe_name)
             .mime_str("application/octet-stream")
             .map_err(|e| DomainError::StorageError(format!("Multipart MIME error: {e}")))?;
 
@@ -124,8 +136,21 @@ impl IpfsContentStore {
             )));
         }
 
-        let add_response: IpfsAddResponse = response.json().await.map_err(|e| {
-            DomainError::StorageError(format!("IPFS add response parse failed: {e}"))
+        // Kubo retourne Transfer-Encoding: chunked avec un trailing newline.
+        // En cas de NDJSON (répertoires), on prend la première ligne non-vide.
+        let body = response.text().await.map_err(|e| {
+            DomainError::StorageError(format!("IPFS add response read failed: {e}"))
+        })?;
+
+        let first_line = body
+            .lines()
+            .find(|l| !l.trim().is_empty())
+            .unwrap_or(body.trim());
+
+        let add_response: IpfsAddResponse = serde_json::from_str(first_line).map_err(|e| {
+            DomainError::StorageError(format!(
+                "IPFS add response parse failed: {e} — body: {body}"
+            ))
         })?;
 
         Ok(ContentId::new(&add_response.hash))
