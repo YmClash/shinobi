@@ -231,6 +231,7 @@ async fn main() -> anyhow::Result<()> {
     let get_operation_diff = Arc::new(GetOperationDiffUseCase::new(
         repo.clone(),
         vcs.clone(),
+        content_store.clone(),
     ));
 
     let get_ipfs_content = Arc::new(GetIpfsContentUseCase::new(
