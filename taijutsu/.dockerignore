@@ -1,0 +1,35 @@
+# ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+# SHINOBI / Taijutsu — .dockerignore
+# ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+# Exclure les artefacts inutiles du contexte de build Docker.
+
+# Artefacts de build Cargo (le plus gros)
+target/
+
+# Fichiers de configuration locale
+.env
+.env.*
+!.env.example
+
+# Git
+.git/
+.gitignore
+
+# IDE
+.idea/
+.vscode/
+*.iml
+.rust-analyzer/
+
+# Workspace VCS (volume, pas dans l'image)
+workspace/
+
+# Docker compose dev
+docker-compose.yml
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Documentation locale
+Docs/

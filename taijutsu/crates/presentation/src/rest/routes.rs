@@ -15,6 +15,7 @@ use application::use_cases::list_operations::ListFilter;
 use application::use_cases::search_chunks::ChunkSearchFilter;
 use domain::entities::operation::Operation;
 use domain::ports::chunk_repository::{SimilarChunk, StoredChunk};
+use domain::ports::review_repository::OperationReview;
 
 use crate::errors::AppError;
 use crate::state::SharedState;
@@ -168,6 +169,34 @@ impl From<SimilarChunk> for SemanticChunkJson {
     }
 }
 
+/// Réponse JSON pour une code review IA (Phase 9 — Oracle).
+#[derive(Debug, Serialize)]
+pub struct ReviewJson {
+    pub id: Uuid,
+    pub reviewer: String,
+    pub model: String,
+    pub summary: String,
+    pub content: String,
+    pub score: Option<f32>,
+    pub duration_ms: u64,
+    pub created_at: chrono::DateTime<chrono::Utc>,
+}
+
+impl From<OperationReview> for ReviewJson {
+    fn from(review: OperationReview) -> Self {
+        Self {
+            id: review.id,
+            reviewer: review.reviewer,
+            model: review.model,
+            summary: review.summary,
+            content: review.content,
+            score: review.score,
+            duration_ms: review.duration_ms,
+            created_at: review.created_at,
+        }
+    }
+}
+
 // ─── Routeur ─────────────────────────────────────
 
 /// Construit le routeur Axum principal avec les use cases injectés.
@@ -188,6 +217,14 @@ pub fn create_router(state: SharedState) -> Router {
             post(create_operation_handler).get(list_operations_handler),
         )
         .route("/api/v1/operations/{id}", get(get_operation_handler))
+        // ── VCS Diff ───────────────────────────────
+        .route("/api/v1/operations/{id}/diff", get(get_operation_diff_handler))
+        // ── Oracle: Code Reviews IA ────────────────
+        .route("/api/v1/operations/{id}/reviews", get(get_reviews_handler))
+        // ── Oracle: Sparkline Scores (Phase 9.2) ──
+        .route("/api/v1/reviews/scores", get(get_score_history_handler))
+        // ── IPFS Content Explorer ──────────────────
+        .route("/api/v1/operations/{id}/ipfs", get(get_ipfs_content_handler))
         // ── Tensai: Mémoire IA ─────────────────────
         .route(
             "/api/v1/operations/{id}/chunks",
@@ -307,6 +344,25 @@ async fn list_operations_handler(
     Ok(Json(serde_json::json!({
         "operations": operations_json,
         "count": operations_json.len(),
+    })))
+}
+
+// ─── Handler Diff VCS ─────────────────────────────
+
+/// Récupérer les fichiers modifiés par une opération — `GET /api/v1/operations/{id}/diff`
+async fn get_operation_diff_handler(
+    State(state): State<SharedState>,
+    Path(id): Path<Uuid>,
+) -> Result<Json<serde_json::Value>, AppError> {
+    info!(%id, "REST: GetOperationDiff reçu");
+
+    let result = state.get_operation_diff.execute(id).await?;
+
+    Ok(Json(serde_json::json!({
+        "operation_id": result.operation_id,
+        "content_id": result.content_id,
+        "changed_files": result.changed_files,
+        "count": result.changed_files.len(),
     })))
 }
 
@@ -452,4 +508,76 @@ fn decode_base64(input: &str) -> Result<Vec<u8>, String> {
     }
 
     Ok(result)
+}
+
+// ─── Handler IPFS Content Explorer ────────────────
+
+/// Récupérer le contenu IPFS d'une opération — `GET /api/v1/operations/{id}/ipfs`
+async fn get_ipfs_content_handler(
+    State(state): State<SharedState>,
+    Path(id): Path<Uuid>,
+) -> Result<Json<serde_json::Value>, AppError> {
+    info!(%id, "REST: GetIpfsContent reçu");
+
+    let result = state.get_ipfs_content.execute(id).await?;
+
+    Ok(Json(serde_json::json!({
+        "operation_id": result.operation_id,
+        "ipfs_cid": result.ipfs_cid,
+        "blob_size": result.blob_size,
+        "files": result.files,
+        "count": result.files.len(),
+    })))
+}
+
+// ─── Handler Oracle Reviews (Phase 9) ─────────────────
+
+/// Récupérer les code reviews d'une opération — `GET /api/v1/operations/{id}/reviews`
+async fn get_reviews_handler(
+    State(state): State<SharedState>,
+    Path(id): Path<Uuid>,
+) -> Result<Json<serde_json::Value>, AppError> {
+    info!(%id, "REST: GetReviews reçu (Oracle)");
+
+    let result = state.get_reviews.execute(id).await?;
+    let reviews_json: Vec<ReviewJson> = result
+        .reviews
+        .into_iter()
+        .map(ReviewJson::from)
+        .collect();
+
+    Ok(Json(serde_json::json!({
+        "operation_id": id,
+        "reviews": reviews_json,
+        "count": result.count,
+    })))
+}
+
+// ─── Handler Score History (Phase 9.2) ───────────────
+
+/// Paramètres de query pour GET /api/v1/reviews/scores.
+#[derive(Debug, Deserialize)]
+pub struct ScoreHistoryQuery {
+    /// Nombre de scores à récupérer (défaut: 10).
+    #[serde(default = "default_score_limit")]
+    pub limit: usize,
+}
+
+fn default_score_limit() -> usize { 10 }
+
+/// Récupérer l'historique des scores Oracle — `GET /api/v1/reviews/scores?limit=10`
+async fn get_score_history_handler(
+    State(state): State<SharedState>,
+    Query(params): Query<ScoreHistoryQuery>,
+) -> Result<Json<serde_json::Value>, AppError> {
+    info!(limit = params.limit, "REST: GetScoreHistory reçu (Sparkline)");
+
+    let result = state.get_score_history.execute(params.limit).await?;
+
+    Ok(Json(serde_json::json!({
+        "scores": result.scores,
+        "count": result.count,
+        "average": result.average,
+        "trend": result.trend,
+    })))
 }

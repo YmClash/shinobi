@@ -100,8 +100,8 @@ impl CreateOperationUseCase {
             "Opération VCS créée dans le moteur (CID jj-lib)"
         );
 
-        // 2. Synchroniser vers IPFS (Genjutsu) — graceful degradation.
-        let ipfs_content_id = self.sync_to_ipfs(&cmd.files).await;
+        // 2. Synchroniser vers IPFS via Merkle DAG IPLD (Genjutsu) — graceful degradation.
+        let ipfs_content_id = self.sync_to_ipfs(&cmd.description, &cmd.files).await;
 
         // 3. Construire l'entité domaine avec les deux CID.
         let operation = Operation::new(
@@ -142,108 +142,60 @@ impl CreateOperationUseCase {
         Ok(CreateOperationResult { operation })
     }
 
-    /// Synchronise les fichiers vers IPFS si le `ContentStore` est disponible
-    /// et que des fichiers sont présents.
+    /// Synchronise les fichiers vers IPFS via un Merkle DAG IPLD (Phase 8.1).
     ///
     /// ## Stratégie
-    /// - Sérialise les fichiers en un blob JSON unique (Phase 5 — Option A).
-    /// - Phase 6 : évoluer vers un vrai Merkle DAG (un objet IPFS par fichier).
+    /// Chaque fichier est stocké comme un nœud IPFS indépendant (raw bytes).
+    /// Un manifeste DAG-JSON lie tous les fichiers du commit.
+    /// IPFS déduplique automatiquement les fichiers identiques entre commits.
     ///
     /// ## Graceful Degradation
     /// - IPFS down → `warn!` + `None` retourné.
     /// - L'opération n'est JAMAIS bloquée par IPFS.
-    async fn sync_to_ipfs(&self, files: &[(String, Vec<u8>)]) -> Option<ContentId> {
+    async fn sync_to_ipfs(
+        &self,
+        description: &str,
+        files: &[(String, Vec<u8>)],
+    ) -> Option<ContentId> {
         // Pas de ContentStore ou pas de fichiers → skip
         let store = self.content_store.as_ref()?;
         if files.is_empty() {
             return None;
         }
 
-        // Sérialiser les fichiers en blob JSON.
-        // Format: [{"path": "README.md", "content": "<base64>"}, ...]
-        // On encode le contenu binaire en base64 pour la sérialisation JSON.
-        let file_entries: Vec<serde_json::Value> = files
-            .iter()
-            .map(|(path, content)| {
-                serde_json::json!({
-                    "path": path,
-                    "content_b64": base64_encode(content),
-                    "size": content.len(),
-                })
-            })
-            .collect();
-
-        let blob = match serde_json::to_vec(&file_entries) {
-            Ok(b) => b,
-            Err(e) => {
-                warn!("⚠️ Sérialisation JSON des fichiers échouée: {e}");
-                return None;
-            }
-        };
-
-        // Stocker le blob sur IPFS
-        match store.store(&blob).await {
-            Ok(cid) => {
+        // Phase 8.1 — Merkle DAG IPLD (raw bytes, pas de base64)
+        match store.store_dag(description, files).await {
+            Ok((root_cid, manifest)) => {
                 info!(
-                    ipfs_cid = %cid,
-                    file_count = files.len(),
-                    blob_size = blob.len(),
-                    "✅ Contenu synchronisé vers IPFS (Genjutsu)"
+                    ipfs_cid = %root_cid,
+                    file_count = manifest.files.len(),
+                    "✅ Merkle DAG IPLD stocké sur IPFS (Genjutsu)"
                 );
 
-                // 6. Épingler en background (fire-and-forget)
+                // Épingler le manifeste racine en background (fire-and-forget).
+                // IPFS résout récursivement et épingle les blocs référencés.
                 let store_clone = store.clone();
-                let cid_clone = cid.clone();
+                let cid_clone = root_cid.clone();
                 tokio::spawn(async move {
                     if let Err(e) = store_clone.pin(&cid_clone).await {
                         warn!(
                             ipfs_cid = %cid_clone,
                             error = %e,
-                            "⚠️ Pin IPFS échoué (contenu non épinglé)"
+                            "⚠️ Pin DAG IPFS échoué (contenu non épinglé)"
                         );
                     }
                 });
 
-                Some(cid)
+                Some(root_cid)
             }
             Err(e) => {
                 warn!(
                     error = %e,
-                    "⚠️ Stockage IPFS échoué — opération continue sans CID IPFS"
+                    "⚠️ Stockage DAG IPFS échoué — opération continue sans CID IPFS"
                 );
                 None
             }
         }
     }
-}
-
-/// Encode un slice d'octets en base64 (sans dépendance externe).
-///
-/// Utilisation interne uniquement — format standard RFC 4648.
-fn base64_encode(data: &[u8]) -> String {
-    const CHARS: &[u8] = b"ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/";
-    let mut result = String::with_capacity((data.len() + 2) / 3 * 4);
-    for chunk in data.chunks(3) {
-        let b0 = chunk[0] as u32;
-        let b1 = if chunk.len() > 1 { chunk[1] as u32 } else { 0 };
-        let b2 = if chunk.len() > 2 { chunk[2] as u32 } else { 0 };
-        let triple = (b0 << 16) | (b1 << 8) | b2;
-
-        result.push(CHARS[((triple >> 18) & 0x3F) as usize] as char);
-        result.push(CHARS[((triple >> 12) & 0x3F) as usize] as char);
-
-        if chunk.len() > 1 {
-            result.push(CHARS[((triple >> 6) & 0x3F) as usize] as char);
-        } else {
-            result.push('=');
-        }
-
-        if chunk.len() > 2 {
-            result.push(CHARS[(triple & 0x3F) as usize] as char);
-        } else {
-            result.push('=');
-        }
-    }
-    result
 }
 

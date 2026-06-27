@@ -1,0 +1,817 @@
+@import "tailwindcss";
+@import "tw-animate-css";
+@import "shadcn/tailwind.css";
+@import "../styles/themes.css";
+
+@custom-variant dark (&:is(.dark *));
+
+@theme inline {
+  --color-background: var(--background);
+  --color-foreground: var(--foreground);
+  --font-sans: var(--font-inter);
+  --font-mono: var(--font-jetbrains);
+  --font-heading: var(--font-inter);
+  --color-sidebar-ring: var(--sidebar-ring);
+  --color-sidebar-border: var(--sidebar-border);
+  --color-sidebar-accent-foreground: var(--sidebar-accent-foreground);
+  --color-sidebar-accent: var(--sidebar-accent);
+  --color-sidebar-primary-foreground: var(--sidebar-primary-foreground);
+  --color-sidebar-primary: var(--sidebar-primary);
+  --color-sidebar-foreground: var(--sidebar-foreground);
+  --color-sidebar: var(--sidebar);
+  --color-chart-5: var(--chart-5);
+  --color-chart-4: var(--chart-4);
+  --color-chart-3: var(--chart-3);
+  --color-chart-2: var(--chart-2);
+  --color-chart-1: var(--chart-1);
+  --color-ring: var(--ring);
+  --color-input: var(--input);
+  --color-border: var(--border);
+  --color-destructive: var(--destructive);
+  --color-accent-foreground: var(--accent-foreground);
+  --color-accent: var(--accent);
+  --color-muted-foreground: var(--muted-foreground);
+  --color-muted: var(--muted);
+  --color-secondary-foreground: var(--secondary-foreground);
+  --color-secondary: var(--secondary);
+  --color-primary-foreground: var(--primary-foreground);
+  --color-primary: var(--primary);
+  --color-popover-foreground: var(--popover-foreground);
+  --color-popover: var(--popover);
+  --color-card-foreground: var(--card-foreground);
+  --color-card: var(--card);
+  --radius-sm: calc(var(--radius) * 0.6);
+  --radius-md: calc(var(--radius) * 0.8);
+  --radius-lg: var(--radius);
+  --radius-xl: calc(var(--radius) * 1.4);
+  --radius-2xl: calc(var(--radius) * 1.8);
+  --radius-3xl: calc(var(--radius) * 2.2);
+  --radius-4xl: calc(var(--radius) * 2.6);
+  /* Neon glow color for cyberpunk */
+  --color-neon: var(--primary);
+}
+
+@layer base {
+  * {
+    @apply border-border outline-ring/50;
+  }
+  body {
+    @apply bg-background text-foreground;
+  }
+  html {
+    @apply font-sans;
+  }
+}
+
+/* ── Theme transition ───────────────────────────────────────── */
+html {
+  transition: background-color 0.4s ease, color 0.3s ease;
+}
+
+html * {
+  transition: background-color 0.3s ease, border-color 0.3s ease, color 0.2s ease, box-shadow 0.3s ease;
+}
+
+/* ── Glassmorphism cards ────────────────────────────────────── */
+[data-theme="glass"] .glass-card {
+  backdrop-filter: blur(16px) saturate(180%);
+  -webkit-backdrop-filter: blur(16px) saturate(180%);
+  border: 1px solid oklch(0.5 0.03 260 / 15%);
+}
+
+/* ── Cyberpunk glow effects ─────────────────────────────────── */
+[data-theme="cyberpunk"] .neon-glow {
+  box-shadow: 0 0 8px oklch(0.72 0.25 310 / 30%),
+              0 0 20px oklch(0.72 0.25 310 / 15%),
+              inset 0 0 8px oklch(0.72 0.25 310 / 5%);
+}
+
+[data-theme="cyberpunk"] .neon-text {
+  text-shadow: 0 0 8px oklch(0.72 0.25 310 / 50%),
+               0 0 20px oklch(0.72 0.25 310 / 25%);
+}
+
+/* ── Cyberpunk scanline overlay ─────────────────────────────── */
+[data-theme="cyberpunk"]::after {
+  content: "";
+  position: fixed;
+  inset: 0;
+  pointer-events: none;
+  z-index: 9999;
+  background: repeating-linear-gradient(
+    0deg,
+    oklch(0 0 0 / 3%) 0px,
+    oklch(0 0 0 / 3%) 1px,
+    transparent 1px,
+    transparent 3px
+  );
+}
+
+/* ── Parchemin texture ──────────────────────────────────────── */
+[data-theme="scroll"] body {
+  background-image: url("data:image/svg+xml,%3Csvg width='60' height='60' viewBox='0 0 60 60' xmlns='http://www.w3.org/2000/svg'%3E%3Cg fill='none' fill-rule='evenodd'%3E%3Cg fill='%23000000' fill-opacity='0.03'%3E%3Cpath d='M36 34v-4h-2v4h-4v2h4v4h2v-4h4v-2h-4zm0-30V0h-2v4h-4v2h4v4h2V6h4V4h-4zM6 34v-4H4v4H0v2h4v4h2v-4h4v-2H6zM6 4V0H4v4H0v2h4v4h2V6h4V4H6z'/%3E%3C/g%3E%3C/g%3E%3C/svg%3E");
+}
+
+/* ── Animations ─────────────────────────────────────────────── */
+@keyframes fade-in-up {
+  from {
+    opacity: 0;
+    transform: translateY(12px);
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0);
+  }
+}
+
+@keyframes pulse-glow {
+  0%, 100% {
+    box-shadow: 0 0 4px currentColor;
+    opacity: 1;
+  }
+  50% {
+    box-shadow: 0 0 12px currentColor;
+    opacity: 0.8;
+  }
+}
+
+@keyframes shimmer {
+  0% {
+    background-position: -200% 0;
+  }
+  100% {
+    background-position: 200% 0;
+  }
+}
+
+.animate-fade-in-up {
+  animation: fade-in-up 0.5s ease-out forwards;
+}
+
+.animate-pulse-glow {
+  animation: pulse-glow 2s ease-in-out infinite;
+}
+
+.animate-shimmer {
+  background: linear-gradient(90deg, transparent, oklch(1 0 0 / 5%), transparent);
+  background-size: 200% 100%;
+  animation: shimmer 2s infinite;
+}
+
+/* Staggered animation delays for cards */
+.stagger-1 { animation-delay: 0.05s; }
+.stagger-2 { animation-delay: 0.1s; }
+.stagger-3 { animation-delay: 0.15s; }
+.stagger-4 { animation-delay: 0.2s; }
+.stagger-5 { animation-delay: 0.25s; }
+
+/* ── Custom scrollbar ───────────────────────────────────────── */
+::-webkit-scrollbar {
+  width: 6px;
+  height: 6px;
+}
+
+::-webkit-scrollbar-track {
+  background: transparent;
+}
+
+::-webkit-scrollbar-thumb {
+  background: var(--muted-foreground);
+  border-radius: 3px;
+}
+
+::-webkit-scrollbar-thumb:hover {
+  background: var(--primary);
+}
+
+/* ═══════════════════════════════════════════════════════════════
+   SHIKI — Dual Theme CSS Variables (vitesse-dark / vitesse-light)
+   Dark themes → use --shiki-dark inline colors
+   Light themes → use --shiki-light inline colors
+   ═══════════════════════════════════════════════════════════════ */
+
+/* ── Dark themes (Ninja, Cyberpunk, Glass) — use dark variant ─ */
+[data-theme="ninja"] .shiki,
+[data-theme="cyberpunk"] .shiki,
+[data-theme="glass"] .shiki,
+:root .shiki {
+  background-color: var(--shiki-dark-bg, #121212) !important;
+  color: var(--shiki-dark, #dbd7ca) !important;
+}
+
+[data-theme="ninja"] .shiki span,
+[data-theme="cyberpunk"] .shiki span,
+[data-theme="glass"] .shiki span,
+:root .shiki span {
+  color: var(--shiki-dark) !important;
+}
+
+/* ── Light theme (Parchemin/Scroll) — use light variant ─────── */
+[data-theme="scroll"] .shiki {
+  background-color: var(--shiki-light-bg, #ffffff) !important;
+  color: var(--shiki-light, #393a34) !important;
+}
+
+[data-theme="scroll"] .shiki span {
+  color: var(--shiki-light) !important;
+}
+
+/* ── Shiki block styling ───────────────────────────────────── */
+.shiki-block .shiki {
+  margin: 0;
+  padding: 0.75rem 1rem;
+  background: var(--shiki-color-background) !important;
+  overflow-x: auto;
+}
+
+.shiki-block .shiki code {
+  counter-reset: inherit;
+  display: block;
+}
+
+.shiki-block .shiki code .line {
+  display: block;
+  min-height: 1.25rem;
+  padding-left: 3rem;
+  position: relative;
+}
+
+.shiki-block .shiki code .line::before {
+  counter-increment: line;
+  content: counter(line);
+  position: absolute;
+  left: 0;
+  width: 2rem;
+  text-align: right;
+  color: var(--muted-foreground);
+  opacity: 0.35;
+  font-size: 0.65rem;
+  user-select: none;
+  padding-right: 0.5rem;
+}
+
+.shiki-block .shiki code .line:hover {
+  background: var(--muted);
+  border-radius: 2px;
+}
+
+/* ═══════════════════════════════════════════════════════════════
+   ORACLE REVIEW — Agent IA Code Review (Phase 9 + 9.1 Scoring)
+   ═══════════════════════════════════════════════════════════════ */
+
+@keyframes oracle-slide-in {
+  from {
+    opacity: 0;
+    transform: translateY(-16px);
+    max-height: 0;
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0);
+    max-height: 2000px;
+  }
+}
+
+@keyframes oracle-spinner {
+  to { transform: rotate(360deg); }
+}
+
+@keyframes oracle-pulse-green {
+  0%, 100% { filter: drop-shadow(0 0 4px oklch(0.72 0.22 150 / 40%)); }
+  50% { filter: drop-shadow(0 0 12px oklch(0.72 0.22 150 / 70%)); }
+}
+
+@keyframes oracle-pulse-red {
+  0%, 100% { filter: drop-shadow(0 0 6px oklch(0.60 0.25 25 / 50%)); }
+  50% { filter: drop-shadow(0 0 18px oklch(0.60 0.25 25 / 80%)); }
+}
+
+/* ── Container ─────────────────────────────────────────────── */
+.oracle-review-container {
+  position: relative;
+  border: 1px solid var(--border);
+  border-radius: 12px;
+  padding: 1rem 1.25rem;
+  background: var(--card);
+  overflow: hidden;
+  transition: border-color 0.4s ease, box-shadow 0.4s ease;
+}
+
+/* Default gradient accent on the left border */
+.oracle-review-container::before {
+  content: "";
+  position: absolute;
+  left: 0;
+  top: 0;
+  bottom: 0;
+  width: 3px;
+  background: linear-gradient(
+    180deg,
+    oklch(0.72 0.18 280),
+    oklch(0.65 0.22 310),
+    oklch(0.58 0.20 340)
+  );
+  border-radius: 3px 0 0 3px;
+  transition: background 0.4s ease, box-shadow 0.4s ease;
+}
+
+/* ── Tier-based container border coloring ──────────────────── */
+.oracle-tier-green .oracle-review-container::before,
+.oracle-tier-green.oracle-review-container::before {
+  background: linear-gradient(180deg, oklch(0.72 0.22 150), oklch(0.62 0.20 160), oklch(0.72 0.22 150));
+  box-shadow: 0 0 6px oklch(0.72 0.22 150 / 30%);
+}
+
+.oracle-tier-yellow .oracle-review-container::before,
+.oracle-tier-yellow.oracle-review-container::before {
+  background: linear-gradient(180deg, oklch(0.75 0.18 80), oklch(0.68 0.16 70), oklch(0.75 0.18 80));
+  box-shadow: 0 0 6px oklch(0.75 0.18 80 / 30%);
+}
+
+.oracle-tier-red .oracle-review-container::before,
+.oracle-tier-red.oracle-review-container::before {
+  background: linear-gradient(180deg, oklch(0.60 0.25 25), oklch(0.50 0.22 15), oklch(0.60 0.25 25));
+  box-shadow: 0 0 8px oklch(0.60 0.25 25 / 40%);
+}
+
+.oracle-hidden {
+  opacity: 0;
+  max-height: 0;
+  padding: 0;
+  margin: 0;
+  border: none;
+  overflow: hidden;
+}
+
+.oracle-hidden::before {
+  display: none;
+}
+
+.oracle-visible {
+  animation: oracle-slide-in 0.6s ease-out forwards;
+}
+
+.oracle-loading {
+  opacity: 0.7;
+}
+
+/* ── Header ────────────────────────────────────────────────── */
+.oracle-header {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+  flex-wrap: wrap;
+}
+
+.oracle-icon {
+  font-size: 1.15rem;
+  line-height: 1;
+}
+
+.oracle-title {
+  font-size: 0.8rem;
+  font-weight: 600;
+  color: var(--foreground);
+  letter-spacing: 0.01em;
+}
+
+.oracle-badges {
+  display: flex;
+  gap: 0.35rem;
+  margin-left: auto;
+}
+
+/* ── Badges ────────────────────────────────────────────────── */
+.oracle-badge {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.2rem;
+  font-size: 0.6rem;
+  font-weight: 500;
+  padding: 0.15rem 0.45rem;
+  border-radius: 9999px;
+  background: var(--muted);
+  color: var(--muted-foreground);
+  white-space: nowrap;
+}
+
+.oracle-badge-model {
+  background: oklch(0.55 0.15 280 / 15%);
+  color: oklch(0.72 0.18 280);
+}
+
+.oracle-badge-duration {
+  background: oklch(0.55 0.1 200 / 15%);
+  color: oklch(0.72 0.12 200);
+}
+
+/* ═══════════════════════════════════════════════════════════════
+   SCORE GAUGE — Jauge Thermique Circulaire (Phase 9.1)
+   ═══════════════════════════════════════════════════════════════ */
+
+.oracle-gauge-section {
+  display: flex;
+  align-items: center;
+  gap: 0.75rem;
+  margin-top: 0.75rem;
+  padding: 0.5rem 0.75rem;
+  border-radius: 8px;
+  background: var(--muted);
+}
+
+/* ── Gauge container ───────────────────────────────────────── */
+.oracle-gauge {
+  position: relative;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  flex-shrink: 0;
+}
+
+.oracle-gauge-svg {
+  display: block;
+}
+
+/* Track (background circle) */
+.oracle-gauge-track {
+  color: var(--border);
+  opacity: 0.4;
+}
+
+/* Progress (filled arc) */
+.oracle-gauge-progress {
+  transition: stroke-dashoffset 1.2s cubic-bezier(0.4, 0, 0.2, 1);
+}
+
+/* Percentage text centered in gauge */
+.oracle-gauge-text {
+  position: absolute;
+  inset: 0;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  font-size: 0.85rem;
+  font-weight: 800;
+  font-family: var(--font-mono);
+  letter-spacing: -0.02em;
+}
+
+/* ── Gauge tier colors ─────────────────────────────────────── */
+.oracle-gauge-green .oracle-gauge-progress {
+  color: oklch(0.72 0.22 150);
+}
+.oracle-gauge-green .oracle-gauge-text {
+  color: oklch(0.72 0.22 150);
+}
+.oracle-gauge-green {
+  animation: oracle-pulse-green 3s ease-in-out infinite;
+}
+
+.oracle-gauge-yellow .oracle-gauge-progress {
+  color: oklch(0.75 0.18 80);
+}
+.oracle-gauge-yellow .oracle-gauge-text {
+  color: oklch(0.75 0.18 80);
+}
+
+.oracle-gauge-red .oracle-gauge-progress {
+  color: oklch(0.60 0.25 25);
+}
+.oracle-gauge-red .oracle-gauge-text {
+  color: oklch(0.60 0.25 25);
+}
+.oracle-gauge-red {
+  animation: oracle-pulse-red 2s ease-in-out infinite;
+}
+
+/* ── Score label ───────────────────────────────────────────── */
+.oracle-score-label {
+  display: flex;
+  align-items: center;
+  gap: 0.35rem;
+  font-size: 0.72rem;
+  font-weight: 600;
+}
+
+.oracle-score-label-green {
+  color: oklch(0.72 0.22 150);
+}
+
+.oracle-score-label-yellow {
+  color: oklch(0.75 0.18 80);
+}
+
+.oracle-score-label-red {
+  color: oklch(0.60 0.25 25);
+}
+
+/* ── Summary ───────────────────────────────────────────────── */
+.oracle-summary {
+  margin-top: 0.5rem;
+  font-size: 0.75rem;
+  color: var(--muted-foreground);
+  font-style: italic;
+  line-height: 1.5;
+}
+
+/* ── Markdown content ──────────────────────────────────────── */
+.oracle-content {
+  margin-top: 0.75rem;
+  font-size: 0.78rem;
+  line-height: 1.7;
+  color: var(--foreground);
+}
+
+.oracle-md-h2 {
+  font-size: 0.85rem;
+  font-weight: 700;
+  margin: 0.75rem 0 0.3rem;
+  color: var(--foreground);
+}
+
+.oracle-md-h3 {
+  font-size: 0.8rem;
+  font-weight: 600;
+  margin: 0.5rem 0 0.25rem;
+  color: var(--foreground);
+}
+
+.oracle-md-p {
+  margin: 0.3rem 0;
+}
+
+.oracle-md-ul,
+.oracle-md-ol {
+  padding-left: 1.25rem;
+  margin: 0.25rem 0;
+}
+
+.oracle-md-li {
+  margin: 0.15rem 0;
+}
+
+.oracle-md-code-inline {
+  font-family: var(--font-mono);
+  font-size: 0.72rem;
+  padding: 0.1rem 0.35rem;
+  border-radius: 4px;
+  background: var(--muted);
+  color: var(--primary);
+}
+
+.oracle-md-pre {
+  margin: 0.5rem 0;
+  border-radius: 6px;
+  overflow-x: auto;
+  background: var(--muted);
+  padding: 0.5rem 0.75rem;
+}
+
+.oracle-md-code-block {
+  font-family: var(--font-mono);
+  font-size: 0.7rem;
+  line-height: 1.5;
+}
+
+.oracle-md-strong {
+  font-weight: 600;
+  color: var(--foreground);
+}
+
+/* ── Footer ────────────────────────────────────────────────── */
+.oracle-footer {
+  margin-top: 0.75rem;
+  padding-top: 0.5rem;
+  border-top: 1px solid var(--border);
+  font-size: 0.6rem;
+  color: var(--muted-foreground);
+  opacity: 0.7;
+}
+
+/* ── Spinner ───────────────────────────────────────────────── */
+.oracle-spinner {
+  display: inline-block;
+  width: 14px;
+  height: 14px;
+  border: 2px solid var(--muted);
+  border-top-color: oklch(0.72 0.18 280);
+  border-radius: 50%;
+  animation: oracle-spinner 0.8s linear infinite;
+  margin-left: 0.5rem;
+}
+
+/* ── Theme-specific enhancements ───────────────────────────── */
+[data-theme="glass"] .oracle-review-container {
+  backdrop-filter: blur(16px) saturate(180%);
+  -webkit-backdrop-filter: blur(16px) saturate(180%);
+  background: oklch(0.2 0.02 260 / 60%);
+  border-color: oklch(0.5 0.03 260 / 20%);
+}
+
+[data-theme="glass"] .oracle-gauge-section {
+  background: oklch(0.15 0.02 260 / 50%);
+}
+
+[data-theme="cyberpunk"] .oracle-review-container {
+  border-color: oklch(0.72 0.25 310 / 30%);
+  box-shadow: 0 0 12px oklch(0.72 0.25 310 / 10%),
+              inset 0 0 20px oklch(0.72 0.25 310 / 3%);
+}
+
+[data-theme="cyberpunk"] .oracle-review-container::before {
+  background: linear-gradient(
+    180deg,
+    oklch(0.72 0.25 310),
+    oklch(0.65 0.30 280),
+    oklch(0.72 0.25 310)
+  );
+  box-shadow: 0 0 8px oklch(0.72 0.25 310 / 50%);
+}
+
+[data-theme="cyberpunk"] .oracle-gauge-section {
+  background: oklch(0.1 0.03 310 / 40%);
+  border: 1px solid oklch(0.72 0.25 310 / 15%);
+}
+
+[data-theme="scroll"] .oracle-review-container {
+  border-color: oklch(0.55 0.05 60 / 30%);
+  background: oklch(0.97 0.01 80 / 80%);
+}
+
+[data-theme="scroll"] .oracle-review-container::before {
+  background: linear-gradient(
+    180deg,
+    oklch(0.45 0.08 60),
+    oklch(0.55 0.10 40),
+    oklch(0.45 0.08 60)
+  );
+}
+
+[data-theme="scroll"] .oracle-gauge-section {
+  background: oklch(0.93 0.02 80 / 80%);
+}
+
+/* Tier overrides for cyberpunk (neon glow on tier borders) */
+[data-theme="cyberpunk"] .oracle-tier-green.oracle-review-container {
+  box-shadow: 0 0 12px oklch(0.72 0.22 150 / 15%),
+              inset 0 0 20px oklch(0.72 0.22 150 / 3%);
+}
+
+[data-theme="cyberpunk"] .oracle-tier-red.oracle-review-container {
+  box-shadow: 0 0 16px oklch(0.60 0.25 25 / 20%),
+              inset 0 0 20px oklch(0.60 0.25 25 / 5%);
+}
+
+/* ═══════════════════════════════════════════════════════════════
+   SCORE SPARKLINE — Électrocardiogramme du Projet (Phase 9.2)
+   ═══════════════════════════════════════════════════════════════ */
+
+.sparkline-container {
+  display: flex;
+  align-items: center;
+  gap: 0.75rem;
+  padding: 0.5rem 0.85rem;
+  border-radius: 10px;
+  border: 1px solid var(--border);
+  background: var(--card);
+  animation: fade-in-up 0.5s ease-out forwards;
+}
+
+.sparkline-ecg-icon {
+  font-size: 1.1rem;
+  line-height: 1;
+  flex-shrink: 0;
+}
+
+/* ── Chart area ────────────────────────────────────────────── */
+.sparkline-chart {
+  flex: 1;
+  min-width: 120px;
+  max-width: 280px;
+  height: 48px;
+}
+
+/* Override Recharts default styles for integration */
+.sparkline-chart .recharts-surface {
+  overflow: visible;
+}
+
+/* ── Metrics (right side) ──────────────────────────────────── */
+.sparkline-metrics {
+  display: flex;
+  align-items: center;
+  gap: 0.6rem;
+  flex-shrink: 0;
+}
+
+.sparkline-average {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 0;
+}
+
+.sparkline-average-value {
+  font-family: var(--font-mono);
+  font-size: 0.85rem;
+  font-weight: 800;
+  letter-spacing: -0.02em;
+  color: var(--foreground);
+}
+
+.sparkline-average-label {
+  font-size: 0.55rem;
+  font-weight: 500;
+  color: var(--muted-foreground);
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+}
+
+/* ── Trend indicator ───────────────────────────────────────── */
+.sparkline-trend {
+  display: flex;
+  align-items: center;
+  gap: 0.2rem;
+  font-size: 0.6rem;
+  font-weight: 600;
+  padding: 0.15rem 0.45rem;
+  border-radius: 9999px;
+}
+
+.sparkline-trend-icon {
+  font-size: 0.75rem;
+  font-weight: 800;
+}
+
+.sparkline-trend-label {
+  display: none;
+}
+
+@media (min-width: 768px) {
+  .sparkline-trend-label {
+    display: inline;
+  }
+}
+
+.sparkline-trend-rising {
+  background: oklch(0.55 0.18 150 / 15%);
+  color: oklch(0.72 0.22 150);
+}
+
+.sparkline-trend-stable {
+  background: oklch(0.55 0.1 200 / 15%);
+  color: oklch(0.72 0.12 200);
+}
+
+.sparkline-trend-falling {
+  background: oklch(0.55 0.18 25 / 15%);
+  color: oklch(0.60 0.25 25);
+}
+
+/* ── Count badge ───────────────────────────────────────────── */
+.sparkline-count {
+  font-size: 0.55rem;
+  color: var(--muted-foreground);
+  white-space: nowrap;
+}
+
+/* ── Tooltip ───────────────────────────────────────────────── */
+.sparkline-tooltip {
+  background: var(--card);
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  padding: 0.35rem 0.55rem;
+  box-shadow: 0 4px 12px oklch(0 0 0 / 20%);
+}
+
+.sparkline-tooltip-score {
+  font-family: var(--font-mono);
+  font-size: 0.85rem;
+  font-weight: 800;
+}
+
+.sparkline-tooltip-meta {
+  display: flex;
+  flex-direction: column;
+  gap: 0.1rem;
+  font-size: 0.55rem;
+  color: var(--muted-foreground);
+}
+
+/* ── Theme-specific sparkline ──────────────────────────────── */
+[data-theme="glass"] .sparkline-container {
+  backdrop-filter: blur(16px) saturate(180%);
+  -webkit-backdrop-filter: blur(16px) saturate(180%);
+  background: oklch(0.2 0.02 260 / 50%);
+  border-color: oklch(0.5 0.03 260 / 15%);
+}
+
+[data-theme="cyberpunk"] .sparkline-container {
+  border-color: oklch(0.72 0.25 310 / 20%);
+  box-shadow: 0 0 8px oklch(0.72 0.25 310 / 8%);
+}
+
+[data-theme="scroll"] .sparkline-container {
+  border-color: oklch(0.55 0.05 60 / 25%);
+  background: oklch(0.97 0.01 80 / 80%);
+}

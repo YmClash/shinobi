@@ -49,6 +49,18 @@ pub struct Config {
 
     /// Nombre de dimensions d'embedding (Matryoshka). Défaut: 256.
     pub embedding_dimensions: usize,
+
+    /// URL du serveur Ollama Docker (LLM local). Défaut: "http://localhost:11435".
+    pub ollama_url: String,
+
+    /// Modèle Ollama à utiliser. Défaut: "granite3.1-dense:2b".
+    pub ollama_model: String,
+
+    /// Activer/désactiver le consumer Oracle. Défaut: true.
+    pub oracle_consumer_enabled: bool,
+
+    /// Consumer group Kafka pour l'agent Oracle. Défaut: "shinobi-oracle-reviewer".
+    pub oracle_consumer_group: String,
 }
 
 impl Config {
@@ -92,7 +104,15 @@ impl Config {
                 .ok()
                 .and_then(|d| d.parse().ok())
                 .unwrap_or(256),
+            ollama_url: env::var("OLLAMA_URL")
+                .unwrap_or_else(|_| "http://localhost:11435".to_string()),
+            ollama_model: env::var("OLLAMA_MODEL")
+                .unwrap_or_else(|_| "granite3-dense:2b".to_string()),
+            oracle_consumer_enabled: env::var("ORACLE_CONSUMER_ENABLED")
+                .map(|v| v != "false" && v != "0")
+                .unwrap_or(true),
+            oracle_consumer_group: env::var("ORACLE_CONSUMER_GROUP")
+                .unwrap_or_else(|_| "shinobi-oracle-reviewer".to_string()),
         }
     }
 }
-

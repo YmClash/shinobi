@@ -1,0 +1,33 @@
+# ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+# SHINOBI — Configuration Prometheus
+# ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+#
+# Scrape Taijutsu /metrics (axum-prometheus) toutes les 15s.
+# Les métriques custom (LLM, IPFS, Kafka) sont également
+# collectées via le même endpoint.
+
+global:
+  scrape_interval: 15s
+  evaluation_interval: 15s
+
+  external_labels:
+    cluster: "shinobi-prod"
+    environment: "production"
+
+scrape_configs:
+  # ── Taijutsu Backend (Axum + métriques custom) ──
+  - job_name: "taijutsu"
+    metrics_path: "/metrics"
+    static_configs:
+      - targets: ["taijutsu:3000"]
+        labels:
+          service: "taijutsu"
+          component: "backend"
+
+  # ── Prometheus self-monitoring ──
+  - job_name: "prometheus"
+    static_configs:
+      - targets: ["localhost:9090"]
+        labels:
+          service: "prometheus"
+          component: "monitoring"

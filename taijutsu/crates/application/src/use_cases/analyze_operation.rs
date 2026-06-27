@@ -36,6 +36,8 @@ use domain::ports::embedding_service::EmbeddingService;
 
 use tensai::{Chunker, SemanticChunk};
 
+use super::resolve_ipfs::resolve_ipfs_files;
+
 /// Rapport d'analyse sémantique d'une opération VCS.
 ///
 /// Contient tous les fragments de code extraits par Tree-sitter,
@@ -149,36 +151,29 @@ impl AnalyzeOperationUseCase {
             }
         };
 
-        // 2. Télécharger le blob JSON depuis IPFS (Genjutsu).
-        let blob = self.content_store.retrieve(&ipfs_cid).await?;
+        // 2. Résoudre les fichiers IPFS (dual-format via Type Tag, Phase 8.1).
+        let resolved = resolve_ipfs_files(self.content_store.as_ref(), &ipfs_cid).await?;
 
         info!(
             operation_id = %operation.id,
             ipfs_cid = %ipfs_cid,
-            blob_size = blob.len(),
-            "📥 Tensai — Blob IPFS récupéré"
+            file_count = resolved.len(),
+            "📥 Tensai — Fichiers IPFS résolus"
         );
 
-        // 3. Décoder le blob JSON → liste de fichiers.
-        let files: Vec<FileEntry> = serde_json::from_slice(&blob).map_err(|e| {
-            DomainError::Internal(format!(
-                "Tensai — Décodage JSON du blob IPFS échoué: {e}"
-            ))
-        })?;
-
-        if files.is_empty() {
+        if resolved.is_empty() {
             return Ok(AnalysisOutcome::Skipped {
                 operation_id: operation.id,
-                reason: "Blob IPFS vide (aucun fichier)".to_string(),
+                reason: "IPFS vide (aucun fichier)".to_string(),
             });
         }
 
-        // 4. Filtrer et analyser les fichiers par langage.
+        // 3. Filtrer et analyser les fichiers par langage.
         let mut all_chunks: Vec<SemanticChunk> = Vec::new();
         let mut analyzed_files = 0usize;
         let mut skipped_files = 0usize;
 
-        for file in &files {
+        for file in &resolved {
             // Détecter le langage à partir de l'extension.
             let language = match detect_language(&file.path) {
                 Some(lang) => lang,
@@ -194,21 +189,8 @@ impl AnalyzeOperationUseCase {
                 continue;
             }
 
-            // Décoder le contenu base64 → source UTF-8.
-            let decoded = match base64_decode(&file.content_b64) {
-                Ok(bytes) => bytes,
-                Err(e) => {
-                    warn!(
-                        path = %file.path,
-                        error = %e,
-                        "⚠️ Tensai — Décodage base64 échoué, skip fichier"
-                    );
-                    skipped_files += 1;
-                    continue;
-                }
-            };
-
-            let source = match String::from_utf8(decoded) {
+            // Convertir les bytes bruts en source UTF-8.
+            let source = match String::from_utf8(file.content.clone()) {
                 Ok(s) => s,
                 Err(e) => {
                     warn!(
@@ -221,7 +203,7 @@ impl AnalyzeOperationUseCase {
                 }
             };
 
-            // 5. Découper le fichier via Tree-sitter (Tensai).
+            // 4. Découper le fichier via Tree-sitter (Tensai).
             match self.chunker.chunk(&source, &file.path, language).await {
                 Ok(chunks) => {
                     info!(
@@ -382,21 +364,7 @@ impl AnalyzeOperationUseCase {
     }
 }
 
-// ── Types internes ────────────────────────────────────────────────────
-
-/// Entrée de fichier dans le blob JSON IPFS.
-///
-/// Correspond au format produit par `CreateOperationUseCase::sync_to_ipfs()`.
-#[derive(Debug, serde::Deserialize)]
-struct FileEntry {
-    /// Chemin du fichier (ex: "src/main.rs").
-    path: String,
-    /// Contenu encodé en base64 (RFC 4648).
-    content_b64: String,
-    /// Taille originale en bytes.
-    #[allow(dead_code)]
-    size: usize,
-}
+// ── Helpers internes ──────────────────────────────────────────────────
 
 /// Détecte le langage de programmation à partir de l'extension du fichier.
 ///
@@ -405,7 +373,10 @@ fn detect_language(path: &str) -> Option<&'static str> {
     let ext = path.rsplit('.').next()?;
     match ext {
         "rs" => Some("rust"),
-        // Phase 7 : ajouter "ts" => "typescript", "py" => "python", etc.
+        "ts" => Some("typescript"),
+        "tsx" => Some("tsx"),
+        "css" => Some("css"),
+        "py" => Some("python"),
         _ => None,
     }
 }
@@ -462,36 +433,4 @@ fn log_analysis_report(report: &AnalysisReport) {
             chunk.name,
         );
     }
-}
-
-// ── Base64 décodeur RFC 4648 (sans dépendance externe) ─────────────────
-
-/// Décode une chaîne base64 RFC 4648 en bytes.
-fn base64_decode(input: &str) -> Result<Vec<u8>, String> {
-    let input = input.trim_end_matches('=');
-    let mut output = Vec::with_capacity(input.len() * 3 / 4);
-
-    let mut buf: u32 = 0;
-    let mut bits: u32 = 0;
-
-    for ch in input.chars() {
-        let val = match ch {
-            'A'..='Z' => (ch as u32) - ('A' as u32),
-            'a'..='z' => (ch as u32) - ('a' as u32) + 26,
-            '0'..='9' => (ch as u32) - ('0' as u32) + 52,
-            '+' => 62,
-            '/' => 63,
-            _ => return Err(format!("Caractère base64 invalide: {ch}")),
-        };
-
-        buf = (buf << 6) | val;
-        bits += 6;
-
-        if bits >= 8 {
-            bits -= 8;
-            output.push(((buf >> bits) & 0xFF) as u8);
-        }
-    }
-
-    Ok(output)
 }

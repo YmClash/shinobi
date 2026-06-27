@@ -1,0 +1,153 @@
+/* ═══════════════════════════════════════════════════════════════
+   SHINOBI — Makimono Theme System
+   4 thèmes switchables via data-theme attribute
+   ═══════════════════════════════════════════════════════════════ */
+
+/* ── Theme: Ninja (default) ─────────────────────────────────── */
+/* Noir profond, accents rouge sang, minimaliste */
+[data-theme="ninja"],
+:root {
+  --background: oklch(0.11 0.005 285);
+  --foreground: oklch(0.92 0.01 80);
+  --card: oklch(0.16 0.005 285);
+  --card-foreground: oklch(0.92 0.01 80);
+  --popover: oklch(0.16 0.005 285);
+  --popover-foreground: oklch(0.92 0.01 80);
+  --primary: oklch(0.55 0.22 25);
+  --primary-foreground: oklch(0.98 0 0);
+  --secondary: oklch(0.22 0.01 285);
+  --secondary-foreground: oklch(0.88 0.01 80);
+  --muted: oklch(0.2 0.005 285);
+  --muted-foreground: oklch(0.65 0.01 80);
+  --accent: oklch(0.55 0.22 25);
+  --accent-foreground: oklch(0.98 0 0);
+  --destructive: oklch(0.55 0.22 25);
+  --border: oklch(0.25 0.01 285);
+  --input: oklch(0.22 0.01 285);
+  --ring: oklch(0.55 0.22 25);
+  --radius: 0.5rem;
+  --chart-1: oklch(0.55 0.22 25);
+  --chart-2: oklch(0.65 0.18 45);
+  --chart-3: oklch(0.45 0.15 15);
+  --chart-4: oklch(0.75 0.12 60);
+  --chart-5: oklch(0.35 0.2 10);
+  --sidebar: oklch(0.13 0.005 285);
+  --sidebar-foreground: oklch(0.88 0.01 80);
+  --sidebar-primary: oklch(0.55 0.22 25);
+  --sidebar-primary-foreground: oklch(0.98 0 0);
+  --sidebar-accent: oklch(0.2 0.01 285);
+  --sidebar-accent-foreground: oklch(0.88 0.01 80);
+  --sidebar-border: oklch(0.25 0.01 285);
+  --sidebar-ring: oklch(0.55 0.22 25);
+}
+
+/* ── Theme: Cyberpunk ───────────────────────────────────────── */
+/* Néons violet/cyan/magenta sur fond très sombre */
+[data-theme="cyberpunk"] {
+  --background: oklch(0.08 0.02 290);
+  --foreground: oklch(0.92 0.03 200);
+  --card: oklch(0.13 0.025 290);
+  --card-foreground: oklch(0.92 0.03 200);
+  --popover: oklch(0.13 0.025 290);
+  --popover-foreground: oklch(0.92 0.03 200);
+  --primary: oklch(0.72 0.25 310);
+  --primary-foreground: oklch(0.08 0.02 290);
+  --secondary: oklch(0.18 0.03 290);
+  --secondary-foreground: oklch(0.85 0.08 200);
+  --muted: oklch(0.18 0.025 290);
+  --muted-foreground: oklch(0.6 0.05 270);
+  --accent: oklch(0.75 0.18 195);
+  --accent-foreground: oklch(0.08 0.02 290);
+  --destructive: oklch(0.6 0.25 350);
+  --border: oklch(0.25 0.06 290);
+  --input: oklch(0.18 0.03 290);
+  --ring: oklch(0.72 0.25 310);
+  --radius: 0.375rem;
+  --chart-1: oklch(0.72 0.25 310);
+  --chart-2: oklch(0.75 0.18 195);
+  --chart-3: oklch(0.65 0.22 330);
+  --chart-4: oklch(0.8 0.15 180);
+  --chart-5: oklch(0.55 0.2 270);
+  --sidebar: oklch(0.1 0.025 290);
+  --sidebar-foreground: oklch(0.85 0.05 200);
+  --sidebar-primary: oklch(0.72 0.25 310);
+  --sidebar-primary-foreground: oklch(0.98 0 0);
+  --sidebar-accent: oklch(0.18 0.03 290);
+  --sidebar-accent-foreground: oklch(0.85 0.05 200);
+  --sidebar-border: oklch(0.25 0.06 290);
+  --sidebar-ring: oklch(0.72 0.25 310);
+}
+
+/* ── Theme: Glassmorphism ───────────────────────────────────── */
+/* Surfaces floues semi-transparentes, dégradés doux */
+[data-theme="glass"] {
+  --background: oklch(0.18 0.03 260);
+  --foreground: oklch(0.95 0.01 260);
+  --card: oklch(0.25 0.02 260 / 60%);
+  --card-foreground: oklch(0.95 0.01 260);
+  --popover: oklch(0.22 0.025 260 / 80%);
+  --popover-foreground: oklch(0.95 0.01 260);
+  --primary: oklch(0.7 0.15 260);
+  --primary-foreground: oklch(0.98 0 0);
+  --secondary: oklch(0.3 0.02 260 / 50%);
+  --secondary-foreground: oklch(0.9 0.01 260);
+  --muted: oklch(0.28 0.02 260 / 40%);
+  --muted-foreground: oklch(0.7 0.03 260);
+  --accent: oklch(0.65 0.18 280);
+  --accent-foreground: oklch(0.98 0 0);
+  --destructive: oklch(0.6 0.22 25);
+  --border: oklch(0.5 0.03 260 / 25%);
+  --input: oklch(0.3 0.02 260 / 40%);
+  --ring: oklch(0.7 0.15 260);
+  --radius: 0.75rem;
+  --chart-1: oklch(0.7 0.15 260);
+  --chart-2: oklch(0.65 0.18 280);
+  --chart-3: oklch(0.75 0.12 240);
+  --chart-4: oklch(0.6 0.2 300);
+  --chart-5: oklch(0.55 0.15 220);
+  --sidebar: oklch(0.15 0.03 260 / 70%);
+  --sidebar-foreground: oklch(0.9 0.01 260);
+  --sidebar-primary: oklch(0.7 0.15 260);
+  --sidebar-primary-foreground: oklch(0.98 0 0);
+  --sidebar-accent: oklch(0.28 0.02 260 / 50%);
+  --sidebar-accent-foreground: oklch(0.9 0.01 260);
+  --sidebar-border: oklch(0.5 0.03 260 / 20%);
+  --sidebar-ring: oklch(0.7 0.15 260);
+}
+
+/* ── Theme: Parchemin (Scroll) ──────────────────────────────── */
+/* Tons sépia/crème, textures papier, accents encre sombre */
+[data-theme="scroll"] {
+  --background: oklch(0.92 0.025 80);
+  --foreground: oklch(0.25 0.03 50);
+  --card: oklch(0.95 0.02 75);
+  --card-foreground: oklch(0.25 0.03 50);
+  --popover: oklch(0.95 0.02 75);
+  --popover-foreground: oklch(0.25 0.03 50);
+  --primary: oklch(0.4 0.08 45);
+  --primary-foreground: oklch(0.95 0.02 75);
+  --secondary: oklch(0.88 0.03 75);
+  --secondary-foreground: oklch(0.3 0.04 50);
+  --muted: oklch(0.88 0.025 80);
+  --muted-foreground: oklch(0.5 0.04 55);
+  --accent: oklch(0.55 0.12 40);
+  --accent-foreground: oklch(0.95 0.02 75);
+  --destructive: oklch(0.5 0.18 25);
+  --border: oklch(0.8 0.04 70);
+  --input: oklch(0.88 0.025 75);
+  --ring: oklch(0.4 0.08 45);
+  --radius: 0.25rem;
+  --chart-1: oklch(0.4 0.08 45);
+  --chart-2: oklch(0.55 0.12 40);
+  --chart-3: oklch(0.65 0.1 55);
+  --chart-4: oklch(0.5 0.06 35);
+  --chart-5: oklch(0.75 0.08 65);
+  --sidebar: oklch(0.9 0.03 78);
+  --sidebar-foreground: oklch(0.3 0.04 50);
+  --sidebar-primary: oklch(0.4 0.08 45);
+  --sidebar-primary-foreground: oklch(0.95 0.02 75);
+  --sidebar-accent: oklch(0.85 0.03 75);
+  --sidebar-accent-foreground: oklch(0.3 0.04 50);
+  --sidebar-border: oklch(0.8 0.04 70);
+  --sidebar-ring: oklch(0.4 0.08 45);
+}

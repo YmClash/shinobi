@@ -41,6 +41,9 @@ anyhow      = { workspace = true }
 rdkafka = { workspace = true }
 tokio-util = { workspace = true }
 
+# — Métriques Prometheus (instrumentation custom) —
+metrics = { workspace = true }
+
 # — Stockage distribué (Genjutsu / IPFS) —
 reqwest = { workspace = true }
 

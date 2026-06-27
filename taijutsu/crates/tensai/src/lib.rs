@@ -14,6 +14,10 @@
 //! Chunker Rust opérationnel. Langages supplémentaires en phases futures.
 
 pub mod rust_chunker;
+pub mod typescript_chunker;
+pub mod css_chunker;
+pub mod python_chunker;
+pub mod multi_chunker;
 use serde::{Deserialize, Serialize};
 
 /// Fragment sémantique de code source.

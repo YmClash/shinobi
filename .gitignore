@@ -120,9 +120,23 @@ docker-compose.override.yml
 makimono/node_modules/
 makimono/.next/
 makimono/out/
+makimono/build/
 makimono/.bun/
 makimono/dist/
 makimono/.turbo/
+makimono/.swc/
+makimono/coverage/
+makimono/.vercel/
+# TypeScript / Build output
+makimono/*.tsbuildinfo
+makimono/**/*.js
+makimono/**/*.js.map
+makimono/**/*.d.ts
+makimono/**/*.d.ts.map
+!makimono/eslint.config.mjs
+!makimono/next.config.ts
+!makimono/tailwind.config.ts
+!makimono/postcss.config.mjs
 
 # Dojutsu (Prometheus / Grafana data)
 dojutsu/data/
@@ -132,11 +146,14 @@ dojutsu/grafana/data/
 nen/data/
 nen/logs/
 
-# Codex
+# Codex & Documentation locale
 CODEX_BOARD.md
+Docs/
 
 # ── Workspace JJ ────────────────────────────
 taijutsu/workspace
 
 # -- Embeddings model --
 taijutsu/.fastembed_cache
+makimono/AGENTS.md
+makimono/CLAUDE.md
