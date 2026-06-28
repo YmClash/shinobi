@@ -13,6 +13,7 @@ use uuid::Uuid;
 use application::use_cases::create_operation::CreateOperationCommand;
 use application::use_cases::list_operations::ListFilter;
 use application::use_cases::search_chunks::ChunkSearchFilter;
+use domain::entities::actor::DEFAULT_REPO_ID;
 use domain::entities::operation::Operation;
 use domain::ports::chunk_repository::{SimilarChunk, StoredChunk};
 use domain::ports::review_repository::OperationReview;
@@ -34,6 +35,10 @@ pub struct HealthResponse {
 #[derive(Debug, Deserialize)]
 pub struct CreateOperationBody {
     pub author_id: Uuid,
+    /// Identifiant du dépôt cible (Phase 10B — multi-tenant).
+    /// Défaut: DEFAULT_REPO_ID pour la rétro-compatibilité MVP.
+    #[serde(default)]
+    pub repository_id: Option<Uuid>,
     pub description: String,
     #[serde(default)]
     pub parent_ids: Vec<Uuid>,
@@ -56,6 +61,9 @@ pub struct FileEntryBody {
 pub struct ListOperationsQuery {
     pub limit: Option<usize>,
     pub author_id: Option<Uuid>,
+    /// Identifiant du dépôt (Phase 10B — multi-tenant).
+    /// Défaut: DEFAULT_REPO_ID pour la rétro-compatibilité MVP.
+    pub repository_id: Option<Uuid>,
 }
 
 /// Paramètres de query pour GET /api/v1/operations/:id/chunks.
@@ -93,6 +101,8 @@ fn default_threshold() -> f32 { 0.5 }
 pub struct OperationJson {
     pub id: Uuid,
     pub author_id: Uuid,
+    /// Identifiant du dépôt multi-tenant (Phase 10B).
+    pub repository_id: Uuid,
     pub content_id: String,
     /// CID IPFS distribué — null si non synchronisé (Genjutsu).
     pub ipfs_content_id: Option<String>,
@@ -106,6 +116,7 @@ impl From<Operation> for OperationJson {
         Self {
             id: op.id,
             author_id: op.author_id,
+            repository_id: op.repository_id,
             content_id: op.content_id.into_inner(),
             ipfs_content_id: op.ipfs_content_id.map(|cid| cid.into_inner()),
             description: op.description,
@@ -297,6 +308,7 @@ async fn create_operation_handler(
 
     let cmd = CreateOperationCommand {
         author_id: body.author_id,
+        repository_id: body.repository_id.unwrap_or(DEFAULT_REPO_ID),
         description: body.description,
         parent_ids: body.parent_ids,
         files,
@@ -333,6 +345,7 @@ async fn list_operations_handler(
         ListFilter::ByAuthor { author_id }
     } else {
         ListFilter::Recent {
+            repo_id: params.repository_id.unwrap_or(DEFAULT_REPO_ID),
             limit: params.limit.unwrap_or(50),
         }
     };

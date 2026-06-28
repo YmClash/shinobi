@@ -33,7 +33,7 @@ impl OperationRepository for MockOperationRepo {
     async fn find_by_id(&self, _id: &Uuid) -> Result<Option<Operation>, DomainError> {
         Ok(self.operation.clone())
     }
-    async fn list_recent(&self, _limit: usize) -> Result<Vec<Operation>, DomainError> {
+    async fn list_recent(&self, _repo_id: &Uuid, _limit: usize) -> Result<Vec<Operation>, DomainError> {
         Ok(vec![])
     }
     async fn find_by_author(&self, _author_id: &Uuid) -> Result<Vec<Operation>, DomainError> {
@@ -47,21 +47,22 @@ struct MockVcsEngine {
 
 #[async_trait]
 impl VcsEngine for MockVcsEngine {
-    async fn init_workspace(&self, _name: &str) -> Result<(), DomainError> {
+    async fn init_workspace(&self, _repo_id: &Uuid) -> Result<(), DomainError> {
         Ok(())
     }
     async fn create_operation(
         &self,
+        _repo_id: &Uuid,
         _desc: &str,
         _parent_ids: &[String],
         _files: &[(String, Vec<u8>)],
     ) -> Result<ContentId, DomainError> {
         Ok(ContentId::new("mock".to_string()))
     }
-    async fn resolve_head(&self) -> Result<Option<ContentId>, DomainError> {
+    async fn resolve_head(&self, _repo_id: &Uuid) -> Result<Option<ContentId>, DomainError> {
         Ok(None)
     }
-    async fn diff_since(&self, _cid: &ContentId) -> Result<Vec<String>, DomainError> {
+    async fn diff_since(&self, _repo_id: &Uuid, _cid: &ContentId) -> Result<Vec<String>, DomainError> {
         Ok(self.changed_files.clone())
     }
 }
@@ -160,6 +161,7 @@ fn make_operation(with_ipfs: bool, with_parent: bool) -> Operation {
         vec![]
     };
     Operation::new(
+        Uuid::new_v4(),
         Uuid::new_v4(),
         ContentId::new("test-cid".to_string()),
         ipfs_cid,

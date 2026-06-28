@@ -50,12 +50,13 @@ mod tests {
 
     #[async_trait]
     impl VcsEngine for MockVcsEngine {
-        async fn init_workspace(&self, _path: &str) -> Result<(), DomainError> {
+        async fn init_workspace(&self, _repo_id: &Uuid) -> Result<(), DomainError> {
             Ok(())
         }
 
         async fn create_operation(
             &self,
+            _repo_id: &Uuid,
             _description: &str,
             _parent_ids: &[String],
             _files: &[(String, Vec<u8>)],
@@ -67,11 +68,11 @@ mod tests {
             }
         }
 
-        async fn resolve_head(&self) -> Result<Option<ContentId>, DomainError> {
+        async fn resolve_head(&self, _repo_id: &Uuid) -> Result<Option<ContentId>, DomainError> {
             Ok(None)
         }
 
-        async fn diff_since(&self, _cid: &ContentId) -> Result<Vec<String>, DomainError> {
+        async fn diff_since(&self, _repo_id: &Uuid, _cid: &ContentId) -> Result<Vec<String>, DomainError> {
             Ok(vec![])
         }
     }
@@ -101,7 +102,7 @@ mod tests {
             Ok(None)
         }
 
-        async fn list_recent(&self, _limit: usize) -> Result<Vec<Operation>, DomainError> {
+        async fn list_recent(&self, _repo_id: &Uuid, _limit: usize) -> Result<Vec<Operation>, DomainError> {
             Ok(vec![])
         }
 
@@ -208,6 +209,7 @@ mod tests {
     fn test_command() -> CreateOperationCommand {
         CreateOperationCommand {
             author_id: Uuid::new_v4(),
+            repository_id: Uuid::new_v4(),
             description: "Test operation".to_string(),
             parent_ids: vec![],
             files: vec![],
@@ -217,6 +219,7 @@ mod tests {
     fn test_command_with_files() -> CreateOperationCommand {
         CreateOperationCommand {
             author_id: Uuid::new_v4(),
+            repository_id: Uuid::new_v4(),
             description: "Operation with files".to_string(),
             parent_ids: vec![],
             files: vec![

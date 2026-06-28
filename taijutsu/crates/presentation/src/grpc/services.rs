@@ -11,6 +11,7 @@ use uuid::Uuid;
 use application::use_cases::create_operation::CreateOperationCommand;
 use application::use_cases::list_operations::ListFilter;
 use application::use_cases::search_chunks::ChunkSearchFilter;
+use domain::entities::actor::DEFAULT_REPO_ID;
 
 use crate::errors::domain_error_to_status;
 use crate::state::SharedState;
@@ -131,6 +132,7 @@ impl ShinobiService for ShinobiServiceImpl {
 
         let cmd = CreateOperationCommand {
             author_id,
+            repository_id: DEFAULT_REPO_ID,
             description: req.description,
             parent_ids,
             files: vec![],
@@ -179,7 +181,7 @@ impl ShinobiService for ShinobiServiceImpl {
 
         let filter = if req.author_id.is_empty() {
             let limit = if req.limit > 0 { req.limit as usize } else { 50 };
-            ListFilter::Recent { limit }
+            ListFilter::Recent { repo_id: DEFAULT_REPO_ID, limit }
         } else {
             let author_id = req
                 .author_id

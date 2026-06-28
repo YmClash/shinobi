@@ -41,6 +41,7 @@ use infrastructure::persistence::postgres_chunk_repo::PostgresChunkRepository;
 use infrastructure::persistence::postgres_repo::PostgresOperationRepository;
 use infrastructure::persistence::postgres_review_repo::PostgresReviewRepository;
 use infrastructure::vcs::jujutsu_engine::JujutsuEngine;
+use domain::entities::actor::DEFAULT_REPO_ID;
 use domain::ports::vcs_engine::VcsEngine as _; // Trait import — rend init_workspace() visible
 use domain::ports::repository::OperationRepository as _; // Trait import — rend list_recent() visible (backfill)
 use presentation::grpc::services::proto::shinobi_service_server::ShinobiServiceServer;
@@ -105,12 +106,13 @@ async fn main() -> anyhow::Result<()> {
     info!("✅ Redis connecté");
 
     // VCS Engine (Anti-Corruption Layer) — auto-init au démarrage
-    // Phase Makimono : évoluer vers un registre dynamique multi-workspace (multi-tenant).
+    // Phase 10B : init avec DEFAULT_REPO_ID (UUID fantôme pour rétro-compat MVP).
     let vcs_engine = JujutsuEngine::new(&config.vcs_workspace_root);
-    vcs_engine.init_workspace("default").await?;
+    vcs_engine.init_workspace(&DEFAULT_REPO_ID).await?;
     info!(
         workspace = %config.vcs_workspace_root,
-        "✅ VCS Engine initialisé (jj-lib ACL — workspace 'default')"
+        repo_id = %DEFAULT_REPO_ID,
+        "✅ VCS Engine initialisé (jj-lib ACL — DEFAULT_REPO_ID)"
     );
 
     // Nen: Kafka Event Publisher (optionnel — graceful degradation)
@@ -529,8 +531,8 @@ async fn run_backfill(
         }
     };
 
-    // Charger toutes les opérations existantes.
-    let operations = repo.list_recent(10_000).await?;
+    // Charger toutes les opérations existantes du dépôt par défaut.
+    let operations = repo.list_recent(&DEFAULT_REPO_ID, 10_000).await?;
     let total = operations.len();
 
     info!(total_operations = total, "Opérations chargées");

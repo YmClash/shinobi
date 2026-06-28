@@ -12,8 +12,8 @@ use domain::ports::repository::OperationRepository;
 /// Filtre de recherche pour les opérations.
 #[derive(Debug)]
 pub enum ListFilter {
-    /// Les N opérations les plus récentes.
-    Recent { limit: usize },
+    /// Les N opérations les plus récentes d'un dépôt (Phase 10B — multi-tenant).
+    Recent { repo_id: Uuid, limit: usize },
     /// Toutes les opérations d'un auteur donné.
     ByAuthor { author_id: Uuid },
 }
@@ -32,7 +32,7 @@ impl ListOperationsUseCase {
     #[instrument(skip(self))]
     pub async fn execute(&self, filter: ListFilter) -> Result<Vec<Operation>, DomainError> {
         match filter {
-            ListFilter::Recent { limit } => self.repository.list_recent(limit).await,
+            ListFilter::Recent { repo_id, limit } => self.repository.list_recent(&repo_id, limit).await,
             ListFilter::ByAuthor { author_id } => {
                 self.repository.find_by_author(&author_id).await
             }

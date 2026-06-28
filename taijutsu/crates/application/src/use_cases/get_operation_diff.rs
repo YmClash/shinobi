@@ -68,6 +68,7 @@ impl GetOperationDiffUseCase {
 
         // 2. Déterminer le content_id de référence pour le diff
         let content_id = ContentId::new(operation.content_id.clone().into_inner());
+        let repo_id = operation.repository_id;
 
         let changed_files = if !operation.parent_ids.is_empty() {
             // ── Avec parent → diff VCS classique ─────────────────────
@@ -75,10 +76,10 @@ impl GetOperationDiffUseCase {
             match parent_op {
                 Some(parent) => {
                     let parent_cid = ContentId::new(parent.content_id.into_inner());
-                    self.vcs.diff_since(&parent_cid).await?
+                    self.vcs.diff_since(&repo_id, &parent_cid).await?
                 }
                 // Parent non trouvé en DB → diff contre vide
-                None => self.vcs.diff_since(&content_id).await.unwrap_or_default(),
+                None => self.vcs.diff_since(&repo_id, &content_id).await.unwrap_or_default(),
             }
         } else {
             // ── Sans parent → opération racine, tout est "ajouté" ────

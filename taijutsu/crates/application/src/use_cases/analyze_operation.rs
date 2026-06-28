@@ -343,6 +343,7 @@ impl AnalyzeOperationUseCase {
         if let Some(publisher) = &self.event_publisher {
             let summary = domain::ports::event_publisher::AnalysisCompleteSummary {
                 operation_id: report.operation_id,
+                repository_id: operation.repository_id,
                 analyzed_files: report.analyzed_files,
                 skipped_files: report.skipped_files,
                 total_chunks: report.total_chunks,

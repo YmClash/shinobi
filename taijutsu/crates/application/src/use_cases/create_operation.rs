@@ -26,6 +26,8 @@ use domain::ports::vcs_engine::VcsEngine;
 #[derive(Debug)]
 pub struct CreateOperationCommand {
     pub author_id: Uuid,
+    /// Identifiant du dépôt cible (Phase 10B — isolation multi-tenant).
+    pub repository_id: Uuid,
     pub description: String,
     pub parent_ids: Vec<Uuid>,
     /// Fichiers à écrire dans le tree du commit.
@@ -91,7 +93,7 @@ impl CreateOperationUseCase {
 
         let content_id = self
             .vcs_engine
-            .create_operation(&cmd.description, &parent_id_strings, &cmd.files)
+            .create_operation(&cmd.repository_id, &cmd.description, &parent_id_strings, &cmd.files)
             .await?;
 
         info!(
@@ -106,6 +108,7 @@ impl CreateOperationUseCase {
         // 3. Construire l'entité domaine avec les deux CID.
         let operation = Operation::new(
             cmd.author_id,
+            cmd.repository_id,
             content_id,
             ipfs_content_id,
             cmd.description,

@@ -1,4 +1,4 @@
-﻿//! Adaptateur VCS â€” Anti-Corruption Layer pour Jujutsu (jj-lib 0.41).
+//! Adaptateur VCS â€” Anti-Corruption Layer pour Jujutsu (jj-lib 0.41).
 //!
 //! Ce module isole l'API de jj-lib derriÃ¨re le contrat stable `VcsEngine`.
 //! L'Anti-Corruption Layer absorbe les Ã©volutions de l'API jj-lib
@@ -154,10 +154,30 @@ pub struct JujutsuEngine {
 }
 
 impl JujutsuEngine {
-    /// Construit un nouvel adaptateur pour le workspace donnÃ©.
+    /// Construit un nouvel adaptateur pour le workspace donné.
+    ///
+    /// Le chemin est résolu en absolu — jj-lib `Workspace::init_simple`
+    /// peut paniquer avec des chemins relatifs sur Windows.
+    /// Note : on évite `canonicalize()` car sur Windows il ajoute le
+    /// préfixe `\\?\` que jj-lib SimpleBackend ne gère pas.
     pub fn new(workspace_root: impl Into<PathBuf>) -> Self {
+        let raw: PathBuf = workspace_root.into();
+        let absolute = if raw.is_absolute() {
+            raw
+        } else {
+            // Normaliser : "./workspace" → "workspace" avant le join
+            let cleaned = raw.to_string_lossy()
+                .trim_start_matches("./")
+                .trim_start_matches(".\\")
+                .to_string();
+            std::env::current_dir()
+                .map(|cwd| cwd.join(&cleaned))
+                .unwrap_or_else(|_| PathBuf::from(cleaned))
+        };
+        // S'assurer que le répertoire racine existe
+        std::fs::create_dir_all(&absolute).ok();
         Self {
-            workspace_root: workspace_root.into(),
+            workspace_root: absolute,
             handles: DashMap::new(),
         }
     }
