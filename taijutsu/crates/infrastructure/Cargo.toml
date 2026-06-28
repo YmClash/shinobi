@@ -20,6 +20,7 @@ pollster  = { workspace = true }
 
 # — Synchronisation haute performance —
 parking_lot = { workspace = true }
+dashmap = { workspace = true }
 
 # — Async streams (diff_since) —
 futures = { workspace = true }

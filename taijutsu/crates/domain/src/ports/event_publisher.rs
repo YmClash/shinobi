@@ -25,6 +25,8 @@ use crate::errors::DomainError;
 pub struct AnalysisCompleteSummary {
     /// ID de l'opération analysée.
     pub operation_id: Uuid,
+    /// ID du dépôt auquel appartient l'opération (Phase 10A — isolation multi-tenant).
+    pub repository_id: Uuid,
     /// Nombre de fichiers analysés (langages supportés).
     pub analyzed_files: usize,
     /// Nombre de fichiers ignorés (langages non supportés).

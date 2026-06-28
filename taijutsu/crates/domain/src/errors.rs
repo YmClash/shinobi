@@ -41,6 +41,14 @@ pub enum DomainError {
     #[error("Commit introuvable: {id}")]
     CommitNotFound { id: String },
 
+    /// Accès refusé (multi-tenant — Phase 10A).
+    #[error("Accès refusé: {0}")]
+    Forbidden(String),
+
+    /// Entrée en doublon (ex: handle déjà pris, nom de repo existant).
+    #[error("Doublon détecté: {0}")]
+    Duplicate(String),
+
     /// Erreur interne inattendue.
     #[error("Erreur interne: {0}")]
     Internal(String),

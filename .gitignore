@@ -152,6 +152,7 @@ Docs/
 
 # ── Workspace JJ ────────────────────────────
 taijutsu/workspace
+shinobi/.vscode
 
 # -- Embeddings model --
 taijutsu/.fastembed_cache

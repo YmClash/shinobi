@@ -20,8 +20,9 @@ pub trait OperationRepository: Send + Sync {
     /// Retrouve une opération par son identifiant.
     async fn find_by_id(&self, id: &Uuid) -> Result<Option<Operation>, DomainError>;
 
-    /// Liste les opérations les plus récentes, ordonnées par date décroissante.
-    async fn list_recent(&self, limit: usize) -> Result<Vec<Operation>, DomainError>;
+    /// Liste les opérations les plus récentes d'un dépôt, ordonnées par date décroissante.
+    /// Phase 10A : filtrée par `repository_id` pour l'isolation multi-tenant.
+    async fn list_recent(&self, repo_id: &Uuid, limit: usize) -> Result<Vec<Operation>, DomainError>;
 
     /// Retrouve toutes les opérations d'un auteur donné.
     async fn find_by_author(&self, author_id: &Uuid) -> Result<Vec<Operation>, DomainError>;
