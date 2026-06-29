@@ -176,7 +176,7 @@ export default function OperationsPage() {
           <span className="text-6xl mb-4 opacity-30">🌳</span>
           <p className="text-sm">Aucune opération enregistrée</p>
           <p className="text-xs mt-2 opacity-60">
-            Utilisez <code className="font-mono bg-muted px-1.5 py-0.5 rounded">POST /api/v1/operations</code> pour créer votre première opération
+            Utilisez la <code className="font-mono bg-muted px-1.5 py-0.5 rounded">Command Room</code> ou l'API fédérée pour créer votre première opération
           </p>
         </div>
       </div>

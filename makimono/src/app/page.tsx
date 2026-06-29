@@ -137,7 +137,7 @@ export default function DashboardPage() {
             <span className="text-4xl mb-3 opacity-30">📜</span>
             <p className="text-sm">Aucune opération enregistrée</p>
             <p className="text-xs mt-1 opacity-60">
-              Utilisez POST /api/v1/operations pour créer votre première opération
+              Utilisez la Command Room ou l'API fédérée pour créer votre première opération
             </p>
           </div>
         )}

@@ -33,4 +33,13 @@ pub trait RepoRepository: Send + Sync {
 
     /// Liste les dépôts publics (exploration / landing page).
     async fn list_public(&self, limit: usize) -> Result<Vec<Repository>, DomainError>;
+
+    /// Ajoute un collaborateur au dépôt avec un rôle donné.
+    /// Idempotent : `ON CONFLICT DO NOTHING` côté PostgreSQL.
+    async fn add_collaborator(
+        &self,
+        actor_id: &Uuid,
+        repo_id: &Uuid,
+        role: &str,
+    ) -> Result<(), DomainError>;
 }

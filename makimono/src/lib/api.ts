@@ -3,6 +3,11 @@
 // Typed wrappers for the Taijutsu REST API
 // ═══════════════════════════════════════════════════════════════
 
+// ── Repo Prefix (Phase 10D — Migrate) ─────────────────────────
+// Routes fédérées : /api/v1/repos/{owner}/{repo}/...
+// Le dépôt par défaut est system/default (migration 006).
+const REPO_PREFIX = "/api/v1/repos/system/default";
+
 // ── Types ────────────────────────────────────────────────────
 
 export interface HealthResponse {
@@ -160,11 +165,11 @@ export async function getStatus(): Promise<SystemStatus> {
 }
 
 export async function listOperations(limit = 50): Promise<OperationsResponse> {
-  return apiFetch<OperationsResponse>(`/api/v1/operations?limit=${limit}`);
+  return apiFetch<OperationsResponse>(`${REPO_PREFIX}/operations?limit=${limit}`);
 }
 
 export async function getOperation(id: string): Promise<Operation> {
-  return apiFetch<Operation>(`/api/v1/operations/${id}`);
+  return apiFetch<Operation>(`${REPO_PREFIX}/operations/${id}`);
 }
 
 export async function getChunksByOperation(
@@ -172,7 +177,7 @@ export async function getChunksByOperation(
   file?: string,
 ): Promise<ChunksResponse> {
   const params = file ? `?file=${encodeURIComponent(file)}` : "";
-  return apiFetch<ChunksResponse>(`/api/v1/operations/${id}/chunks${params}`);
+  return apiFetch<ChunksResponse>(`${REPO_PREFIX}/operations/${id}/chunks${params}`);
 }
 
 export async function searchChunksByName(
@@ -195,13 +200,13 @@ export async function semanticSearch(
 export async function getOperationDiff(
   id: string,
 ): Promise<DiffResponse> {
-  return apiFetch<DiffResponse>(`/api/v1/operations/${id}/diff`);
+  return apiFetch<DiffResponse>(`${REPO_PREFIX}/operations/${id}/diff`);
 }
 
 export async function getIpfsContent(
   id: string,
 ): Promise<IpfsContentResponse> {
-  return apiFetch<IpfsContentResponse>(`/api/v1/operations/${id}/ipfs`);
+  return apiFetch<IpfsContentResponse>(`${REPO_PREFIX}/operations/${id}/ipfs`);
 }
 
 // ── Create Operation ─────────────────────────────────────────
@@ -223,7 +228,7 @@ export interface CreateOperationRequest {
 export async function createOperation(
   body: CreateOperationRequest,
 ): Promise<Operation> {
-  const res = await fetch("/api/v1/operations", {
+  const res = await fetch(`${REPO_PREFIX}/operations`, {
     method: "POST",
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify(body),
@@ -242,7 +247,7 @@ export async function createOperation(
 export async function getOperationReviews(
   id: string,
 ): Promise<ReviewsResponse> {
-  return apiFetch<ReviewsResponse>(`/api/v1/operations/${id}/reviews`);
+  return apiFetch<ReviewsResponse>(`${REPO_PREFIX}/operations/${id}/reviews`);
 }
 
 // ── Score History (Phase 9.2 — Sparkline) ────────────────────

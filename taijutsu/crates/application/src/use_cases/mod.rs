@@ -2,6 +2,7 @@
 
 pub mod analyze_operation;
 pub mod create_operation;
+pub mod create_repository;
 pub mod get_operation;
 pub mod get_operation_diff;
 pub mod get_ipfs_content;

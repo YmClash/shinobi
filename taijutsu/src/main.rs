@@ -22,6 +22,7 @@ use tracing_subscriber::{EnvFilter, layer::SubscriberExt, util::SubscriberInitEx
 
 use application::use_cases::analyze_operation::AnalyzeOperationUseCase;
 use application::use_cases::create_operation::CreateOperationUseCase;
+use application::use_cases::create_repository::CreateRepositoryUseCase;
 use application::use_cases::get_operation::GetOperationUseCase;
 use application::use_cases::get_operation_diff::GetOperationDiffUseCase;
 use application::use_cases::get_ipfs_content::GetIpfsContentUseCase;
@@ -260,8 +261,15 @@ async fn main() -> anyhow::Result<()> {
         PostgresRepoRepository::new(pg_pool.clone()),
     );
     let resolve_repo = Arc::new(ResolveRepoUseCase::new(
+        actor_repo.clone(),
+        repo_repo.clone(),
+    ));
+
+    // ── Phase 10D: Création de dépôts (Big Bang) ────
+    let create_repository = Arc::new(CreateRepositoryUseCase::new(
         actor_repo,
         repo_repo,
+        vcs.clone(),
     ));
 
     let shared_state = SharedState {
@@ -274,6 +282,7 @@ async fn main() -> anyhow::Result<()> {
         get_reviews,
         get_score_history,
         resolve_repo,
+        create_repository,
     };
 
     // ── Serveur Axum (REST) ────────────────────────

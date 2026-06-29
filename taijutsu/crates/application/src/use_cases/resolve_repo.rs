@@ -158,6 +158,14 @@ mod tests {
         async fn list_public(&self, _limit: usize) -> Result<Vec<Repository>, DomainError> {
             Ok(self.repo.clone().into_iter().collect())
         }
+        async fn add_collaborator(
+            &self,
+            _actor_id: &Uuid,
+            _repo_id: &Uuid,
+            _role: &str,
+        ) -> Result<(), DomainError> {
+            Ok(())
+        }
     }
 
     // ── Helpers ──────────────────────────────────────

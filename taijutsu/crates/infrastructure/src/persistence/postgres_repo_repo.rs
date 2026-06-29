@@ -162,4 +162,28 @@ impl RepoRepository for PostgresRepoRepository {
 
         rows.into_iter().map(row_to_repository).collect()
     }
+
+    #[instrument(skip(self))]
+    async fn add_collaborator(
+        &self,
+        actor_id: &Uuid,
+        repo_id: &Uuid,
+        role: &str,
+    ) -> Result<(), DomainError> {
+        sqlx::query(
+            r#"
+            INSERT INTO collaborators (actor_id, repository_id, role)
+            VALUES ($1, $2, $3::repo_role)
+            ON CONFLICT (actor_id, repository_id) DO NOTHING
+            "#,
+        )
+        .bind(actor_id)
+        .bind(repo_id)
+        .bind(role)
+        .execute(&self.pool)
+        .await
+        .map_err(|e| DomainError::Persistence(e.to_string()))?;
+
+        Ok(())
+    }
 }

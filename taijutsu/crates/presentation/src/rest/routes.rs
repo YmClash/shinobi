@@ -11,10 +11,11 @@ use tracing::{info, warn};
 use uuid::Uuid;
 
 use application::use_cases::create_operation::CreateOperationCommand;
+use application::use_cases::create_repository::CreateRepositoryCommand;
 use application::use_cases::list_operations::ListFilter;
 use application::use_cases::search_chunks::ChunkSearchFilter;
-use domain::entities::actor::DEFAULT_REPO_ID;
 use domain::entities::operation::Operation;
+use domain::entities::repository::Visibility;
 use domain::ports::chunk_repository::{SimilarChunk, StoredChunk};
 use domain::ports::review_repository::OperationReview;
 
@@ -227,19 +228,12 @@ pub fn create_router(state: SharedState) -> Router {
         // Health & status (sans état)
         .route("/health", get(health_check))
         .route("/api/v1/status", get(status))
-        // ━━━ Legacy Routes (Expand phase — rétro-compatibilité) ━━━
-        .route(
-            "/api/v1/operations",
-            post(create_operation_handler).get(list_operations_handler),
-        )
-        .route("/api/v1/operations/{id}", get(get_operation_handler))
-        .route("/api/v1/operations/{id}/diff", get(get_operation_diff_handler))
-        .route("/api/v1/operations/{id}/reviews", get(get_reviews_handler))
-        .route("/api/v1/reviews/scores", get(get_score_history_handler))
-        .route("/api/v1/operations/{id}/ipfs", get(get_ipfs_content_handler))
-        .route("/api/v1/operations/{id}/chunks", get(get_chunks_handler))
+        // ━━━ Global Routes (cross-repo) ━━━
         .route("/api/v1/chunks/search", get(search_chunks_handler))
         .route("/api/v1/chunks/semantic-search", post(semantic_search_handler))
+        .route("/api/v1/reviews/scores", get(get_score_history_handler))
+        // ━━━ Forge Sociale (Phase 10D — Big Bang) ━━━
+        .route("/api/v1/repos", post(create_repository_handler))
         // ━━━ Federated Routes (Phase 10C — /repos/:owner/:repo) ━━━
         .route(
             "/api/v1/repos/{owner}/{repo}/operations",
@@ -298,139 +292,7 @@ async fn status() -> Json<serde_json::Value> {
     }))
 }
 
-/// Créer une opération — `POST /api/v1/operations`
-async fn create_operation_handler(
-    State(state): State<SharedState>,
-    Json(body): Json<CreateOperationBody>,
-) -> Result<(axum::http::StatusCode, Json<OperationJson>), AppError> {
-    info!(
-        author_id = %body.author_id,
-        description = %body.description,
-        "REST: CreateOperation reçu"
-    );
-
-    // Décoder les fichiers base64 → bytes bruts.
-    let files: Vec<(String, Vec<u8>)> = body
-        .files
-        .iter()
-        .filter_map(|f| {
-            match decode_base64(&f.content_b64) {
-                Ok(bytes) => Some((f.path.clone(), bytes)),
-                Err(e) => {
-                    warn!(path = %f.path, error = %e, "⚠️ Décodage base64 échoué — fichier ignoré");
-                    None
-                }
-            }
-        })
-        .collect();
-
-    let cmd = CreateOperationCommand {
-        author_id: body.author_id,
-        repository_id: body.repository_id.unwrap_or(DEFAULT_REPO_ID),
-        description: body.description,
-        parent_ids: body.parent_ids,
-        files,
-    };
-
-    let result = state.create_operation.execute(cmd).await?;
-
-    Ok((
-        axum::http::StatusCode::CREATED,
-        Json(OperationJson::from(result.operation)),
-    ))
-}
-
-/// Retrouver une opération — `GET /api/v1/operations/{id}`
-async fn get_operation_handler(
-    State(state): State<SharedState>,
-    Path(id): Path<Uuid>,
-) -> Result<Json<OperationJson>, AppError> {
-    info!(%id, "REST: GetOperation reçu");
-
-    let operation = state.get_operation.execute(id).await?;
-
-    Ok(Json(OperationJson::from(operation)))
-}
-
-/// Lister les opérations — `GET /api/v1/operations?limit=N&author_id=UUID`
-async fn list_operations_handler(
-    State(state): State<SharedState>,
-    Query(params): Query<ListOperationsQuery>,
-) -> Result<Json<serde_json::Value>, AppError> {
-    info!(?params.limit, ?params.author_id, "REST: ListOperations reçu");
-
-    let filter = if let Some(author_id) = params.author_id {
-        ListFilter::ByAuthor { author_id }
-    } else {
-        ListFilter::Recent {
-            repo_id: params.repository_id.unwrap_or(DEFAULT_REPO_ID),
-            limit: params.limit.unwrap_or(50),
-        }
-    };
-
-    let operations = state.list_operations.execute(filter).await?;
-    let operations_json: Vec<OperationJson> =
-        operations.into_iter().map(OperationJson::from).collect();
-
-    Ok(Json(serde_json::json!({
-        "operations": operations_json,
-        "count": operations_json.len(),
-    })))
-}
-
-// ─── Handler Diff VCS ─────────────────────────────
-
-/// Récupérer les fichiers modifiés par une opération — `GET /api/v1/operations/{id}/diff`
-async fn get_operation_diff_handler(
-    State(state): State<SharedState>,
-    Path(id): Path<Uuid>,
-) -> Result<Json<serde_json::Value>, AppError> {
-    info!(%id, "REST: GetOperationDiff reçu");
-
-    let result = state.get_operation_diff.execute(id).await?;
-
-    Ok(Json(serde_json::json!({
-        "operation_id": result.operation_id,
-        "content_id": result.content_id,
-        "changed_files": result.changed_files,
-        "count": result.changed_files.len(),
-    })))
-}
-
-// ─── Handlers Tensai (Mémoire IA) ────────────────
-
-/// Récupérer les chunks d'une opération — `GET /api/v1/operations/{id}/chunks`
-///
-/// Paramètres optionnels :
-/// - `?file=src/main.rs` — filtre par fichier
-async fn get_chunks_handler(
-    State(state): State<SharedState>,
-    Path(operation_id): Path<Uuid>,
-    Query(params): Query<ChunksQuery>,
-) -> Result<Json<serde_json::Value>, AppError> {
-    info!(
-        %operation_id,
-        file = ?params.file,
-        "REST: GetChunks reçu (Tensai)"
-    );
-
-    let filter = match params.file {
-        Some(file_path) => ChunkSearchFilter::ByFile {
-            operation_id,
-            file_path,
-        },
-        None => ChunkSearchFilter::ByOperation { operation_id },
-    };
-
-    let result = state.search_chunks.execute(filter).await?;
-    let chunks_json: Vec<ChunkJson> = result.chunks.into_iter().map(ChunkJson::from).collect();
-
-    Ok(Json(serde_json::json!({
-        "operation_id": operation_id,
-        "chunks": chunks_json,
-        "count": result.count,
-    })))
-}
+// ─── Handlers Globaux (cross-repo) ────────────────
 
 /// Rechercher des symboles par nom — `GET /api/v1/chunks/search?name=User`
 async fn search_chunks_handler(
@@ -455,8 +317,6 @@ async fn search_chunks_handler(
         "count": result.count,
     })))
 }
-
-// ─── Handler Recherche Sémantique (Phase 7A) ─────────
 
 /// Recherche sémantique RAG — `POST /api/v1/chunks/semantic-search`
 ///
@@ -488,6 +348,35 @@ async fn semantic_search_handler(
         "query": body.query,
         "chunks": chunks_json,
         "count": result.count,
+    })))
+}
+
+// ─── Handler Score History (Phase 9.2) ───────────────
+
+/// Paramètres de query pour GET /api/v1/reviews/scores.
+#[derive(Debug, Deserialize)]
+pub struct ScoreHistoryQuery {
+    /// Nombre de scores à récupérer (défaut: 10).
+    #[serde(default = "default_score_limit")]
+    pub limit: usize,
+}
+
+fn default_score_limit() -> usize { 10 }
+
+/// Récupérer l'historique des scores Oracle — `GET /api/v1/reviews/scores?limit=10`
+async fn get_score_history_handler(
+    State(state): State<SharedState>,
+    Query(params): Query<ScoreHistoryQuery>,
+) -> Result<Json<serde_json::Value>, AppError> {
+    info!(limit = params.limit, "REST: GetScoreHistory reçu (Sparkline)");
+
+    let result = state.get_score_history.execute(params.limit).await?;
+
+    Ok(Json(serde_json::json!({
+        "scores": result.scores,
+        "count": result.count,
+        "average": result.average,
+        "trend": result.trend,
     })))
 }
 
@@ -541,80 +430,84 @@ fn decode_base64(input: &str) -> Result<Vec<u8>, String> {
     Ok(result)
 }
 
-// ─── Handler IPFS Content Explorer ────────────────
-
-/// Récupérer le contenu IPFS d'une opération — `GET /api/v1/operations/{id}/ipfs`
-async fn get_ipfs_content_handler(
-    State(state): State<SharedState>,
-    Path(id): Path<Uuid>,
-) -> Result<Json<serde_json::Value>, AppError> {
-    info!(%id, "REST: GetIpfsContent reçu");
-
-    let result = state.get_ipfs_content.execute(id).await?;
-
-    Ok(Json(serde_json::json!({
-        "operation_id": result.operation_id,
-        "ipfs_cid": result.ipfs_cid,
-        "blob_size": result.blob_size,
-        "files": result.files,
-        "count": result.files.len(),
-    })))
-}
-
-// ─── Handler Oracle Reviews (Phase 9) ─────────────────
-
-/// Récupérer les code reviews d'une opération — `GET /api/v1/operations/{id}/reviews`
-async fn get_reviews_handler(
-    State(state): State<SharedState>,
-    Path(id): Path<Uuid>,
-) -> Result<Json<serde_json::Value>, AppError> {
-    info!(%id, "REST: GetReviews reçu (Oracle)");
-
-    let result = state.get_reviews.execute(id).await?;
-    let reviews_json: Vec<ReviewJson> = result
-        .reviews
-        .into_iter()
-        .map(ReviewJson::from)
-        .collect();
-
-    Ok(Json(serde_json::json!({
-        "operation_id": id,
-        "reviews": reviews_json,
-        "count": result.count,
-    })))
-}
-
-// ─── Handler Score History (Phase 9.2) ───────────────
-
-/// Paramètres de query pour GET /api/v1/reviews/scores.
-#[derive(Debug, Deserialize)]
-pub struct ScoreHistoryQuery {
-    /// Nombre de scores à récupérer (défaut: 10).
-    #[serde(default = "default_score_limit")]
-    pub limit: usize,
-}
-
-fn default_score_limit() -> usize { 10 }
-
-/// Récupérer l'historique des scores Oracle — `GET /api/v1/reviews/scores?limit=10`
-async fn get_score_history_handler(
-    State(state): State<SharedState>,
-    Query(params): Query<ScoreHistoryQuery>,
-) -> Result<Json<serde_json::Value>, AppError> {
-    info!(limit = params.limit, "REST: GetScoreHistory reçu (Sparkline)");
-
-    let result = state.get_score_history.execute(params.limit).await?;
-
-    Ok(Json(serde_json::json!({
-        "scores": result.scores,
-        "count": result.count,
-        "average": result.average,
-        "trend": result.trend,
-    })))
-}
-
 // ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-// Phase 10C — Handlers Fédérés (/api/v1/repos/:owner/:repo)
+// ─── Phase 10C — Handlers Fédérés (/api/v1/repos/:owner/:repo)
+// ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+// Phase 10D — Forge Sociale (POST /api/v1/repos)
+// ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+/// Corps de la requête POST /api/v1/repos.
+#[derive(Debug, Deserialize)]
+pub struct CreateRepoBody {
+    pub owner_id: Uuid,
+    pub name: String,
+    pub display_name: String,
+    #[serde(default)]
+    pub description: Option<String>,
+    /// "public" ou "private" (défaut: "public").
+    #[serde(default = "default_visibility")]
+    pub visibility: String,
+}
+
+fn default_visibility() -> String { "public".to_string() }
+
+/// Réponse JSON pour un dépôt créé.
+#[derive(Debug, Serialize)]
+pub struct RepositoryJson {
+    pub id: Uuid,
+    pub owner_id: Uuid,
+    pub name: String,
+    pub display_name: String,
+    pub description: Option<String>,
+    pub visibility: String,
+    pub default_branch: String,
+    pub created_at: DateTime<Utc>,
+}
+
+impl From<domain::entities::repository::Repository> for RepositoryJson {
+    fn from(repo: domain::entities::repository::Repository) -> Self {
+        Self {
+            id: repo.id,
+            owner_id: repo.owner_id,
+            name: repo.name,
+            display_name: repo.display_name,
+            description: repo.description,
+            visibility: repo.visibility.as_sql_str().to_string(),
+            default_branch: repo.default_branch,
+            created_at: repo.created_at,
+        }
+    }
+}
+
+/// Créer un dépôt — `POST /api/v1/repos`
+async fn create_repository_handler(
+    State(state): State<SharedState>,
+    Json(body): Json<CreateRepoBody>,
+) -> Result<(axum::http::StatusCode, Json<RepositoryJson>), AppError> {
+    info!(
+        owner_id = %body.owner_id,
+        name = %body.name,
+        "REST: CreateRepository reçu (Forge Sociale)"
+    );
+
+    let visibility = Visibility::from_sql_str(&body.visibility).unwrap_or(Visibility::Public);
+
+    let cmd = CreateRepositoryCommand {
+        owner_id: body.owner_id,
+        name: body.name,
+        display_name: body.display_name,
+        description: body.description,
+        visibility,
+    };
+
+    let repo = state.create_repository.execute(cmd).await?;
+
+    Ok((
+        axum::http::StatusCode::CREATED,
+        Json(RepositoryJson::from(repo)),
+    ))
+}
+
 // ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 
 /// Paramètres de chemin fédérés : `(owner, repo)`.

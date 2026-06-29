@@ -6,6 +6,7 @@
 use std::sync::Arc;
 
 use application::use_cases::create_operation::CreateOperationUseCase;
+use application::use_cases::create_repository::CreateRepositoryUseCase;
 use application::use_cases::get_operation::GetOperationUseCase;
 use application::use_cases::get_operation_diff::GetOperationDiffUseCase;
 use application::use_cases::get_ipfs_content::GetIpfsContentUseCase;
@@ -47,4 +48,7 @@ pub struct SharedState {
 
     /// Use case: résolution sémantique des dépôts (Phase 10C — Routes fédérées).
     pub resolve_repo: Arc<ResolveRepoUseCase>,
+
+    /// Use case: créer un nouveau dépôt (Phase 10D — Big Bang).
+    pub create_repository: Arc<CreateRepositoryUseCase>,
 }
