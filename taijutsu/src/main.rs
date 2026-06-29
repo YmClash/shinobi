@@ -28,6 +28,7 @@ use application::use_cases::get_ipfs_content::GetIpfsContentUseCase;
 use application::use_cases::get_reviews::GetReviewsUseCase;
 use application::use_cases::get_score_history::GetScoreHistoryUseCase;
 use application::use_cases::list_operations::ListOperationsUseCase;
+use application::use_cases::resolve_repo::ResolveRepoUseCase;
 use application::use_cases::review_operation::ReviewOperationUseCase;
 use application::use_cases::search_chunks::SearchChunksUseCase;
 use infrastructure::cache::redis_cache::RedisCache;
@@ -38,7 +39,9 @@ use infrastructure::events::kafka_producer::KafkaEventPublisher;
 use infrastructure::events::oracle_consumer::OracleKafkaConsumer;
 use infrastructure::llm::ollama_service::OllamaService;
 use infrastructure::persistence::postgres_chunk_repo::PostgresChunkRepository;
+use infrastructure::persistence::postgres_actor_repo::PostgresActorRepository;
 use infrastructure::persistence::postgres_repo::PostgresOperationRepository;
+use infrastructure::persistence::postgres_repo_repo::PostgresRepoRepository;
 use infrastructure::persistence::postgres_review_repo::PostgresReviewRepository;
 use infrastructure::vcs::jujutsu_engine::JujutsuEngine;
 use domain::entities::actor::DEFAULT_REPO_ID;
@@ -157,7 +160,7 @@ async fn main() -> anyhow::Result<()> {
     let chunk_repo: Arc<dyn domain::ports::chunk_repository::ChunkRepository> =
         Arc::new(PostgresChunkRepository::new(pg_pool.clone()));
     let review_repo: Arc<dyn domain::ports::review_repository::ReviewRepository> =
-        Arc::new(PostgresReviewRepository::new(pg_pool));
+        Arc::new(PostgresReviewRepository::new(pg_pool.clone()));
     let vcs = Arc::new(vcs_engine);
 
     info!("✅ ChunkRepository PostgreSQL initialisé (Mémoire IA)");
@@ -249,6 +252,18 @@ async fn main() -> anyhow::Result<()> {
         review_repo.clone(),
     ));
 
+    // ── Phase 10C: Résolution sémantique des dépôts ────
+    let actor_repo: Arc<PostgresActorRepository> = Arc::new(
+        PostgresActorRepository::new(pg_pool.clone()),
+    );
+    let repo_repo: Arc<PostgresRepoRepository> = Arc::new(
+        PostgresRepoRepository::new(pg_pool.clone()),
+    );
+    let resolve_repo = Arc::new(ResolveRepoUseCase::new(
+        actor_repo,
+        repo_repo,
+    ));
+
     let shared_state = SharedState {
         create_operation,
         get_operation,
@@ -258,6 +273,7 @@ async fn main() -> anyhow::Result<()> {
         get_ipfs_content,
         get_reviews,
         get_score_history,
+        resolve_repo,
     };
 
     // ── Serveur Axum (REST) ────────────────────────

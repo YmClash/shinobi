@@ -214,6 +214,11 @@ impl From<OperationReview> for ReviewJson {
 ///
 /// Intègre automatiquement le middleware Prometheus pour les métriques HTTP.
 /// La route `/metrics` expose les métriques au format Prometheus scrape.
+///
+/// ## Routes Fédérées (Phase 10C)
+/// Les routes `/api/v1/repos/:owner/:repo/operations/...` résolvent le
+/// couple `(owner, repo)` en `repository_id` via `ResolveRepoUseCase`,
+/// puis délèguent aux use cases existants.
 pub fn create_router(state: SharedState) -> Router {
     // ── Prometheus Middleware ───────────────────────
     let (prometheus_layer, metric_handle) = axum_prometheus::PrometheusMetricLayer::pair();
@@ -222,30 +227,43 @@ pub fn create_router(state: SharedState) -> Router {
         // Health & status (sans état)
         .route("/health", get(health_check))
         .route("/api/v1/status", get(status))
-        // CRUD Operations
+        // ━━━ Legacy Routes (Expand phase — rétro-compatibilité) ━━━
         .route(
             "/api/v1/operations",
             post(create_operation_handler).get(list_operations_handler),
         )
         .route("/api/v1/operations/{id}", get(get_operation_handler))
-        // ── VCS Diff ───────────────────────────────
         .route("/api/v1/operations/{id}/diff", get(get_operation_diff_handler))
-        // ── Oracle: Code Reviews IA ────────────────
         .route("/api/v1/operations/{id}/reviews", get(get_reviews_handler))
-        // ── Oracle: Sparkline Scores (Phase 9.2) ──
         .route("/api/v1/reviews/scores", get(get_score_history_handler))
-        // ── IPFS Content Explorer ──────────────────
         .route("/api/v1/operations/{id}/ipfs", get(get_ipfs_content_handler))
-        // ── Tensai: Mémoire IA ─────────────────────
-        .route(
-            "/api/v1/operations/{id}/chunks",
-            get(get_chunks_handler),
-        )
+        .route("/api/v1/operations/{id}/chunks", get(get_chunks_handler))
         .route("/api/v1/chunks/search", get(search_chunks_handler))
-        // ── Tensai: Recherche Sémantique RAG (Phase 7A) ──
+        .route("/api/v1/chunks/semantic-search", post(semantic_search_handler))
+        // ━━━ Federated Routes (Phase 10C — /repos/:owner/:repo) ━━━
         .route(
-            "/api/v1/chunks/semantic-search",
-            post(semantic_search_handler),
+            "/api/v1/repos/{owner}/{repo}/operations",
+            post(federated_create_operation).get(federated_list_operations),
+        )
+        .route(
+            "/api/v1/repos/{owner}/{repo}/operations/{id}",
+            get(federated_get_operation),
+        )
+        .route(
+            "/api/v1/repos/{owner}/{repo}/operations/{id}/diff",
+            get(federated_get_diff),
+        )
+        .route(
+            "/api/v1/repos/{owner}/{repo}/operations/{id}/reviews",
+            get(federated_get_reviews),
+        )
+        .route(
+            "/api/v1/repos/{owner}/{repo}/operations/{id}/ipfs",
+            get(federated_get_ipfs),
+        )
+        .route(
+            "/api/v1/repos/{owner}/{repo}/operations/{id}/chunks",
+            get(federated_get_chunks),
         )
         // ── Métriques Prometheus ────────────────────
         .route("/metrics", get(move || async move { metric_handle.render() }))
@@ -592,5 +610,198 @@ async fn get_score_history_handler(
         "count": result.count,
         "average": result.average,
         "trend": result.trend,
+    })))
+}
+
+// ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+// Phase 10C — Handlers Fédérés (/api/v1/repos/:owner/:repo)
+// ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+/// Paramètres de chemin fédérés : `(owner, repo)`.
+#[derive(Debug, Deserialize)]
+struct RepoPath {
+    owner: String,
+    repo: String,
+}
+
+/// Paramètres de chemin fédérés avec ID d'opération.
+#[derive(Debug, Deserialize)]
+struct RepoOperationPath {
+    owner: String,
+    repo: String,
+    id: Uuid,
+}
+
+/// Créer une opération — `POST /api/v1/repos/:owner/:repo/operations`
+async fn federated_create_operation(
+    State(state): State<SharedState>,
+    Path(path): Path<RepoPath>,
+    Json(body): Json<CreateOperationBody>,
+) -> Result<(axum::http::StatusCode, Json<OperationJson>), AppError> {
+    info!(
+        owner = %path.owner,
+        repo = %path.repo,
+        author_id = %body.author_id,
+        "REST Fédéré: CreateOperation"
+    );
+
+    let repository = state.resolve_repo.execute(&path.owner, &path.repo).await?;
+
+    let files: Vec<(String, Vec<u8>)> = body
+        .files
+        .iter()
+        .filter_map(|f| {
+            match decode_base64(&f.content_b64) {
+                Ok(bytes) => Some((f.path.clone(), bytes)),
+                Err(e) => {
+                    warn!(path = %f.path, error = %e, "⚠️ Décodage base64 échoué — fichier ignoré");
+                    None
+                }
+            }
+        })
+        .collect();
+
+    let cmd = CreateOperationCommand {
+        author_id: body.author_id,
+        repository_id: repository.id,
+        description: body.description,
+        parent_ids: body.parent_ids,
+        files,
+    };
+
+    let result = state.create_operation.execute(cmd).await?;
+    Ok((
+        axum::http::StatusCode::CREATED,
+        Json(OperationJson::from(result.operation)),
+    ))
+}
+
+/// Lister les opérations — `GET /api/v1/repos/:owner/:repo/operations`
+async fn federated_list_operations(
+    State(state): State<SharedState>,
+    Path(path): Path<RepoPath>,
+    Query(params): Query<ListOperationsQuery>,
+) -> Result<Json<serde_json::Value>, AppError> {
+    info!(
+        owner = %path.owner,
+        repo = %path.repo,
+        "REST Fédéré: ListOperations"
+    );
+
+    let repository = state.resolve_repo.execute(&path.owner, &path.repo).await?;
+
+    let filter = if let Some(author_id) = params.author_id {
+        ListFilter::ByAuthor { author_id }
+    } else {
+        ListFilter::Recent {
+            repo_id: repository.id,
+            limit: params.limit.unwrap_or(50),
+        }
+    };
+
+    let operations = state.list_operations.execute(filter).await?;
+    let operations_json: Vec<OperationJson> =
+        operations.into_iter().map(OperationJson::from).collect();
+
+    Ok(Json(serde_json::json!({
+        "operations": operations_json,
+        "count": operations_json.len(),
+    })))
+}
+
+/// Retrouver une opération — `GET /api/v1/repos/:owner/:repo/operations/:id`
+async fn federated_get_operation(
+    State(state): State<SharedState>,
+    Path(path): Path<RepoOperationPath>,
+) -> Result<Json<OperationJson>, AppError> {
+    info!(
+        owner = %path.owner,
+        repo = %path.repo,
+        id = %path.id,
+        "REST Fédéré: GetOperation"
+    );
+
+    // Valider que le repo existe (autorisation implicite)
+    let _repository = state.resolve_repo.execute(&path.owner, &path.repo).await?;
+
+    let operation = state.get_operation.execute(path.id).await?;
+    Ok(Json(OperationJson::from(operation)))
+}
+
+/// Récupérer le diff — `GET /api/v1/repos/:owner/:repo/operations/:id/diff`
+async fn federated_get_diff(
+    State(state): State<SharedState>,
+    Path(path): Path<RepoOperationPath>,
+) -> Result<Json<serde_json::Value>, AppError> {
+    let _repository = state.resolve_repo.execute(&path.owner, &path.repo).await?;
+
+    let result = state.get_operation_diff.execute(path.id).await?;
+
+    Ok(Json(serde_json::json!({
+        "operation_id": result.operation_id,
+        "content_id": result.content_id,
+        "changed_files": result.changed_files,
+        "count": result.changed_files.len(),
+    })))
+}
+
+/// Récupérer les reviews — `GET /api/v1/repos/:owner/:repo/operations/:id/reviews`
+async fn federated_get_reviews(
+    State(state): State<SharedState>,
+    Path(path): Path<RepoOperationPath>,
+) -> Result<Json<serde_json::Value>, AppError> {
+    let _repository = state.resolve_repo.execute(&path.owner, &path.repo).await?;
+
+    let result = state.get_reviews.execute(path.id).await?;
+    let reviews_json: Vec<ReviewJson> = result.reviews.into_iter().map(ReviewJson::from).collect();
+
+    Ok(Json(serde_json::json!({
+        "operation_id": path.id,
+        "reviews": reviews_json,
+        "count": result.count,
+    })))
+}
+
+/// Récupérer le contenu IPFS — `GET /api/v1/repos/:owner/:repo/operations/:id/ipfs`
+async fn federated_get_ipfs(
+    State(state): State<SharedState>,
+    Path(path): Path<RepoOperationPath>,
+) -> Result<Json<serde_json::Value>, AppError> {
+    let _repository = state.resolve_repo.execute(&path.owner, &path.repo).await?;
+
+    let result = state.get_ipfs_content.execute(path.id).await?;
+
+    Ok(Json(serde_json::json!({
+        "operation_id": result.operation_id,
+        "ipfs_cid": result.ipfs_cid,
+        "blob_size": result.blob_size,
+        "files": result.files,
+        "count": result.files.len(),
+    })))
+}
+
+/// Récupérer les chunks — `GET /api/v1/repos/:owner/:repo/operations/:id/chunks`
+async fn federated_get_chunks(
+    State(state): State<SharedState>,
+    Path(path): Path<RepoOperationPath>,
+    Query(params): Query<ChunksQuery>,
+) -> Result<Json<serde_json::Value>, AppError> {
+    let _repository = state.resolve_repo.execute(&path.owner, &path.repo).await?;
+
+    let filter = match params.file {
+        Some(file_path) => ChunkSearchFilter::ByFile {
+            operation_id: path.id,
+            file_path,
+        },
+        None => ChunkSearchFilter::ByOperation { operation_id: path.id },
+    };
+
+    let result = state.search_chunks.execute(filter).await?;
+    let chunks_json: Vec<ChunkJson> = result.chunks.into_iter().map(ChunkJson::from).collect();
+
+    Ok(Json(serde_json::json!({
+        "operation_id": path.id,
+        "chunks": chunks_json,
+        "count": result.count,
     })))
 }

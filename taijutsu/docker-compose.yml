@@ -66,13 +66,13 @@ services:
     image: ipfs/kubo:latest
     container_name: shinobi-ipfs
     ports:
-      - "4001:4001"              # Swarm P2P
-      - "127.0.0.1:5001:5001"   # RPC API (localhost only — sécurité)
-      - "127.0.0.1:8080:8080"   # Gateway
+      - "4001:4001" # Swarm P2P
+      - "127.0.0.1:5001:5001" # RPC API (localhost only — sécurité)
+      - "127.0.0.1:8080:8080" # Gateway
     volumes:
       - ipfsdata:/data/ipfs
     healthcheck:
-      test: ["CMD-SHELL", "ipfs id || exit 1"]
+      test: [ "CMD-SHELL", "ipfs id || exit 1" ]
       interval: 10s
       timeout: 10s
       retries: 5
@@ -87,7 +87,7 @@ services:
     volumes:
       - ollama_data:/root/.ollama
     healthcheck:
-      test: ["CMD-SHELL", "curl -sf http://localhost:11434/api/tags || exit 1"]
+      test: [ "CMD-SHELL", "curl -sf http://localhost:11434/api/tags || exit 1" ]
       interval: 10s
       timeout: 10s
       retries: 5

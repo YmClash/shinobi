@@ -53,6 +53,7 @@ fn operation_to_proto(op: domain::entities::operation::Operation) -> OperationRe
         parent_ids: op.parent_ids.iter().map(|id| id.to_string()).collect(),
         created_at: op.created_at.timestamp(),
         ipfs_content_id: op.ipfs_content_id.map(|cid| cid.into_inner()),
+        repository_id: op.repository_id.to_string(),
     }
 }
 
@@ -130,9 +131,18 @@ impl ShinobiService for ShinobiServiceImpl {
             })
             .collect::<Result<Vec<_>, _>>()?;
 
+        // Phase 10C: lire repository_id du proto (vide → DEFAULT_REPO_ID)
+        let repository_id = if req.repository_id.is_empty() {
+            DEFAULT_REPO_ID
+        } else {
+            req.repository_id
+                .parse::<Uuid>()
+                .map_err(|e| Status::invalid_argument(format!("repository_id invalide: {e}")))?
+        };
+
         let cmd = CreateOperationCommand {
             author_id,
-            repository_id: DEFAULT_REPO_ID,
+            repository_id,
             description: req.description,
             parent_ids,
             files: vec![],
@@ -179,9 +189,18 @@ impl ShinobiService for ShinobiServiceImpl {
         let req = request.into_inner();
         info!(limit = req.limit, author_id = %req.author_id, "Ninpo: ListOperations reçu");
 
+        // Phase 10C: lire repository_id du proto (vide → DEFAULT_REPO_ID)
+        let repo_id = if req.repository_id.is_empty() {
+            DEFAULT_REPO_ID
+        } else {
+            req.repository_id
+                .parse::<Uuid>()
+                .map_err(|e| Status::invalid_argument(format!("repository_id invalide: {e}")))?
+        };
+
         let filter = if req.author_id.is_empty() {
             let limit = if req.limit > 0 { req.limit as usize } else { 50 };
-            ListFilter::Recent { repo_id: DEFAULT_REPO_ID, limit }
+            ListFilter::Recent { repo_id, limit }
         } else {
             let author_id = req
                 .author_id

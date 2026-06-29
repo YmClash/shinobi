@@ -21,6 +21,7 @@ export interface SystemStatus {
 export interface Operation {
   id: string;
   author_id: string;
+  repository_id: string;
   content_id: string;
   ipfs_content_id?: string;
   description: string;
@@ -215,6 +216,8 @@ export interface CreateOperationRequest {
   description: string;
   parent_ids?: string[];
   files: FileEntry[];
+  /** Phase 10C: identifiant du dépôt cible (UUID). Optionnel — utilise DEFAULT_REPO_ID si omis. */
+  repository_id?: string;
 }
 
 export async function createOperation(

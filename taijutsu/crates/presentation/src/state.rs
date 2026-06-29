@@ -12,6 +12,7 @@ use application::use_cases::get_ipfs_content::GetIpfsContentUseCase;
 use application::use_cases::get_reviews::GetReviewsUseCase;
 use application::use_cases::get_score_history::GetScoreHistoryUseCase;
 use application::use_cases::list_operations::ListOperationsUseCase;
+use application::use_cases::resolve_repo::ResolveRepoUseCase;
 use application::use_cases::search_chunks::SearchChunksUseCase;
 
 /// État applicatif partagé entre les couches de présentation.
@@ -43,6 +44,7 @@ pub struct SharedState {
 
     /// Use case: historique des scores Oracle (Phase 9.2 — Sparkline).
     pub get_score_history: Arc<GetScoreHistoryUseCase>,
+
+    /// Use case: résolution sémantique des dépôts (Phase 10C — Routes fédérées).
+    pub resolve_repo: Arc<ResolveRepoUseCase>,
 }
-
-
