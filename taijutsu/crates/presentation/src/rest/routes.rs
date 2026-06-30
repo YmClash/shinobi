@@ -234,6 +234,10 @@ pub fn create_router(state: SharedState) -> Router {
         .route("/api/v1/reviews/scores", get(get_score_history_handler))
         // ━━━ Forge Sociale (Phase 10D — Big Bang) ━━━
         .route("/api/v1/repos", post(create_repository_handler))
+        // ━━━ Actors → Repos (Préambule Makimono Phase 5) ━━━
+        .route("/api/v1/actors/{handle}/repos", get(list_repositories_handler))
+        // ━━━ Repo Detail (Préambule Makimono Phase 5) ━━━
+        .route("/api/v1/repos/{owner}/{repo}", get(get_repository_handler))
         // ━━━ Federated Routes (Phase 10C — /repos/:owner/:repo) ━━━
         .route(
             "/api/v1/repos/{owner}/{repo}/operations",
@@ -506,6 +510,35 @@ async fn create_repository_handler(
         axum::http::StatusCode::CREATED,
         Json(RepositoryJson::from(repo)),
     ))
+}
+
+/// Lister les dépôts d'un acteur — `GET /api/v1/actors/{handle}/repos`
+async fn list_repositories_handler(
+    State(state): State<SharedState>,
+    Path(handle): Path<String>,
+) -> Result<Json<serde_json::Value>, AppError> {
+    info!(handle = %handle, "REST: ListRepositories reçu");
+
+    let repos = state.list_repositories.execute(&handle).await?;
+    let repos_json: Vec<RepositoryJson> = repos.into_iter().map(RepositoryJson::from).collect();
+
+    Ok(Json(serde_json::json!({
+        "owner": handle,
+        "repositories": repos_json,
+        "count": repos_json.len(),
+    })))
+}
+
+/// Détail d'un dépôt — `GET /api/v1/repos/{owner}/{repo}`
+async fn get_repository_handler(
+    State(state): State<SharedState>,
+    Path((owner, repo)): Path<(String, String)>,
+) -> Result<Json<RepositoryJson>, AppError> {
+    info!(owner = %owner, repo = %repo, "REST: GetRepository reçu");
+
+    let repository = state.resolve_repo.execute(&owner, &repo).await?;
+
+    Ok(Json(RepositoryJson::from(repository)))
 }
 
 // ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━

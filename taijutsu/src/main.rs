@@ -23,6 +23,7 @@ use tracing_subscriber::{EnvFilter, layer::SubscriberExt, util::SubscriberInitEx
 use application::use_cases::analyze_operation::AnalyzeOperationUseCase;
 use application::use_cases::create_operation::CreateOperationUseCase;
 use application::use_cases::create_repository::CreateRepositoryUseCase;
+use application::use_cases::list_repositories::ListRepositoriesUseCase;
 use application::use_cases::get_operation::GetOperationUseCase;
 use application::use_cases::get_operation_diff::GetOperationDiffUseCase;
 use application::use_cases::get_ipfs_content::GetIpfsContentUseCase;
@@ -266,6 +267,10 @@ async fn main() -> anyhow::Result<()> {
     ));
 
     // ── Phase 10D: Création de dépôts (Big Bang) ────
+    let list_repositories = Arc::new(ListRepositoriesUseCase::new(
+        actor_repo.clone(),
+        repo_repo.clone(),
+    ));
     let create_repository = Arc::new(CreateRepositoryUseCase::new(
         actor_repo,
         repo_repo,
@@ -283,6 +288,7 @@ async fn main() -> anyhow::Result<()> {
         get_score_history,
         resolve_repo,
         create_repository,
+        list_repositories,
     };
 
     // ── Serveur Axum (REST) ────────────────────────

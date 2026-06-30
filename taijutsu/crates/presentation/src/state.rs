@@ -13,6 +13,7 @@ use application::use_cases::get_ipfs_content::GetIpfsContentUseCase;
 use application::use_cases::get_reviews::GetReviewsUseCase;
 use application::use_cases::get_score_history::GetScoreHistoryUseCase;
 use application::use_cases::list_operations::ListOperationsUseCase;
+use application::use_cases::list_repositories::ListRepositoriesUseCase;
 use application::use_cases::resolve_repo::ResolveRepoUseCase;
 use application::use_cases::search_chunks::SearchChunksUseCase;
 
@@ -51,4 +52,7 @@ pub struct SharedState {
 
     /// Use case: créer un nouveau dépôt (Phase 10D — Big Bang).
     pub create_repository: Arc<CreateRepositoryUseCase>,
+
+    /// Use case: lister les dépôts d'un acteur (Phase 10D — Préambule Makimono 5).
+    pub list_repositories: Arc<ListRepositoriesUseCase>,
 }
