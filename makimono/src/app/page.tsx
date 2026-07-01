@@ -8,6 +8,7 @@ import { OperationCard } from "@/components/operations/operation-card";
 import { Separator } from "@/components/ui/separator";
 import { Skeleton } from "@/components/ui/skeleton";
 import { useHealth, useOperations, useSemanticSearch } from "@/hooks/use-api";
+import { buildRepoPrefix } from "@/lib/api";
 
 // ── Infrastructure nodes config ──────────────────────────────
 
@@ -46,7 +47,7 @@ export default function DashboardPage() {
   const [searchQuery, setSearchQuery] = useState("");
 
   const { data: health, loading: healthLoading } = useHealth();
-  const { data: opsData, loading: opsLoading } = useOperations(5);
+  const { data: opsData, loading: opsLoading } = useOperations(buildRepoPrefix("system", "default"), 5);
   const { data: searchData, loading: searchLoading } = useSemanticSearch(searchQuery);
 
   // Derive infrastructure status from health endpoint

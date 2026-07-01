@@ -3,10 +3,14 @@
 // Typed wrappers for the Taijutsu REST API
 // ═══════════════════════════════════════════════════════════════
 
-// ── Repo Prefix (Phase 10D — Migrate) ─────────────────────────
-// Routes fédérées : /api/v1/repos/{owner}/{repo}/...
-// Le dépôt par défaut est system/default (migration 006).
-const REPO_PREFIX = "/api/v1/repos/system/default";
+// ── Repo Prefix Helper (Phase 5C — URL-Driven) ──────────────
+// Le prefix est désormais calculé à partir de l'URL (params.owner, params.repo).
+// Plus de constante hardcodée — chaque page passe son propre prefix.
+
+/** Construit le prefix API pour un dépôt donné. */
+export function buildRepoPrefix(owner: string, repo: string): string {
+  return `/api/v1/repos/${encodeURIComponent(owner)}/${encodeURIComponent(repo)}`;
+}
 
 // ── Types ────────────────────────────────────────────────────
 
@@ -123,6 +127,33 @@ export interface ScoreHistoryResponse {
   trend: "rising" | "falling" | "stable";
 }
 
+// ── Repository Types (Phase 5 — Forge Sociale) ───────────────
+
+export interface Repository {
+  id: string;
+  owner_id: string;
+  name: string;
+  display_name: string;
+  description: string | null;
+  visibility: string;
+  default_branch: string;
+  created_at: string;
+}
+
+export interface RepositoriesResponse {
+  owner: string;
+  repositories: Repository[];
+  count: number;
+}
+
+export interface CreateRepositoryRequest {
+  owner_id: string;
+  name: string;
+  display_name: string;
+  description?: string;
+  visibility?: string;
+}
+
 // ── API Error ────────────────────────────────────────────────
 
 export class ApiError extends Error {
@@ -164,20 +195,21 @@ export async function getStatus(): Promise<SystemStatus> {
   return apiFetch<SystemStatus>("/api/v1/status");
 }
 
-export async function listOperations(limit = 50): Promise<OperationsResponse> {
-  return apiFetch<OperationsResponse>(`${REPO_PREFIX}/operations?limit=${limit}`);
+export async function listOperations(repoPrefix: string, limit = 50): Promise<OperationsResponse> {
+  return apiFetch<OperationsResponse>(`${repoPrefix}/operations?limit=${limit}`);
 }
 
-export async function getOperation(id: string): Promise<Operation> {
-  return apiFetch<Operation>(`${REPO_PREFIX}/operations/${id}`);
+export async function getOperation(repoPrefix: string, id: string): Promise<Operation> {
+  return apiFetch<Operation>(`${repoPrefix}/operations/${id}`);
 }
 
 export async function getChunksByOperation(
+  repoPrefix: string,
   id: string,
   file?: string,
 ): Promise<ChunksResponse> {
   const params = file ? `?file=${encodeURIComponent(file)}` : "";
-  return apiFetch<ChunksResponse>(`${REPO_PREFIX}/operations/${id}/chunks${params}`);
+  return apiFetch<ChunksResponse>(`${repoPrefix}/operations/${id}/chunks${params}`);
 }
 
 export async function searchChunksByName(
@@ -198,15 +230,17 @@ export async function semanticSearch(
 }
 
 export async function getOperationDiff(
+  repoPrefix: string,
   id: string,
 ): Promise<DiffResponse> {
-  return apiFetch<DiffResponse>(`${REPO_PREFIX}/operations/${id}/diff`);
+  return apiFetch<DiffResponse>(`${repoPrefix}/operations/${id}/diff`);
 }
 
 export async function getIpfsContent(
+  repoPrefix: string,
   id: string,
 ): Promise<IpfsContentResponse> {
-  return apiFetch<IpfsContentResponse>(`${REPO_PREFIX}/operations/${id}/ipfs`);
+  return apiFetch<IpfsContentResponse>(`${repoPrefix}/operations/${id}/ipfs`);
 }
 
 // ── Create Operation ─────────────────────────────────────────
@@ -226,9 +260,10 @@ export interface CreateOperationRequest {
 }
 
 export async function createOperation(
+  repoPrefix: string,
   body: CreateOperationRequest,
 ): Promise<Operation> {
-  const res = await fetch(`${REPO_PREFIX}/operations`, {
+  const res = await fetch(`${repoPrefix}/operations`, {
     method: "POST",
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify(body),
@@ -245,13 +280,41 @@ export async function createOperation(
 // ── Oracle Reviews (Phase 9) ─────────────────────────────────
 
 export async function getOperationReviews(
+  repoPrefix: string,
   id: string,
 ): Promise<ReviewsResponse> {
-  return apiFetch<ReviewsResponse>(`${REPO_PREFIX}/operations/${id}/reviews`);
+  return apiFetch<ReviewsResponse>(`${repoPrefix}/operations/${id}/reviews`);
 }
 
 // ── Score History (Phase 9.2 — Sparkline) ────────────────────
 
 export async function getScoreHistory(limit = 10): Promise<ScoreHistoryResponse> {
   return apiFetch<ScoreHistoryResponse>(`/api/v1/reviews/scores?limit=${limit}`);
+}
+
+// ── Repository API (Phase 5 — Forge Sociale) ─────────────────
+
+/** Liste les dépôts d'un acteur par handle. */
+export async function listRepositories(
+  handle: string,
+): Promise<RepositoriesResponse> {
+  return apiFetch<RepositoriesResponse>(`/api/v1/actors/${encodeURIComponent(handle)}/repos`);
+}
+
+/** Récupère les métadonnées d'un dépôt par owner/name. */
+export async function getRepository(
+  owner: string,
+  repo: string,
+): Promise<Repository> {
+  return apiFetch<Repository>(`/api/v1/repos/${encodeURIComponent(owner)}/${encodeURIComponent(repo)}`);
+}
+
+/** Crée un nouveau dépôt. Retourne 201 Created ou 409 Conflict. */
+export async function createRepository(
+  body: CreateRepositoryRequest,
+): Promise<Repository> {
+  return apiFetch<Repository>("/api/v1/repos", {
+    method: "POST",
+    body: JSON.stringify(body),
+  });
 }

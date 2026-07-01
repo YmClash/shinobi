@@ -815,3 +815,220 @@ html * {
   border-color: oklch(0.55 0.05 60 / 25%);
   background: oklch(0.97 0.01 80 / 80%);
 }
+
+/* ═══════════════════════════════════════════════════════════════
+   FORGE — Dépôts & Forge Sociale (Phase 5A)
+   ═══════════════════════════════════════════════════════════════ */
+
+/* ── Card repo ─────────────────────────────────────────────── */
+.forge-card {
+  position: relative;
+  overflow: hidden;
+}
+
+.forge-card-accent {
+  position: absolute;
+  left: 0;
+  top: 0;
+  bottom: 0;
+  width: 3px;
+  background: linear-gradient(
+    180deg,
+    var(--primary),
+    oklch(0.65 0.18 280),
+    var(--primary)
+  );
+  border-radius: 3px 0 0 3px;
+  opacity: 0;
+  transition: opacity 0.3s ease;
+}
+
+.forge-card:hover .forge-card-accent {
+  opacity: 1;
+}
+
+/* ── Create form section ───────────────────────────────────── */
+.forge-create-section {
+  animation: fade-in-up 0.3s ease-out forwards;
+}
+
+/* ── Visibility toggle ─────────────────────────────────────── */
+.forge-visibility-toggle {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.3rem;
+  padding: 0.4rem 0.75rem;
+  font-size: 0.75rem;
+  font-weight: 500;
+  border-radius: 8px;
+  border: 1px solid;
+  cursor: pointer;
+  transition: all 0.2s ease;
+}
+
+.forge-visibility-toggle:hover {
+  transform: translateY(-1px);
+}
+
+/* ── Theme-specific forge cards ────────────────────────────── */
+[data-theme="glass"] .forge-card {
+  backdrop-filter: blur(12px) saturate(160%);
+  -webkit-backdrop-filter: blur(12px) saturate(160%);
+  background: oklch(0.18 0.02 260 / 50%);
+}
+
+[data-theme="cyberpunk"] .forge-card:hover {
+  border-color: oklch(0.72 0.25 310 / 40%);
+  box-shadow: 0 0 12px oklch(0.72 0.25 310 / 10%);
+}
+
+[data-theme="cyberpunk"] .forge-card-accent {
+  background: linear-gradient(
+    180deg,
+    oklch(0.72 0.25 310),
+    oklch(0.65 0.30 280),
+    oklch(0.72 0.25 310)
+  );
+}
+
+[data-theme="scroll"] .forge-card {
+  background: oklch(0.97 0.01 80 / 80%);
+}
+
+/* ═══════════════════════════════════════════════════════════════
+   SIDEBAR — Section Repos (Phase 5B)
+   ═══════════════════════════════════════════════════════════════ */
+
+.sidebar-repos-section {
+  display: flex;
+  flex-direction: column;
+  gap: 0.25rem;
+  padding: 0 0.5rem;
+}
+
+.sidebar-repos-title {
+  font-size: 0.6rem;
+  font-weight: 600;
+  text-transform: uppercase;
+  letter-spacing: 0.08em;
+  color: var(--muted-foreground);
+  padding: 0.25rem 0.5rem;
+  opacity: 0.6;
+}
+
+.sidebar-repo-item {
+  display: flex;
+  align-items: center;
+  gap: 0.4rem;
+  padding: 0.3rem 0.5rem;
+  border-radius: 6px;
+  font-size: 0.7rem;
+  color: var(--sidebar-foreground);
+  transition: all 0.2s ease;
+  cursor: pointer;
+  text-decoration: none;
+}
+
+.sidebar-repo-item:hover {
+  background: var(--sidebar-accent);
+  color: var(--sidebar-accent-foreground);
+}
+
+.sidebar-repo-item.active {
+  background: var(--sidebar-accent);
+  color: var(--sidebar-accent-foreground);
+  font-weight: 500;
+}
+
+.sidebar-repo-icon {
+  font-size: 0.85rem;
+  flex-shrink: 0;
+  opacity: 0.7;
+}
+
+.sidebar-repo-name {
+  flex: 1;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+/* ═══════════════════════════════════════════════════════════════
+   REPO BREADCRUMB — Header contexte repo (Phase 5C)
+   ═══════════════════════════════════════════════════════════════ */
+
+.repo-breadcrumb {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.3rem;
+  padding: 0.2rem 0.55rem;
+  border-radius: 6px;
+  font-size: 0.65rem;
+  font-weight: 500;
+  font-family: var(--font-mono);
+  background: var(--muted);
+  color: var(--muted-foreground);
+  transition: all 0.2s ease;
+}
+
+.repo-breadcrumb:hover {
+  background: var(--accent);
+  color: var(--accent-foreground);
+}
+
+/* ── Repo selector dropdown ────────────────────────────────── */
+.repo-selector {
+  position: relative;
+  display: inline-block;
+}
+
+.repo-selector-menu {
+  position: absolute;
+  top: calc(100% + 4px);
+  left: 0;
+  z-index: 50;
+  min-width: 200px;
+  max-height: 240px;
+  overflow-y: auto;
+  border-radius: 8px;
+  border: 1px solid var(--border);
+  background: var(--popover);
+  color: var(--popover-foreground);
+  box-shadow: 0 8px 24px oklch(0 0 0 / 20%);
+  animation: fade-in-up 0.2s ease-out forwards;
+}
+
+.repo-selector-item {
+  display: flex;
+  align-items: center;
+  gap: 0.4rem;
+  padding: 0.5rem 0.75rem;
+  font-size: 0.75rem;
+  cursor: pointer;
+  transition: background 0.15s ease;
+}
+
+.repo-selector-item:hover {
+  background: var(--accent);
+}
+
+.repo-selector-item.active {
+  background: var(--accent);
+  font-weight: 600;
+}
+
+.repo-selector-item-name {
+  font-family: var(--font-mono);
+  font-size: 0.7rem;
+}
+
+.repo-selector-item-desc {
+  font-size: 0.6rem;
+  color: var(--muted-foreground);
+  margin-left: auto;
+  max-width: 120px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}

@@ -21,6 +21,7 @@ function getScoreTier(score: number): ScoreTier {
 
 interface OracleReviewProps {
   operationId: string;
+  repoPrefix: string;
 }
 
 /**
@@ -28,8 +29,8 @@ interface OracleReviewProps {
  * Apparaît avec une animation fade-in quand la review est disponible.
  * Polling toutes les 5 secondes via useOperationReviews.
  */
-export function OracleReview({ operationId }: OracleReviewProps) {
-  const { data, loading } = useOperationReviews(operationId);
+export function OracleReview({ operationId, repoPrefix }: OracleReviewProps) {
+  const { data, loading } = useOperationReviews(repoPrefix, operationId);
   const [isVisible, setIsVisible] = useState(false);
 
   const hasReviews = data && data.reviews.length > 0;

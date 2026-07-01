@@ -11,6 +11,8 @@ import {
   getOperationReviews,
   getScoreHistory,
   listOperations,
+  listRepositories,
+  getRepository,
   semanticSearch,
   type HealthResponse,
   type SystemStatus,
@@ -22,6 +24,8 @@ import {
   type ReviewsResponse,
   type ScoreHistoryResponse,
   type SemanticSearchResponse,
+  type RepositoriesResponse,
+  type Repository,
 } from "@/lib/api";
 
 // ── Generic async hook ───────────────────────────────────────
@@ -93,9 +97,9 @@ export function useStatus() {
   return useApi<SystemStatus>(() => getStatus(), [], 10_000);
 }
 
-/** Fetches operations list */
-export function useOperations(limit = 5) {
-  return useApi<OperationsResponse>(() => listOperations(limit), [limit]);
+/** Fetches operations list for a specific repo */
+export function useOperations(repoPrefix: string, limit = 5) {
+  return useApi<OperationsResponse>(() => listOperations(repoPrefix, limit), [repoPrefix, limit]);
 }
 
 /** Semantic search with debounce */
@@ -163,31 +167,43 @@ export function useSemanticSearch(
 }
 
 /** Fetches a single operation by ID */
-export function useOperation(id: string) {
-  return useApi<Operation>(() => getOperation(id), [id]);
+export function useOperation(repoPrefix: string, id: string) {
+  return useApi<Operation>(() => getOperation(repoPrefix, id), [repoPrefix, id]);
 }
 
 /** Fetches chunks for an operation */
-export function useOperationChunks(id: string) {
-  return useApi<ChunksResponse>(() => getChunksByOperation(id), [id]);
+export function useOperationChunks(repoPrefix: string, id: string) {
+  return useApi<ChunksResponse>(() => getChunksByOperation(repoPrefix, id), [repoPrefix, id]);
 }
 
 /** Fetches diff for an operation */
-export function useOperationDiff(id: string) {
-  return useApi<DiffResponse>(() => getOperationDiff(id), [id]);
+export function useOperationDiff(repoPrefix: string, id: string) {
+  return useApi<DiffResponse>(() => getOperationDiff(repoPrefix, id), [repoPrefix, id]);
 }
 
 /** Fetches IPFS content for an operation */
-export function useIpfsContent(id: string) {
-  return useApi<IpfsContentResponse>(() => getIpfsContent(id), [id]);
+export function useIpfsContent(repoPrefix: string, id: string) {
+  return useApi<IpfsContentResponse>(() => getIpfsContent(repoPrefix, id), [repoPrefix, id]);
 }
 
 /** Fetches Oracle reviews for an operation — auto-polls every 5 seconds */
-export function useOperationReviews(id: string) {
-  return useApi<ReviewsResponse>(() => getOperationReviews(id), [id], 5_000);
+export function useOperationReviews(repoPrefix: string, id: string) {
+  return useApi<ReviewsResponse>(() => getOperationReviews(repoPrefix, id), [repoPrefix, id], 5_000);
 }
 
 /** Fetches score history for the sparkline — auto-refreshes every 15 seconds */
 export function useScoreHistory(limit = 10) {
   return useApi<ScoreHistoryResponse>(() => getScoreHistory(limit), [limit], 15_000);
+}
+
+// ── Repository hooks (Phase 5 — Forge Sociale) ──────────────
+
+/** Fetches repositories owned by an actor handle */
+export function useRepositories(handle: string) {
+  return useApi<RepositoriesResponse>(() => listRepositories(handle), [handle]);
+}
+
+/** Fetches a single repository by owner/name */
+export function useRepository(owner: string, repo: string) {
+  return useApi<Repository>(() => getRepository(owner, repo), [owner, repo]);
 }
