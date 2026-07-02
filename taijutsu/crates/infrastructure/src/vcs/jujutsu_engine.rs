@@ -19,6 +19,8 @@
 //!
 //! ## Backend
 //! Utilise `SimpleBackend` (natif jj) — pas de dépendance Git.
+//! Remplacer le `SimpleBackend` natif de Jujutsu par le `GitBackend` dans la phase 10
+//! Chaque dépôt Jujutsu est désormais adossé à un repo Git bare interne
 
 use std::path::PathBuf;
 use std::sync::Arc;
@@ -1006,6 +1008,51 @@ mod tests {
             diff.contains(&"src/main.rs".to_string()),
             "diff should contain 'src/main.rs': {:?}",
             diff
+        );
+    }
+
+    // —— Phase 11 —— GitBackend Verification ——————————————————————————————
+
+    #[tokio::test]
+    async fn test_git_repo_exists_after_init() {
+        let tmp = tempfile::TempDir::new().expect("Failed to create temp dir");
+        let engine = JujutsuEngine::new(tmp.path());
+        let repo_id = test_repo_id();
+
+        engine.init_workspace(&repo_id).await.unwrap();
+
+        // Verify the .jj/repo/store/type file declares "git"
+        let store_type_path = tmp
+            .path()
+            .join(repo_id.to_string())
+            .join(".jj")
+            .join("repo")
+            .join("store")
+            .join("type");
+        assert!(store_type_path.exists(), "store/type file should exist");
+        let store_type = std::fs::read_to_string(&store_type_path).unwrap();
+        assert_eq!(
+            store_type.trim(),
+            "git",
+            "store/type should be 'git', got: '{}'",
+            store_type.trim()
+        );
+
+        // Verify the bare git repo directory exists
+        let git_dir = tmp
+            .path()
+            .join(repo_id.to_string())
+            .join(".jj")
+            .join("repo")
+            .join("store")
+            .join("git");
+        assert!(
+            git_dir.exists(),
+            ".jj/repo/store/git/ should exist (bare Git repo)"
+        );
+        assert!(
+            git_dir.is_dir(),
+            ".jj/repo/store/git/ should be a directory"
         );
     }
 
