@@ -1,24 +1,24 @@
-//! Adaptateur VCS â€” Anti-Corruption Layer pour Jujutsu (jj-lib 0.41).
+﻿//! Adaptateur VCS — Anti-Corruption Layer pour Jujutsu (jj-lib 0.41).
 //!
-//! Ce module isole l'API de jj-lib derriÃ¨re le contrat stable `VcsEngine`.
-//! L'Anti-Corruption Layer absorbe les Ã©volutions de l'API jj-lib
+//! Ce module isole l'API de jj-lib derrière le contrat stable `VcsEngine`.
+//! L'Anti-Corruption Layer absorbe les évolutions de l'API jj-lib
 //! (breaking changes entre versions) sans impacter les use cases.
 //!
 //! ## Architecture ACL
 //! - Les types jj-lib (`CommitId`, `Workspace`, `Transaction`) ne traversent
-//!   JAMAIS la frontiÃ¨re de ce module.
-//! - Toute opÃ©ration est traduite en types domain (`ContentId`, `DomainError`).
-//! - Les opÃ©rations jj-lib sont bloquantes (I/O filesystem) â†’ wrappÃ©es dans
+//!   JAMAIS la frontière de ce module.
+//! - Toute opération est traduite en types domain (`ContentId`, `DomainError`).
+//! - Les opérations jj-lib sont bloquantes (I/O filesystem) → wrappées dans
 //!   `tokio::task::spawn_blocking()` pour ne pas bloquer le runtime async.
 //!
 //! ## Choix du Mutex : `parking_lot::Mutex` vs `tokio::Mutex`
-//! `tokio::Mutex` nÃ©cessite un runtime async pour `.lock().await`, ce qui
+//! `tokio::Mutex` nécessite un runtime async pour `.lock().await`, ce qui
 //! le rend inutilisable directement dans `spawn_blocking`. `parking_lot::Mutex`
-//! est synchrone, sans poisoning, plus rapide, et dÃ©jÃ  prÃ©sent dans le graphe
-//! de dÃ©pendances via jj-lib â†’ gix â†’ dashmap.
+//! est synchrone, sans poisoning, plus rapide, et déjà présent dans le graphe
+//! de dépendances via jj-lib → gix → dashmap.
 //!
 //! ## Backend
-//! Utilise `SimpleBackend` (natif jj) â€” pas de dÃ©pendance Git.
+//! Utilise `SimpleBackend` (natif jj) — pas de dépendance Git.
 
 use std::path::PathBuf;
 use std::sync::Arc;
@@ -33,7 +33,7 @@ use uuid::Uuid;
 use domain::entities::content_id::ContentId;
 use domain::errors::DomainError;
 use domain::ports::vcs_engine::VcsEngine;
-// ObjectId fournit la mÃ©thode .hex() sur CommitId â€” nÃ©cessaire pour l'ACL
+// ObjectId fournit la méthode .hex() sur CommitId — nécessaire pour l'ACL
 use jj_lib::backend::{CommitId, CopyId, TreeValue};
 use jj_lib::matchers::EverythingMatcher;
 use jj_lib::merged_tree::MergedTree;
@@ -42,12 +42,12 @@ use jj_lib::repo::Repo as _;
 use jj_lib::repo_path::RepoPathBuf;
 use jj_lib::tree_builder::TreeBuilder; // Trait requis pour .store(), .view() sur Arc<ReadonlyRepo>
 
-// â”€â”€ Types internes ACL (ne sortent jamais du module) â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
+// ── Types internes ACL (ne sortent jamais du module) ───────────────────────
 
 /// Handle interne vers un workspace jj ouvert.
 /// Encapsule les types jj-lib pour qu'ils ne fuient pas vers le domain.
 struct WorkspaceHandle {
-    #[allow(dead_code)] // Phase 4 : accÃ¨s au working copy (pas utilisÃ© pour les ops VCS)
+    #[allow(dead_code)] // Phase 4 : accès au working copy (pas utilisé pour les ops VCS)
     workspace: Option<jj_lib::workspace::Workspace>,
     repo: Arc<jj_lib::repo::ReadonlyRepo>,
     #[allow(dead_code)] // Phase 4 : signature des commits (UserSettings::signature())
@@ -55,118 +55,120 @@ struct WorkspaceHandle {
 }
 
 impl WorkspaceHandle {
-    /// Met Ã  jour l'Arc<ReadonlyRepo> aprÃ¨s un tx.commit().
-    /// jj-lib retourne un nouveau repo Ã  chaque transaction terminÃ©e â€”
-    /// l'ancien est obsolÃ¨te et ne reflÃ¨te plus l'Ã©tat du repo.
+    //// Met à jour l'Arc<ReadonlyRepo> après un tx.commit().
+    /// jj-lib retourne un nouveau repo à chaque transaction terminée —
+    /// l'ancien est obsolète et ne reflète plus l'état du repo.
     fn update_repo(&mut self, new_repo: Arc<jj_lib::repo::ReadonlyRepo>) {
         self.repo = new_repo;
     }
 }
 
-// â”€â”€ UNSAFE CONTRACT â€” NE MODIFIEZ PAS SANS COMPRENDRE â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
+// ── UNSAFE CONTRACT — NE MODIFIEZ PAS SANS COMPRENDRE ──────────────────────
 //
 // # Pourquoi `unsafe impl Send + Sync` ?
 //
 // `jj_lib::workspace::Workspace` contient des types `!Send` (handles internes
 // au backend, file descriptors, caches thread-local). Le compilateur Rust
-// refuse donc lÃ©gitimement de dÃ©placer `WorkspaceHandle` entre threads.
+// refuse donc légitimement de déplacer `WorkspaceHandle` entre threads.
 //
-// Nous dÃ©clarons manuellement `Send + Sync` car notre architecture impose
-// trois invariants qui rendent cette transgression **mathÃ©matiquement sÃ»re** :
+// Nous déclarons manuellement `Send + Sync` car notre architecture impose
+// trois invariants qui rendent cette transgression **mathématiquement sûre** :
 //
-// # Les Trois Piliers de SÃ©curitÃ©
+// # Les Trois Piliers de Sécurité
 //
-// ## Pilier 1 â€” `parking_lot::Mutex` (barriÃ¨re de synchronisation)
+// ## Pilier 1 — `parking_lot::Mutex` (barrière de synchronisation)
 //   Le `WorkspaceHandle` vit dans un `Arc<parking_lot::Mutex<Option<_>>>`.
-//   Le Mutex agit comme une **barriÃ¨re matÃ©rielle** : un seul thread peut
-//   dÃ©tenir le `MutexGuard` Ã  un instant donnÃ©. Aucun accÃ¨s concurrent
-//   n'est physiquement possible, Ã©liminant les data races.
-//   PropriÃ©tÃ© bonus : `parking_lot` ne poison pas â€” un panic dans un thread
+//   Le Mutex agit comme une **barrière matérielle** : un seul thread peut
+//   détenir le `MutexGuard` à un instant donné. Aucun accès concurrent
+//   n'est physiquement possible, éliminant les data races.
+//   Propriété bonus : `parking_lot` ne poison pas — un panic dans un thread
 //   ne corrompt pas le Mutex pour les threads suivants.
 //
-// ## Pilier 2 â€” `tokio::task::spawn_blocking` (isolation thread OS)
-//   Chaque opÃ©ration sur le handle est exÃ©cutÃ©e dans `spawn_blocking`,
-//   qui dispatch la closure sur un **thread OS dÃ©diÃ©** du pool bloquant
-//   de Tokio. Le handle ne traverse jamais la frontiÃ¨re async/sync :
-//   il est acquis, utilisÃ©, et relÃ¢chÃ© **entiÃ¨rement dans le mÃªme thread**.
+// ## Pilier 2 — `tokio::task::spawn_blocking` (isolation thread OS)
+//   Chaque opération sur le handle est exécutée dans `spawn_blocking`,
+//   qui dispatch la closure sur un **thread OS dédié** du pool bloquant
+//   de Tokio. Le handle ne traverse jamais la frontière async/sync :
+//   il est acquis, utilisé, et relâché **entièrement dans le même thread**.
 //
-// ## Pilier 3 â€” Pas de `.await` dans les sections critiques
+// ## Pilier 3 — Pas de `.await` dans les sections critiques
 //   Aucun point de yield async n'existe entre `.lock()` et le drop du
 //   `MutexGuard`. La closure dans `spawn_blocking` est **synchrone de bout
-//   en bout**. Il est impossible pour le runtime Tokio de migrer la tÃ¢che
-//   vers un autre thread pendant que le handle est empruntÃ©.
+//   en bout**. Il est impossible pour le runtime Tokio de migrer la tâche
+//   vers un autre thread pendant que le handle est emprunté.
 //
-// # Modes de DÃ©faillance Catastrophiques (si les invariants sont violÃ©s)
+// # Modes de Défaillance Catastrophiques (si les invariants sont violés)
 //
-// âš ï¸  **Data Race** : Si le handle est accÃ©dÃ© depuis une tÃ¢che async
-//     (sans spawn_blocking), le runtime Tokio peut migrer la tÃ¢che vers
-//     un autre OS thread entre deux accÃ¨s â€” les types `!Send` internes
-//     seront alors utilisÃ©s depuis un thread diffÃ©rent de celui qui les
-//     a crÃ©Ã©s â†’ **Undefined Behavior**.
+// ⚠️  **Data Race** : Si le handle est accédé depuis une tâche async
+//     (sans spawn_blocking), le runtime Tokio peut migrer la tâche vers
+//     un autre OS thread entre deux accès — les types `!Send` internes
+//     seront alors utilisés depuis un thread différent de celui qui les
+//     a créés → **Undefined Behavior**.
 //
-// âš ï¸  **Corruption MÃ©moire** : Les caches internes de `Workspace` (backend
+// ⚠️  **Corruption Mémoire** : Les caches internes de `Workspace` (backend
 //     store, file handles) maintiennent des invariants thread-local.
-//     Un accÃ¨s cross-thread provoque des lectures de mÃ©moire invalide,
-//     des double-free, ou des Ã©critures fantÃ´mes â†’ **segfault silencieux
-//     ou corruption de donnÃ©es du repo .jj/**.
+//     Un accès cross-thread provoque des lectures de mémoire invalide,
+//     des double-free, ou des écritures fantômes → **segfault silencieux
+//     ou corruption de données du repo .jj/**.
 //
-// âš ï¸  **IndÃ©terminisme** : Les symptÃ´mes ne sont PAS reproductibles.
-//     Un accÃ¨s non-protÃ©gÃ© peut fonctionner 999 fois et crasher Ã  la
-//     1000Ã¨me, selon l'ordonnancement des threads par l'OS.
+// ⚠️  **Indéterminisme** : Les symptômes ne sont PAS reproductibles.
+//     Un accès non-protégé peut fonctionner 999 fois et crasher à la
+//     1000ème, selon l'ordonnancement des threads par l'OS.
 //
-// # OPÃ‰RATIONS FORMELLEMENT INTERDITES
+// # OPÉRATIONS FORMELLEMENT INTERDITES
 //
-// ðŸš« `handle.lock()` dans une closure `async move { ... }` sans spawn_blocking
-// ðŸš« `handle.lock()` dans un handler Axum/Tonic directement (c'est async !)
-// ðŸš« Stocker un `MutexGuard` dans une variable qui traverse un `.await`
-// ðŸš« Cloner le `WorkspaceHandle` en dehors du `Mutex`
-// ðŸš« ImplÃ©menter `Deref` ou tout trait qui exposerait `Workspace` hors du module
+// 🚫 `handle.lock()` dans une closure `async move { ... }` sans spawn_blocking
+// 🚫 `handle.lock()` dans un handler Axum/Tonic directement (c'est async !)
+// 🚫 Stocker un `MutexGuard` dans une variable qui traverse un `.await`
+// 🚫 Cloner le `WorkspaceHandle` en dehors du `Mutex`
+// 🚫 Implémenter `Deref` ou tout trait qui exposerait `Workspace` hors du module
 //
 // # Preuve de Correction
 //
-// âˆ€ accÃ¨s A au WorkspaceHandle :
-//   A âˆˆ spawn_blocking âˆ§ A protÃ©gÃ© par Mutex::lock() âˆ§ Â¬âˆƒ yield point entre lock/unlock
-//   âŸ¹ A s'exÃ©cute sur un unique OS thread, de maniÃ¨re sÃ©quentielle et exclusive
-//   âŸ¹ les types !Send ne sont jamais observÃ©s depuis un thread diffÃ©rent
-//   âŸ¹ le comportement est Ã©quivalent Ã  un programme single-threaded
-//   âŸ¹ CQFD : pas de data race, pas d'UB
+// ∀ accès A au WorkspaceHandle :
+//   A ∈ spawn_blocking ∧ A protégé par Mutex::lock() ∧ ¬∃ yield point entre lock/unlock
+//   ⟹ A s'exécute sur un unique OS thread, de manière séquentielle et exclusive
+//   ⟹ les types !Send ne sont jamais observés depuis un thread différent
+//   ⟹ le comportement est équivalent à un programme single-threaded
+//   ⟹ CQFD : pas de data race, pas d'UB
 //
-// DerniÃ¨re vÃ©rification : 2026-06-07 â€” Phase 2 v0.2.2
-// VÃ©rificateur : Analyse statique manuelle + 4/4 tests passÃ©s
-// â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
+// Dernière vérification : 2026-06-07 — Phase 2 v0.2.2
+// Vérificateur : Analyse statique manuelle + 4/4 tests passés
+// ─────────────────────────────────────────────────────────────────────────────
 unsafe impl Send for WorkspaceHandle {}
 unsafe impl Sync for WorkspaceHandle {}
 
 /// Adaptateur jj-lib avec Anti-Corruption Layer.
 ///
-/// Utilise le `SimpleBackend` natif de Jujutsu (pas de Git).
+/// Utilise le `GitBackend` de Jujutsu (Phase 11 — Mutation Git).
+/// Chaque workspace est adossé à un repo Git bare interne.
 ///
 /// ## Multi-Tenant (Phase 10A)
 /// Le registre `DashMap<Uuid, Arc<Mutex<WorkspaceHandle>>>` isole
-/// le verrou au niveau de chaque dÃ©pÃ´t. Deux acteurs peuvent commiter
-/// dans des dÃ©pÃ´ts diffÃ©rents en parallÃ¨le sans contention.
+/// le verrou au niveau de chaque depot. Deux acteurs peuvent commiter
+/// dans des depots differents en parallèle sans contention.
 pub struct JujutsuEngine {
-    /// RÃ©pertoire racine du workspace VCS.
+    /// Repertoire racine du workspace VCS.
     /// Chaque repo vit dans `{workspace_root}/{repo_id}/`.
     workspace_root: PathBuf,
-    /// Registre de handles par repo_id (Phase 10A â€” Multi-Tenant).
+    /// Registre de handles par repo_id (Phase 10A du Multi-Tenant).
     handles: DashMap<Uuid, Arc<Mutex<WorkspaceHandle>>>,
 }
 
 impl JujutsuEngine {
     /// Construit un nouvel adaptateur pour le workspace donné.
     ///
-    /// Le chemin est résolu en absolu — jj-lib `Workspace::init_simple`
+    /// Le chemin est résolu en absolu — jj-lib `Workspace::init_internal_git`
     /// peut paniquer avec des chemins relatifs sur Windows.
     /// Note : on évite `canonicalize()` car sur Windows il ajoute le
-    /// préfixe `\\?\` que jj-lib SimpleBackend ne gère pas.
+    /// préfixe `\\?\` que jj-lib GitBackend/gitoxide ne gère pas.
     pub fn new(workspace_root: impl Into<PathBuf>) -> Self {
         let raw: PathBuf = workspace_root.into();
         let absolute = if raw.is_absolute() {
             raw
         } else {
             // Normaliser : "./workspace" → "workspace" avant le join
-            let cleaned = raw.to_string_lossy()
+            let cleaned = raw
+                .to_string_lossy()
                 .trim_start_matches("./")
                 .trim_start_matches(".\\")
                 .to_string();
@@ -182,13 +184,13 @@ impl JujutsuEngine {
         }
     }
 
-    /// RÃ©cupÃ¨re le handle pour un repo donnÃ© (cheap Arc clone).
+    /// Récupérer le handle pour un repo donnée (cheap Arc clone).
     fn get_handle(&self, repo_id: &Uuid) -> Option<Arc<Mutex<WorkspaceHandle>>> {
         self.handles.get(repo_id).map(|entry| entry.value().clone())
     }
 
-    /// CrÃ©e un `UserSettings` minimal pour jj-lib.
-    /// jj-lib est "headless" â€” il ne lit pas ~/.jjconfig.toml.
+    /// Crée un `UserSettings` minimal pour jj-lib.
+    /// jj-lib est "headless" — il ne lit pas ~/.jjconfig.toml.
     /// On fournit un config TOML inline avec toutes les valeurs requises.
     fn create_settings() -> Result<jj_lib::settings::UserSettings, DomainError> {
         use jj_lib::config::ConfigLayer;
@@ -231,6 +233,8 @@ impl VcsEngine for JujutsuEngine {
             move || {
                 let settings = JujutsuEngine::create_settings()?;
 
+                // Créer le répertoire cible s'il n'existe pas encore
+                // (jj-lib crée .jj/ à l'intérieur mais pas le parent)
                 std::fs::create_dir_all(&workspace_path).map_err(|e| {
                     DomainError::VcsError(format!(
                         "Cannot create workspace dir {}: {e}",
@@ -241,11 +245,20 @@ impl VcsEngine for JujutsuEngine {
                 let jj_dir = workspace_path.join(".jj");
 
                 let wh = if jj_dir.exists() {
+                    // ── Workspace existant → rouvrir le repo ────────────────
+                    // jj-lib refuse init_simple si .jj/ existe déjà.
+                    // On charge le repo directement via RepoLoader.
+                    // Note : `WorkspaceHandle.workspace` est `#[allow(dead_code)]`
+                    // — on ne l'utilise pas pour les opérations VCS.
                     info!(
                         path = %workspace_path.display(),
                         repo_id = %rid,
-                        "Workspace jj existant dÃ©tectÃ© â€” rÃ©ouverture (skip init)"
+                        "Workspace jj existant détecté — réouverture (skip init)"
                     );
+
+                    // RepoLoader::init_from_file_system lit les fichiers `type`
+                    // dans .jj/repo/store, .jj/repo/op_store, etc. et charge
+                    // les bons backends via StoreFactories::default().
 
                     let store_factories = jj_lib::repo::StoreFactories::default();
                     let repo_loader = jj_lib::repo::RepoLoader::init_from_file_system(
@@ -254,13 +267,14 @@ impl VcsEngine for JujutsuEngine {
                         &store_factories,
                     )
                     .map_err(|e| {
-                        DomainError::VcsError(format!("RepoLoader init_from_file_system failed: {e}"))
+                        DomainError::VcsError(format!(
+                            "RepoLoader init_from_file_system failed: {e}"
+                        ))
                     })?;
 
-                    let repo = pollster::block_on(repo_loader.load_at_head())
-                        .map_err(|e| {
-                            DomainError::VcsError(format!("RepoLoader load_at_head failed: {e}"))
-                        })?;
+                    let repo = pollster::block_on(repo_loader.load_at_head()).map_err(|e| {
+                        DomainError::VcsError(format!("RepoLoader load_at_head failed: {e}"))
+                    })?;
 
                     WorkspaceHandle {
                         workspace: None,
@@ -269,16 +283,14 @@ impl VcsEngine for JujutsuEngine {
                     }
                 } else {
                     let (workspace, repo) = pollster::block_on(
-                        jj_lib::workspace::Workspace::init_simple(&settings, &workspace_path),
+                        jj_lib::workspace::Workspace::init_internal_git(&settings, &workspace_path),
                     )
-                    .map_err(|e| {
-                        DomainError::VcsError(format!("Init workspace failed: {e}"))
-                    })?;
+                    .map_err(|e| DomainError::VcsError(format!("Init workspace failed: {e}")))?;
 
                     info!(
                         path = %workspace_path.display(),
                         repo_id = %rid,
-                        "Workspace jj initialisÃ© (SimpleBackend â€” nouveau)"
+                        "Workspace jj existant détecté — réouverture (skip init)"
                     );
 
                     WorkspaceHandle {
@@ -318,18 +330,18 @@ impl VcsEngine for JujutsuEngine {
             let mut guard = handle_arc.lock();
             let wh = &mut *guard;
 
-            // Cloner l'Arc<ReadonlyRepo> avant de dÃ©marrer la transaction.
-            // start_transaction(self: &Arc<Self>) emprunte l'Arc â€” on ne peut
-            // pas emprunter depuis le MutexGuard en mÃªme temps.
+            // Cloner l'Arc<ReadonlyRepo> avant de démarrer la transaction.
+            // start_transaction(self: &Arc<Self>) emprunte l'Arc - on ne peut
+            // pas emprunter depuis le MutexGuard en meme temps.
             let repo_arc = wh.repo.clone();
             let store = repo_arc.store();
 
-            // â”€â”€ Construire le MergedTree â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
+            // ── Construire le MergedTree ─────────────────────────────────
             let merged_tree = if files_owned.is_empty() {
-                // Cas Phase 3 : empty tree (rÃ©tro-compatible)
+                // Cas Phase 3 : empty tree (rétro-compatible)
                 store.empty_merged_tree()
             } else {
-                // Cas Phase 4A : TreeBuilder avec fichiers rÃ©els
+                // Cas Phase 4A : TreeBuilder avec fichiers réels
                 let mut tree_builder =
                     TreeBuilder::new(store.clone(), store.empty_tree_id().clone());
 
@@ -340,9 +352,9 @@ impl VcsEngine for JujutsuEngine {
 
                     // IMPORTANT: Pont Asynchrone (Cursor + AsyncRead)
                     // store.write_file() attend &mut dyn AsyncRead + Send + Unpin.
-                    // std::io::Cursor implÃ©mente tokio::io::AsyncRead via le
-                    // feature io-util (activÃ© par tokio "full") â€” pollster::block_on
-                    // exÃ©cute le futur synchronement dans spawn_blocking.
+                    // std::io::Cursor implémente tokio::io::AsyncRead via le
+                    // feature io-util (activé par tokio "full") — pollster::block_on
+                    // exécute le futur synchronement dans spawn_blocking.
                     let mut cursor = std::io::Cursor::new(content.as_slice());
                     let file_id = pollster::block_on(store.write_file(&repo_path, &mut cursor))
                         .map_err(|e| DomainError::VcsError(format!("write_file failed: {e}")))?;
@@ -357,28 +369,28 @@ impl VcsEngine for JujutsuEngine {
                     );
                 }
 
-                // write_tree() est async â€” pollster::block_on dans spawn_blocking
+                // write_tree() est async — pollster::block_on dans spawn_blocking
                 let tree_id = pollster::block_on(tree_builder.write_tree()).map_err(|e| {
                     DomainError::VcsError(format!("TreeBuilder write_tree failed: {e}"))
                 })?;
 
-                // TreeId â†’ MergedTree rÃ©solu (sans conflits)
+                // TreeId → MergedTree résolu (sans conflits)
                 MergedTree::resolved(store.clone(), tree_id)
             };
 
-            // â”€â”€ Transaction (inchangÃ© sauf le tree) â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
+            // ── Transaction (inchangé sauf le tree) ──────────────────────
             let mut tx = repo_arc.start_transaction();
 
-            // DÃ©terminer les parents : heads triÃ©s, ou root_commit si vide
+            // Déterminer les parents : heads triés, ou root_commit si vide
             let mut heads: Vec<CommitId> = repo_arc.view().heads().iter().cloned().collect();
-            heads.sort(); // CommitId: Ord dÃ©rivÃ© (object_id.rs) â€” dÃ©terminisme
+            heads.sort(); // CommitId: Ord dérivé (object_id.rs) — déterminisme
             let parents = if heads.is_empty() {
                 vec![store.root_commit_id().clone()]
             } else {
                 heads
             };
 
-            // CrÃ©er le commit via CommitBuilder (transactionnel rÃ©el)
+            // Créer le commit via CommitBuilder (transactionnel réel)
             let commit = pollster::block_on(
                 tx.repo_mut()
                     .new_commit(parents, merged_tree)
@@ -390,11 +402,11 @@ impl VcsEngine for JujutsuEngine {
             // ACL : capturer le CommitId hex AVANT de consommer tx
             let commit_id_hex = commit.id().hex();
 
-            // Finaliser la transaction â€” publie le commit dans le repo
+            // Finaliser la transaction — publie le commit dans le repo
             let new_repo = pollster::block_on(tx.commit(format!("SHINOBI: {desc}")))
                 .map_err(|e| DomainError::VcsError(format!("Transaction commit failed: {e}")))?;
 
-            // Mettre Ã  jour le handle avec le nouveau repo
+            // Mettre à jour le handle avec le nouveau repo
             wh.update_repo(new_repo);
 
             let file_count = files_owned.len();
@@ -402,7 +414,7 @@ impl VcsEngine for JujutsuEngine {
                 description = %desc,
                 commit_id = %commit_id_hex,
                 files = file_count,
-                "OpÃ©ration VCS crÃ©Ã©e (jj SimpleBackend â€” commit transactionnel rÃ©el)"
+                "Opération VCS créée (jj SimpleBackend — commit transactionnel réel)"
             );
 
             Ok(ContentId::new(commit_id_hex))
@@ -416,25 +428,30 @@ impl VcsEngine for JujutsuEngine {
         let handle_arc = match self.get_handle(repo_id) {
             Some(h) => h,
             None => {
-                warn!(repo_id = %repo_id, "resolve_head: workspace non initialisÃ©");
+                warn!(repo_id = %repo_id, "resolve_head: workspace non initialisé");
                 return Ok(None);
             }
         };
 
         tokio::task::spawn_blocking(move || {
+            // parking_lot::Mutex::lock() — accès direct, aucun .await
             let guard = handle_arc.lock();
             let handle = &*guard;
 
             let view = handle.repo.view();
+            // Tri lexicographique pour un HEAD déterministe
+            // HashSet n'a aucun ordre garanti — sans tri, .first()
+            // retournerait un head arbitraire entre exécutions.
             let mut heads: Vec<_> = view.heads().iter().cloned().collect();
             heads.sort();
 
             if let Some(head_id) = heads.first() {
+                // CommitId → hex string → ContentId (ACL : type jj ne sort pas)
                 let hex = head_id.hex();
-                info!(head = %hex, "HEAD rÃ©solu depuis le repo jj");
+                info!(head = %hex, "HEAD résolu depuis le repo jj");
                 Ok(Some(ContentId::new(hex)))
             } else {
-                info!("Repo vide â€” pas de HEAD");
+                info!("Repo vide — pas de HEAD");
                 Ok(None)
             }
         })
@@ -443,7 +460,11 @@ impl VcsEngine for JujutsuEngine {
     }
 
     #[instrument(skip(self))]
-    async fn diff_since(&self, repo_id: &Uuid, content_id: &ContentId) -> Result<Vec<String>, DomainError> {
+    async fn diff_since(
+        &self,
+        repo_id: &Uuid,
+        content_id: &ContentId,
+    ) -> Result<Vec<String>, DomainError> {
         let cid_hex = content_id.to_string();
         let handle_arc = self.get_handle(repo_id).ok_or_else(|| {
             DomainError::VcsError(format!("workspace not initialized for repo {repo_id}"))
@@ -456,12 +477,12 @@ impl VcsEngine for JujutsuEngine {
             let repo = &wh.repo;
             let store = repo.store();
 
-            // 1. ACL inverse : ContentId hex â†’ CommitId jj
+            // 1. ACL inverse : ContentId hex → CommitId jj
             let source_id = CommitId::try_from_hex(&cid_hex).ok_or_else(|| {
                 DomainError::VcsError(format!("invalid hex commit id: {cid_hex}"))
             })?;
 
-            // 2. RÃ©cupÃ©rer le commit source
+            // 2. Récupérer le commit source
             let source_commit =
                 store
                     .get_commit(&source_id)
@@ -470,7 +491,7 @@ impl VcsEngine for JujutsuEngine {
                     })?;
             let source_tree = source_commit.tree();
 
-            // 3. RÃ©cupÃ©rer le HEAD actuel (dÃ©terministe, triÃ©)
+            // 3. Récupérer le HEAD actuel (déterministe, trié)
             let mut heads: Vec<CommitId> = repo.view().heads().iter().cloned().collect();
             heads.sort();
             let head_id = heads
@@ -485,7 +506,7 @@ impl VcsEngine for JujutsuEngine {
             let diff_stream = source_tree.diff_stream(&head_tree, &EverythingMatcher);
             let entries: Vec<_> = pollster::block_on(diff_stream.collect::<Vec<_>>());
 
-            // 5. ACL : TreeDiffEntry â†’ Vec<String> (chemins des fichiers changÃ©s)
+            // 5. ACL : TreeDiffEntry → Vec<String> (chemins des fichiers changés)
             let changed_paths: Vec<String> = entries
                 .into_iter()
                 .filter(|entry| entry.values.is_ok())
@@ -495,7 +516,7 @@ impl VcsEngine for JujutsuEngine {
             info!(
                 source_cid = %cid_hex,
                 changes = changed_paths.len(),
-                "diff_since: comparaison de trees terminÃ©e"
+                "diff_since: comparaison de trees terminée"
             );
 
             Ok(changed_paths)
@@ -505,7 +526,7 @@ impl VcsEngine for JujutsuEngine {
     }
 }
 
-// â”€â”€ Tests â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
+// ── Tests ──────────────────────────────────────────────────────────────────
 
 #[cfg(test)]
 mod tests {
@@ -541,8 +562,14 @@ mod tests {
 
         engine.init_workspace(&repo_id).await.unwrap();
 
-        let result = engine.create_operation(&repo_id, "Test operation", &[], &[]).await;
-        assert!(result.is_ok(), "create_operation failed: {:?}", result.err());
+        let result = engine
+            .create_operation(&repo_id, "Test operation", &[], &[])
+            .await;
+        assert!(
+            result.is_ok(),
+            "create_operation failed: {:?}",
+            result.err()
+        );
 
         let cid = result.unwrap();
         let cid_str = cid.to_string();
@@ -563,7 +590,7 @@ mod tests {
         let head_before = engine.resolve_head(&repo_id).await.unwrap();
         assert!(head_before.is_none(), "HEAD should be None before init");
 
-        // After init: jj creates root commit â†’ HEAD exists
+        // After init: jj creates root commit → HEAD exists
         engine.init_workspace(&repo_id).await.unwrap();
         let head_after = engine.resolve_head(&repo_id).await.unwrap();
         assert!(
@@ -576,7 +603,12 @@ mod tests {
             hex.chars().all(|c| c.is_ascii_hexdigit()),
             "HEAD CID should be hex: {hex}"
         );
-        assert_eq!(hex.len(), 128, "jj CommitId should be 128 hex chars (512 bits): len={}", hex.len());
+        assert_eq!(
+            hex.len(),
+            40,
+            "jj GitBackend CommitId should be 40 hex chars (SHA-1): len={}",
+            hex.len()
+        );
     }
 
     #[tokio::test]
@@ -593,7 +625,7 @@ mod tests {
         assert_eq!(*handle.lock(), Some(42));
     }
 
-    // â”€â”€ Phase 3 â€” Tests transactionnels â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
+    // ── Phase 3 — Tests transactionnels ────────────────────────────────────
 
     #[tokio::test]
     async fn test_create_operation_writes_real_commit() {
@@ -603,13 +635,17 @@ mod tests {
 
         engine.init_workspace(&repo_id).await.unwrap();
 
+        // Capturer le HEAD initial (root commit)
+
         let head_before = engine.resolve_head(&repo_id).await.unwrap().unwrap();
 
+        // Créer une opération transactionnelle réelle
         let cid = engine
             .create_operation(&repo_id, "Phase 3 real commit", &[], &[])
             .await
             .unwrap();
 
+        // Le HEAD doit avoir changé (nouveau commit ≠ root)
         let head_after = engine.resolve_head(&repo_id).await.unwrap().unwrap();
         assert_ne!(
             head_before.to_string(),
@@ -622,7 +658,12 @@ mod tests {
             hex.chars().all(|c| c.is_ascii_hexdigit()),
             "CommitId should be hex: {hex}"
         );
-        assert_eq!(hex.len(), 128, "jj CommitId should be 128 hex chars: len={}", hex.len());
+        assert_eq!(
+            hex.len(),
+            40,
+            "jj GitBackend CommitId should be 40 hex chars (SHA-1): len={}",
+            hex.len()
+        );
     }
 
     #[tokio::test]
@@ -661,9 +702,24 @@ mod tests {
             .await
             .unwrap();
 
-        let head1 = engine.resolve_head(&repo_id).await.unwrap().unwrap().to_string();
-        let head2 = engine.resolve_head(&repo_id).await.unwrap().unwrap().to_string();
-        let head3 = engine.resolve_head(&repo_id).await.unwrap().unwrap().to_string();
+        let head1 = engine
+            .resolve_head(&repo_id)
+            .await
+            .unwrap()
+            .unwrap()
+            .to_string();
+        let head2 = engine
+            .resolve_head(&repo_id)
+            .await
+            .unwrap()
+            .unwrap()
+            .to_string();
+        let head3 = engine
+            .resolve_head(&repo_id)
+            .await
+            .unwrap()
+            .unwrap()
+            .to_string();
 
         assert_eq!(head1, head2, "resolve_head should be deterministic");
         assert_eq!(head2, head3, "resolve_head should be deterministic");
@@ -675,7 +731,9 @@ mod tests {
         let engine = JujutsuEngine::new(tmp.path());
         let repo_id = test_repo_id();
 
-        let result = engine.create_operation(&repo_id, "Should fail", &[], &[]).await;
+        let result = engine
+            .create_operation(&repo_id, "Should fail", &[], &[])
+            .await;
         assert!(result.is_err(), "create_operation should fail without init");
 
         let err = result.unwrap_err();
@@ -714,9 +772,12 @@ mod tests {
 
         engine.init_workspace(&repo_id).await.unwrap();
 
-        let fake_id = ContentId::new("a".repeat(128));
+        let fake_id = ContentId::new("a".repeat(40));
         let result = engine.diff_since(&repo_id, &fake_id).await;
-        assert!(result.is_err(), "diff_since with unknown commit should fail");
+        assert!(
+            result.is_err(),
+            "diff_since with unknown commit should fail"
+        );
     }
 
     #[tokio::test]
@@ -727,14 +788,24 @@ mod tests {
 
         engine.init_workspace(&repo_id).await.unwrap();
 
-        let head_before = engine.resolve_head(&repo_id).await.unwrap().unwrap().to_string();
+        let head_before = engine
+            .resolve_head(&repo_id)
+            .await
+            .unwrap()
+            .unwrap()
+            .to_string();
 
         engine
             .create_operation(&repo_id, "Update repo test", &[], &[])
             .await
             .unwrap();
 
-        let head_after = engine.resolve_head(&repo_id).await.unwrap().unwrap().to_string();
+        let head_after = engine
+            .resolve_head(&repo_id)
+            .await
+            .unwrap()
+            .unwrap()
+            .to_string();
 
         assert_ne!(
             head_before, head_after,
@@ -744,7 +815,10 @@ mod tests {
         let cid2 = engine
             .create_operation(&repo_id, "Second after update", &[], &[])
             .await;
-        assert!(cid2.is_ok(), "Second create_operation should work after repo update");
+        assert!(
+            cid2.is_ok(),
+            "Second create_operation should work after repo update"
+        );
     }
 
     #[tokio::test]
@@ -763,10 +837,14 @@ mod tests {
             .unwrap();
 
         let diff = engine.diff_since(&repo_id, &old_head).await;
-        assert!(diff.is_ok(), "diff_since(old_head) should not panic: {:?}", diff.err());
+        assert!(
+            diff.is_ok(),
+            "diff_since(old_head) should not panic: {:?}",
+            diff.err()
+        );
     }
 
-    // â”€â”€ Phase 4A â€” Tests VCS File Writing â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
+    // ── Phase 4A — Tests VCS File Writing ──────────────────────────────────
 
     #[tokio::test]
     async fn test_create_operation_with_single_file() {
@@ -782,7 +860,11 @@ mod tests {
         let cid = engine
             .create_operation(&repo_id, "Add hello.txt", &[], &files)
             .await;
-        assert!(cid.is_ok(), "create_operation with file failed: {:?}", cid.err());
+        assert!(
+            cid.is_ok(),
+            "create_operation with file failed: {:?}",
+            cid.err()
+        );
 
         let cid = cid.unwrap();
         assert!(!cid.to_string().is_empty(), "ContentId should not be empty");
@@ -812,10 +894,19 @@ mod tests {
         let cid = engine
             .create_operation(&repo_id, "Initial project structure", &[], &files)
             .await;
-        assert!(cid.is_ok(), "create_operation with multiple files failed: {:?}", cid.err());
+        assert!(
+            cid.is_ok(),
+            "create_operation with multiple files failed: {:?}",
+            cid.err()
+        );
 
         let hex = cid.unwrap().to_string();
-        assert_eq!(hex.len(), 128, "jj CommitId should be 128 hex chars: len={}", hex.len());
+        assert_eq!(
+            hex.len(),
+            40,
+            "jj GitBackend CommitId should be 40 hex chars (SHA-1): len={}",
+            hex.len()
+        );
     }
 
     #[tokio::test]
@@ -835,7 +926,10 @@ mod tests {
             .unwrap();
 
         let diff = engine.diff_since(&repo_id, &old_head).await.unwrap();
-        assert!(!diff.is_empty(), "diff_since should detect file addition (got empty vec)");
+        assert!(
+            !diff.is_empty(),
+            "diff_since should detect file addition (got empty vec)"
+        );
         assert!(
             diff.contains(&"hello.txt".to_string()),
             "diff should contain 'hello.txt', got: {:?}",
@@ -882,8 +976,14 @@ mod tests {
             .unwrap();
 
         let files = vec![
-            ("config/app.toml".to_string(), b"[server]\nport = 3000".to_vec()),
-            ("src/main.rs".to_string(), b"fn main() { println!(\"SHINOBI\"); }".to_vec()),
+            (
+                "config/app.toml".to_string(),
+                b"[server]\nport = 3000".to_vec(),
+            ),
+            (
+                "src/main.rs".to_string(),
+                b"fn main() { println!(\"SHINOBI\"); }".to_vec(),
+            ),
         ];
         engine
             .create_operation(&repo_id, "Add project files", &[], &files)
@@ -891,7 +991,12 @@ mod tests {
             .unwrap();
 
         let diff = engine.diff_since(&repo_id, &old_cid).await.unwrap();
-        assert!(diff.len() >= 2, "diff should show at least 2 files, got {}: {:?}", diff.len(), diff);
+        assert!(
+            diff.len() >= 2,
+            "diff should show at least 2 files, got {}: {:?}",
+            diff.len(),
+            diff
+        );
         assert!(
             diff.contains(&"config/app.toml".to_string()),
             "diff should contain 'config/app.toml': {:?}",
@@ -904,7 +1009,7 @@ mod tests {
         );
     }
 
-    // â”€â”€ Phase 10A â€” Multi-Tenant Isolation Tests â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
+    // ── Phase 10A — Multi-Tenant Isolation Tests ──────────────────────────────
 
     #[tokio::test]
     async fn test_two_repos_isolated_workspaces() {
@@ -917,16 +1022,22 @@ mod tests {
         engine.init_workspace(&repo_b).await.unwrap();
 
         let cid_a = engine
-            .create_operation(&repo_a, "Commit in A", &[], &[
-                ("a.txt".to_string(), b"repo A content".to_vec()),
-            ])
+            .create_operation(
+                &repo_a,
+                "Commit in A",
+                &[],
+                &[("a.txt".to_string(), b"repo A content".to_vec())],
+            )
             .await
             .unwrap();
 
         let cid_b = engine
-            .create_operation(&repo_b, "Commit in B", &[], &[
-                ("b.txt".to_string(), b"repo B content".to_vec()),
-            ])
+            .create_operation(
+                &repo_b,
+                "Commit in B",
+                &[],
+                &[("b.txt".to_string(), b"repo B content".to_vec())],
+            )
             .await
             .unwrap();
 
@@ -953,4 +1064,3 @@ mod tests {
         }
     }
 }
-
