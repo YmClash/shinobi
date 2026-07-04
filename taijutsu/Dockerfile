@@ -74,6 +74,7 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     ca-certificates \
     libssl3 \
     curl \
+    git \
     && rm -rf /var/lib/apt/lists/*
 
 # Binaire compilé

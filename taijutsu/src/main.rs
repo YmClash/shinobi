@@ -46,13 +46,15 @@ use infrastructure::persistence::postgres_repo::PostgresOperationRepository;
 use infrastructure::persistence::postgres_repo_repo::PostgresRepoRepository;
 use infrastructure::persistence::postgres_review_repo::PostgresReviewRepository;
 use infrastructure::vcs::jujutsu_engine::JujutsuEngine;
+use infrastructure::vcs::git_cgi::GitCgiBackend;
 use domain::entities::actor::DEFAULT_REPO_ID;
 use domain::ports::vcs_engine::VcsEngine as _; // Trait import — rend init_workspace() visible
 use domain::ports::repository::OperationRepository as _; // Trait import — rend list_recent() visible (backfill)
 use presentation::grpc::services::proto::shinobi_service_server::ShinobiServiceServer;
 use presentation::grpc::services::ShinobiServiceImpl;
 use presentation::rest::routes::create_router;
-use presentation::state::SharedState;
+use presentation::rest::git_http::create_git_router;
+use presentation::state::{SharedState, GitHttpState};
 use tensai::multi_chunker::MultiChunker;
 
 use config::Config;
@@ -286,14 +288,39 @@ async fn main() -> anyhow::Result<()> {
         get_ipfs_content,
         get_reviews,
         get_score_history,
-        resolve_repo,
+        resolve_repo: resolve_repo.clone(),
         create_repository,
         list_repositories,
     };
 
-    // ── Serveur Axum (REST) ────────────────────────
+    // ── Git Bridge HTTP (Phase 12A) ────────────────────
+    let git_cgi = match GitCgiBackend::new() {
+        Ok(cgi) => {
+            info!("\u{2705} Git Bridge HTTP actif (git http-backend)");
+            Some(Arc::new(cgi))
+        }
+        Err(e) => {
+            warn!("\u{26a0}\u{fe0f} Git Bridge HTTP desactive — git non trouve: {e}");
+            None
+        }
+    };
+
+    // ── Serveur Axum (REST + Git HTTP) ────────────────
     let rest_addr = SocketAddr::from(([0, 0, 0, 0], config.rest_port));
-    let rest_router = create_router(shared_state.clone());
+    let rest_router = if let Some(git_cgi) = git_cgi {
+        let git_state = GitHttpState {
+            resolve_repo: resolve_repo.clone(),
+            vcs_engine: vcs.clone(),
+            git_cgi,
+            event_publisher: event_publisher.clone(),
+            operation_repo: repo.clone(),
+            workspace_root: std::path::PathBuf::from(&config.vcs_workspace_root),
+        };
+        create_router(shared_state.clone())
+            .merge(create_git_router(git_state))
+    } else {
+        create_router(shared_state.clone())
+    };
     let rest_listener = TcpListener::bind(rest_addr).await?;
 
     info!(

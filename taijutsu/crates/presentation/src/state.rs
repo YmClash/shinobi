@@ -3,6 +3,7 @@
 //! Contient les use cases injectés depuis le binaire principal.
 //! `Clone` est cheap : tous les champs sont `Arc`.
 
+use std::path::PathBuf;
 use std::sync::Arc;
 
 use application::use_cases::create_operation::CreateOperationUseCase;
@@ -55,4 +56,35 @@ pub struct SharedState {
 
     /// Use case: lister les dépôts d'un acteur (Phase 10D — Préambule Makimono 5).
     pub list_repositories: Arc<ListRepositoriesUseCase>,
+}
+
+// ── Phase 12A — Git Bridge HTTP ──────────────────────────────────────
+
+/// État dédié aux routes Git Smart HTTP Protocol (Phase 12A).
+///
+/// Séparé de `SharedState` car les routes Git utilisent des types
+/// concrets d'infrastructure (`JujutsuEngine`, `GitCgiBackend`) plutôt
+/// que des abstractions domain (traits). C'est une transgression
+/// architecturale délibérée — le protocole Git est intrinsèquement
+/// couplé à l'infrastructure.
+#[derive(Clone)]
+pub struct GitHttpState {
+    /// Résolution sémantique `(owner, repo)` → `Repository`.
+    pub resolve_repo: Arc<ResolveRepoUseCase>,
+
+    /// Moteur VCS concret (type `JujutsuEngine`, pas `dyn VcsEngine`).
+    /// Nécessaire pour `reload_repo()` et `git_repo_path()`.
+    pub vcs_engine: Arc<infrastructure::vcs::jujutsu_engine::JujutsuEngine>,
+
+    /// Backend CGI Git (`git http-backend`).
+    pub git_cgi: Arc<infrastructure::vcs::git_cgi::GitCgiBackend>,
+
+    /// Publication Kafka (étincelle post-push) — optionnel.
+    pub event_publisher: Option<Arc<dyn domain::ports::event_publisher::EventPublisher>>,
+
+    /// Persistence des opérations (combler le vide PostgreSQL).
+    pub operation_repo: Arc<dyn domain::ports::repository::OperationRepository>,
+
+    /// Racine des workspaces VCS (pour construire les chemins).
+    pub workspace_root: PathBuf,
 }

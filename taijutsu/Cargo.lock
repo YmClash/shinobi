@@ -3733,6 +3733,7 @@ dependencies = [
  "axum-prometheus",
  "chrono",
  "domain",
+ "infrastructure",
  "prost",
  "serde",
  "serde_json",

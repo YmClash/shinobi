@@ -1,4 +1,4 @@
-﻿//! Adaptateur VCS — Anti-Corruption Layer pour Jujutsu (jj-lib 0.41).
+//! Adaptateur VCS — Anti-Corruption Layer pour Jujutsu (jj-lib 0.41).
 //!
 //! Ce module isole l'API de jj-lib derrière le contrat stable `VcsEngine`.
 //! L'Anti-Corruption Layer absorbe les évolutions de l'API jj-lib
@@ -220,6 +220,72 @@ behavior = "drop"
 
         jj_lib::settings::UserSettings::from_config(config)
             .map_err(|e| DomainError::VcsError(format!("Settings error: {e}")))
+    }
+
+    // ── Phase 12A — Git Bridge HTTP ────────────────────────────────────
+
+    /// Retourne le chemin du bare Git repo pour un depot donne.
+    ///
+    /// Utilise par le Git Bridge HTTP pour passer `GIT_PROJECT_ROOT`
+    /// au CGI `git http-backend`.
+    ///
+    /// Layout : `{workspace_root}/{repo_id}/.jj/repo/store/git`
+    pub fn git_repo_path(&self, repo_id: &Uuid) -> PathBuf {
+        self.workspace_root
+            .join(repo_id.to_string())
+            .join(".jj")
+            .join("repo")
+            .join("store")
+            .join("git")
+    }
+
+    /// Recharge le `ReadonlyRepo` apres une modification externe du bare Git repo.
+    ///
+    /// Appele apres un `git push` reussi pour synchroniser jj-lib avec les
+    /// nouveaux commits ecrits directement dans `.jj/repo/store/git/` par
+    /// `git http-backend`.
+    ///
+    /// ## Securite
+    /// Respecte le contrat `unsafe impl Send + Sync` : l'operation est
+    /// executee dans `spawn_blocking` sous `parking_lot::Mutex::lock()`.
+    pub async fn reload_repo(&self, repo_id: &Uuid) -> Result<(), DomainError> {
+        let handle_arc = self.get_handle(repo_id).ok_or_else(|| {
+            DomainError::VcsError(format!("workspace not initialized for repo {repo_id}"))
+        })?;
+        let rid = *repo_id;
+        // Calculer le chemin du repo jj (meme pattern que init_workspace)
+        let jj_repo_path = self.workspace_root.join(rid.to_string()).join(".jj").join("repo");
+
+        tokio::task::spawn_blocking(move || {
+            let mut guard = handle_arc.lock();
+            let wh = &mut *guard;
+            let settings = JujutsuEngine::create_settings()?;
+
+            let store_factories = jj_lib::repo::StoreFactories::default();
+            let repo_loader = jj_lib::repo::RepoLoader::init_from_file_system(
+                &settings,
+                &jj_repo_path,
+                &store_factories,
+            )
+            .map_err(|e| {
+                DomainError::VcsError(format!("RepoLoader reload failed: {e}"))
+            })?;
+
+            let new_repo = pollster::block_on(repo_loader.load_at_head()).map_err(|e| {
+                DomainError::VcsError(format!("reload load_at_head failed: {e}"))
+            })?;
+
+            wh.update_repo(new_repo);
+
+            info!(
+                repo_id = %rid,
+                "Repo jj recharge apres modification Git externe (Phase 12A)"
+            );
+
+            Ok(())
+        })
+        .await
+        .map_err(|e| DomainError::Internal(format!("spawn_blocking join error: {e}")))?
     }
 }
 
@@ -1054,6 +1120,32 @@ mod tests {
             git_dir.is_dir(),
             ".jj/repo/store/git/ should be a directory"
         );
+
+        // Verify the bare Git repo has a valid internal structure
+        // A valid bare Git repo MUST contain: HEAD, objects/, refs/
+        let head_file = git_dir.join("HEAD");
+        assert!(
+            head_file.exists(),
+            "git/HEAD should exist (bare Git repo marker)"
+        );
+        let head_content = std::fs::read_to_string(&head_file).unwrap();
+        assert!(
+            head_content.starts_with("ref: ") || head_content.trim().len() == 40,
+            "git/HEAD should be a symbolic ref or a SHA-1 hash, got: '{}'",
+            head_content.trim()
+        );
+
+        let objects_dir = git_dir.join("objects");
+        assert!(
+            objects_dir.exists() && objects_dir.is_dir(),
+            "git/objects/ should exist (Git object store)"
+        );
+
+        let refs_dir = git_dir.join("refs");
+        assert!(
+            refs_dir.exists() && refs_dir.is_dir(),
+            "git/refs/ should exist (Git references)"
+        );
     }
 
     // ── Phase 10A — Multi-Tenant Isolation Tests ──────────────────────────────
@@ -1109,5 +1201,82 @@ mod tests {
             let head = engine.resolve_head(id).await.unwrap();
             assert!(head.is_some(), "Repo {} should have a HEAD", id);
         }
+    }
+
+    // ── Phase 12A — Tests Git Bridge HTTP ──────────────────────────────
+
+    #[tokio::test]
+    async fn test_reload_repo_idempotent() {
+        let tmp = tempfile::TempDir::new().expect("Failed to create temp dir");
+        let engine = JujutsuEngine::new(tmp.path());
+        let repo_id = test_repo_id();
+
+        engine.init_workspace(&repo_id).await.unwrap();
+
+        // Creer un commit pour avoir un HEAD non-root
+        engine
+            .create_operation(&repo_id, "Pre-reload commit", &[], &[])
+            .await
+            .unwrap();
+
+        let head_before = engine.resolve_head(&repo_id).await.unwrap().unwrap();
+
+        // Recharger le repo (pas de modification externe)
+        let reload_result = engine.reload_repo(&repo_id).await;
+        assert!(
+            reload_result.is_ok(),
+            "reload_repo should succeed: {:?}",
+            reload_result.err()
+        );
+
+        // Le HEAD doit etre identique (idempotence)
+        let head_after = engine.resolve_head(&repo_id).await.unwrap().unwrap();
+        assert_eq!(
+            head_before.to_string(),
+            head_after.to_string(),
+            "HEAD should be unchanged after idempotent reload"
+        );
+    }
+
+    #[tokio::test]
+    async fn test_reload_repo_without_init_returns_error() {
+        let tmp = tempfile::TempDir::new().expect("Failed to create temp dir");
+        let engine = JujutsuEngine::new(tmp.path());
+        let repo_id = test_repo_id();
+
+        let result = engine.reload_repo(&repo_id).await;
+        assert!(
+            result.is_err(),
+            "reload_repo should fail without init"
+        );
+
+        let err = result.unwrap_err().to_string();
+        assert!(
+            err.contains("workspace not initialized"),
+            "Error should mention workspace not initialized: {err}"
+        );
+    }
+
+    #[test]
+    fn test_git_repo_path_layout() {
+        let tmp = tempfile::TempDir::new().expect("Failed to create temp dir");
+        let engine = JujutsuEngine::new(tmp.path());
+        let repo_id = Uuid::parse_str("a1a2a3a4-b1b2-c1c2-d1d2-e1e2e3e4e5e6").unwrap();
+
+        let path = engine.git_repo_path(&repo_id);
+        let path_str = path.to_string_lossy();
+
+        assert!(
+            path_str.contains(".jj"),
+            "Path should contain .jj: {path_str}"
+        );
+        assert!(
+            path_str.ends_with("git") || path_str.ends_with("git\\") || path_str.ends_with("git/"),
+            "Path should end with /git: {path_str}"
+        );
+        assert!(
+            path_str.contains(&repo_id.to_string()),
+            "Path should contain repo_id: {path_str}"
+        );
     }
 }
