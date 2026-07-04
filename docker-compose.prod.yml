@@ -4,18 +4,20 @@
 #
 # Stack complet : 7 services + 2 observabilité
 #
-# Architecture réseau (Zero Trust) :
-#   - Taijutsu : aucun port exposé (interne uniquement)
-#   - Makimono : seul point d'accès public (:3001)
+# Architecture réseau :
+#   - Taijutsu : REST API (:3000) + Git Smart HTTP (:3000)
+#   - Makimono : Frontend Next.js (:3001)
 #   - Dojutsu  : dashboard observabilité (:3002)
 #
 # Usage :
-#   docker compose -f docker-compose.prod.yml build
+#   docker compose -f docker-compose.prod.yml build --no-cache taijutsu
 #   docker compose -f docker-compose.prod.yml up -d
 #   docker compose -f docker-compose.prod.yml down
 #
 # Accès :
 #   Frontend  → http://localhost:3001
+#   Git Clone → git clone http://localhost:3000/system/default.git
+#   Git Push  → git push http://localhost:3000/system/default.git
 #   Grafana   → http://localhost:3002 (admin/shinobi)
 #   Prometheus → interne uniquement (prometheus:9090)
 
@@ -26,14 +28,17 @@ services:
   # ═══════════════════════════════════════════════
 
   # ── Taijutsu : Backend Rust ───────────────────
-  # Zero Trust : aucun port exposé sur l'hôte.
-  # Accessible uniquement via le réseau interne shinobi.
+  # Port 3000 exposé pour :
+  #   - API REST (/api/v1/...)
+  #   - Git Smart HTTP (/{owner}/{repo}.git/...) — Phase 12A
   taijutsu:
     build:
       context: ./taijutsu
       dockerfile: Dockerfile
     container_name: shinobi-taijutsu
-    # PAS de ports: exposés — Zero Trust Network
+    # Port 3000 exposé pour Git HTTP (git clone/push)
+    ports:
+      - "3000:3000"
     environment:
       # Fūinjutsu: PostgreSQL (nom DNS Docker)
       DATABASE_URL: postgres://shinobi:shinobi@postgres:5432/shinobi_dev
@@ -62,7 +67,7 @@ services:
       ORACLE_CONSUMER_ENABLED: "true"
       ORACLE_CONSUMER_GROUP: shinobi-oracle-reviewer
       # Observabilité
-      RUST_LOG: info,taijutsu=debug,domain=debug,application=debug
+      RUST_LOG: info,taijutsu=debug,domain=debug,application=debug,infrastructure=debug
     volumes:
       - vcs_workspace:/app/workspace
     depends_on:
