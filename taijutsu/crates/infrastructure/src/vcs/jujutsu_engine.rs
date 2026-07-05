@@ -44,6 +44,20 @@ use jj_lib::repo::Repo as _;
 use jj_lib::repo_path::RepoPathBuf;
 use jj_lib::tree_builder::TreeBuilder; // Trait requis pour .store(), .view() sur Arc<ReadonlyRepo>
 
+// ── Types publics Phase 12A-Fix ────────────────────────────────────────
+
+/// Snapshot complet d'un commit : description + fichiers avec contenu.
+///
+/// Retourne par `JujutsuEngine::read_commit_snapshot()` pour enrichir
+/// les Operations creees par le Sync Hook post-push.
+#[derive(Debug)]
+pub struct CommitSnapshot {
+    /// Description du commit (message de commit Git/jj).
+    pub description: String,
+    /// Fichiers du commit : (chemin, contenu bytes).
+    pub files: Vec<(String, Vec<u8>)>,
+}
+
 // ── Types internes ACL (ne sortent jamais du module) ───────────────────────
 
 /// Handle interne vers un workspace jj ouvert.
@@ -239,11 +253,145 @@ behavior = "drop"
             .join("git")
     }
 
-    /// Recharge le `ReadonlyRepo` apres une modification externe du bare Git repo.
+    /// Resout le HEAD depuis les refs Git du bare repo (pas les heads jj).
+    ///
+    /// Apres un `git push`, les refs Git (`refs/heads/main`) sont mises a jour
+    /// directement par `git http-backend`. Cette methode lit le SHA-1 depuis
+    /// le filesystem — plus fiable que `resolve_head()` qui trie les heads jj
+    /// (dont certains peuvent etre des commits orphelins crees par le Sync Hook).
+    ///
+    /// ## Strategie (robuste)
+    /// 1. Suivre le symref HEAD → `refs/heads/main`
+    /// 2. Fallback : scanner TOUS les loose refs dans `refs/heads/`
+    /// 3. Fallback : scanner packed-refs pour `refs/heads/`
+    ///
+    /// Le fallback est necessaire car le HEAD du bare git repo jj peut
+    /// pointer vers `refs/heads/master` (defaut de `init_internal_git`)
+    /// alors que le push est sur `refs/heads/main`.
+    pub fn resolve_git_head(&self, repo_id: &Uuid) -> Option<ContentId> {
+        let git_dir = self.git_repo_path(repo_id);
+
+        // ── Strategie 1 : suivre le symref HEAD ──────────────────────
+        if let Some(cid) = self.try_resolve_head_symref(&git_dir) {
+            return Some(cid);
+        }
+
+        // ── Strategie 2 : scanner tous les loose refs dans refs/heads/ ──
+        if let Some(cid) = self.scan_loose_refs(&git_dir) {
+            return Some(cid);
+        }
+
+        // ── Strategie 3 : scanner packed-refs ────────────────────────
+        if let Some(cid) = self.scan_packed_refs(&git_dir) {
+            return Some(cid);
+        }
+
+        warn!(
+            repo_id = %repo_id,
+            git_dir = %git_dir.display(),
+            "resolve_git_head: aucune strategie n'a trouve de HEAD valide"
+        );
+        None
+    }
+
+    /// Strategie 1 : Lire HEAD → symref → SHA-1
+    fn try_resolve_head_symref(&self, git_dir: &std::path::Path) -> Option<ContentId> {
+        let head_path = git_dir.join("HEAD");
+        let head_content = std::fs::read_to_string(&head_path).ok()?;
+        let head_content = head_content.trim();
+
+        // HEAD detache (SHA-1 direct)
+        if head_content.len() == 40 && head_content.chars().all(|c| c.is_ascii_hexdigit()) {
+            return Some(ContentId::new(head_content.to_string()));
+        }
+
+        // HEAD symref (ref: refs/heads/main)
+        let ref_name = head_content.strip_prefix("ref: ")?;
+
+        // Loose ref
+        let ref_path = git_dir.join(ref_name);
+        if ref_path.exists() {
+            let sha = std::fs::read_to_string(&ref_path).ok()?;
+            let sha = sha.trim();
+            if sha.len() == 40 && sha.chars().all(|c| c.is_ascii_hexdigit()) {
+                return Some(ContentId::new(sha.to_string()));
+            }
+        }
+
+        // Packed-refs (ref specifique)
+        let packed_refs = git_dir.join("packed-refs");
+        if let Ok(content) = std::fs::read_to_string(&packed_refs) {
+            for line in content.lines() {
+                if line.starts_with('#') || line.starts_with('^') {
+                    continue;
+                }
+                let parts: Vec<&str> = line.split_whitespace().collect();
+                if parts.len() >= 2 && parts[1] == ref_name {
+                    return Some(ContentId::new(parts[0].to_string()));
+                }
+            }
+        }
+
+        None
+    }
+
+    /// Strategie 2 : Scanner tous les loose refs dans refs/heads/ (recursif).
+    /// Retourne le premier SHA-1 valide trouve.
+    fn scan_loose_refs(&self, git_dir: &std::path::Path) -> Option<ContentId> {
+        let refs_heads = git_dir.join("refs").join("heads");
+        self.scan_loose_refs_dir(&refs_heads)
+    }
+
+    /// Helper recursif pour scanner un repertoire de refs.
+    fn scan_loose_refs_dir(&self, dir: &std::path::Path) -> Option<ContentId> {
+        let entries = std::fs::read_dir(dir).ok()?;
+        for entry in entries.flatten() {
+            let path = entry.path();
+            if path.is_dir() {
+                // Sous-dossier (ex: refs/heads/feature/)
+                if let Some(cid) = self.scan_loose_refs_dir(&path) {
+                    return Some(cid);
+                }
+            } else if path.is_file() {
+                if let Ok(content) = std::fs::read_to_string(&path) {
+                    let sha = content.trim();
+                    if sha.len() == 40 && sha.chars().all(|c| c.is_ascii_hexdigit()) {
+                        return Some(ContentId::new(sha.to_string()));
+                    }
+                }
+            }
+        }
+        None
+    }
+
+    /// Strategie 3 : Scanner packed-refs pour toutes les refs/heads/*.
+    fn scan_packed_refs(&self, git_dir: &std::path::Path) -> Option<ContentId> {
+        let packed_refs = git_dir.join("packed-refs");
+        let content = std::fs::read_to_string(&packed_refs).ok()?;
+        for line in content.lines() {
+            if line.starts_with('#') || line.starts_with('^') {
+                continue;
+            }
+            let parts: Vec<&str> = line.split_whitespace().collect();
+            if parts.len() >= 2 && parts[1].starts_with("refs/heads/") {
+                return Some(ContentId::new(parts[0].to_string()));
+            }
+        }
+        None
+    }
+
+    /// Recharge le `ReadonlyRepo` apres une modification externe du bare Git repo,
+    /// puis importe les refs Git dans la vue jj.
     ///
     /// Appele apres un `git push` reussi pour synchroniser jj-lib avec les
     /// nouveaux commits ecrits directement dans `.jj/repo/store/git/` par
     /// `git http-backend`.
+    ///
+    /// ## Flux (Phase 12A-Fix)
+    /// 1. Recharge le repo depuis le disque (`RepoLoader::init_from_file_system`)
+    /// 2. **Importe les refs Git** (`jj_lib::git::import_refs`) — dit à jj
+    ///    que de nouveaux commits existent dans le bare Git repo
+    /// 3. Commit la transaction d'import → met à jour les heads jj
     ///
     /// ## Securite
     /// Respecte le contrat `unsafe impl Send + Sync` : l'operation est
@@ -261,6 +409,7 @@ behavior = "drop"
             let wh = &mut *guard;
             let settings = JujutsuEngine::create_settings()?;
 
+            // 1. Recharger le repo depuis le disque
             let store_factories = jj_lib::repo::StoreFactories::default();
             let repo_loader = jj_lib::repo::RepoLoader::init_from_file_system(
                 &settings,
@@ -271,15 +420,55 @@ behavior = "drop"
                 DomainError::VcsError(format!("RepoLoader reload failed: {e}"))
             })?;
 
-            let new_repo = pollster::block_on(repo_loader.load_at_head()).map_err(|e| {
+            let reloaded_repo = pollster::block_on(repo_loader.load_at_head()).map_err(|e| {
                 DomainError::VcsError(format!("reload load_at_head failed: {e}"))
             })?;
+
+            // 2. Importer les refs Git dans la vue jj
+            //    Sans cette etape, jj ne voit pas les nouveaux commits pushes
+            //    via git http-backend (les git objects existent mais les
+            //    heads jj ne sont pas mis a jour).
+            let import_options = jj_lib::git::GitImportOptions {
+                auto_local_bookmark: true,
+                abandon_unreachable_commits: false,
+                remote_auto_track_bookmarks: std::collections::HashMap::new(),
+            };
+
+            let mut tx = reloaded_repo.start_transaction();
+            let import_result = pollster::block_on(
+                jj_lib::git::import_refs(tx.repo_mut(), &import_options)
+            );
+
+            match import_result {
+                Ok(stats) => {
+                    info!(
+                        repo_id = %rid,
+                        changed_bookmarks = stats.changed_remote_bookmarks.len(),
+                        abandoned = stats.abandoned_commits.len(),
+                        "Git refs importes dans la vue jj"
+                    );
+                }
+                Err(e) => {
+                    warn!(
+                        repo_id = %rid,
+                        error = %e,
+                        "Import refs Git echoue — heads jj non mis a jour"
+                    );
+                }
+            }
+
+            // 3. Commit la transaction (meme si import_refs a echoue,
+            //    on commit pour ne pas bloquer les operations suivantes)
+            let new_repo = pollster::block_on(
+                tx.commit(format!("SHINOBI: git import refs for {rid}"))
+            )
+            .map_err(|e| DomainError::VcsError(format!("reload tx.commit failed: {e}")))?;
 
             wh.update_repo(new_repo);
 
             info!(
                 repo_id = %rid,
-                "Repo jj recharge apres modification Git externe (Phase 12A)"
+                "Repo jj recharge + refs Git importees (Phase 12A-Fix)"
             );
 
             Ok(())
@@ -287,7 +476,162 @@ behavior = "drop"
         .await
         .map_err(|e| DomainError::Internal(format!("spawn_blocking join error: {e}")))?
     }
+
+
+    /// Lit le snapshot **diff** d'un commit : description + fichiers modifies avec contenu.
+    ///
+    /// Utilise pour enrichir les Operations creees par le Sync Hook post-push
+    /// (Phase 12A-Fix). Differe de `diff_since()` qui ne retourne que les chemins.
+    ///
+    /// ## Strategie (Phase 12A-Fix v2)
+    /// Diff entre le **parent commit** et le tree du commit → seuls les fichiers
+    /// modifies/ajoutes apparaissent. Fallback sur l'empty tree si pas de parent
+    /// (premier commit). Pour chaque `TreeValue::File`, on lit le contenu via
+    /// `store.read_file()`.
+    ///
+    /// ## Securite
+    /// Respecte le contrat `unsafe impl Send + Sync` : operation dans
+    /// `spawn_blocking` sous `parking_lot::Mutex::lock()`.
+    pub async fn read_commit_snapshot(
+        &self,
+        repo_id: &Uuid,
+        content_id: &ContentId,
+    ) -> Result<CommitSnapshot, DomainError> {
+        let handle_arc = self.get_handle(repo_id).ok_or_else(|| {
+            DomainError::VcsError(format!("workspace not initialized for repo {repo_id}"))
+        })?;
+        let cid_hex = content_id.to_string();
+
+        tokio::task::spawn_blocking(move || {
+            let guard = handle_arc.lock();
+            let wh = &*guard;
+
+            let repo = &wh.repo;
+            let store = repo.store();
+
+            // 1. ACL inverse : ContentId hex → CommitId jj
+            let commit_id = CommitId::try_from_hex(&cid_hex).ok_or_else(|| {
+                DomainError::VcsError(format!("invalid hex commit id: {cid_hex}"))
+            })?;
+
+            // 2. Charger le commit
+            let commit = store
+                .get_commit(&commit_id)
+                .map_err(|_| DomainError::CommitNotFound {
+                    id: cid_hex.clone(),
+                })?;
+
+            // 3. Extraire la description
+            let description = commit.description().to_string();
+            let commit_tree = commit.tree();
+
+            // 4. Determiner le tree de base pour le diff
+            //    - Si le commit a un parent → diff vs parent (fichiers modifies)
+            //    - Si pas de parent (root commit) → diff vs empty tree (tous les fichiers)
+            let parent_ids = commit.parent_ids();
+            let base_tree = if !parent_ids.is_empty()
+                && parent_ids[0] != *store.root_commit_id()
+            {
+                // Parent existe et n'est pas le root commit
+                match store.get_commit(&parent_ids[0]) {
+                    Ok(parent_commit) => {
+                        info!(
+                            commit_id = %cid_hex,
+                            parent_id = %parent_ids[0].hex(),
+                            "read_commit_snapshot: diff vs parent commit"
+                        );
+                        parent_commit.tree()
+                    }
+                    Err(_) => {
+                        // Parent introuvable → fallback sur empty tree
+                        warn!(
+                            commit_id = %cid_hex,
+                            parent_id = %parent_ids[0].hex(),
+                            "read_commit_snapshot: parent introuvable, fallback empty tree"
+                        );
+                        store.empty_merged_tree()
+                    }
+                }
+            } else {
+                // Pas de parent ou parent = root → premier commit
+                info!(
+                    commit_id = %cid_hex,
+                    "read_commit_snapshot: premier commit (diff vs empty tree)"
+                );
+                store.empty_merged_tree()
+            };
+
+            let diff_stream = base_tree.diff_stream(&commit_tree, &EverythingMatcher);
+            let entries: Vec<_> = pollster::block_on(diff_stream.collect::<Vec<_>>());
+
+            // 5. Pour chaque fichier, lire le contenu
+            let mut files: Vec<(String, Vec<u8>)> = Vec::new();
+
+            for entry in entries {
+                let diff = match entry.values {
+                    Ok(d) => d,
+                    Err(_) => continue,
+                };
+
+                // Extraire le TreeValue resolu (pas de conflit)
+                // Diff.after contient l'etat apres le diff (= les fichiers du commit)
+                let tree_value = match diff.after.as_resolved() {
+                    Some(Some(tv)) => tv,
+                    _ => continue, // conflit ou suppression → skip
+                };
+
+                // Seuls les fichiers nous interessent (pas les symlinks/submodules)
+                let file_id = match tree_value {
+                    TreeValue::File { id, .. } => id,
+                    _ => continue,
+                };
+
+                // Lire le contenu du fichier depuis le store
+                // read_file() retourne Pin<Box<dyn AsyncRead + Send>> → pollster + AsyncReadExt
+                let path = entry.path;
+                let reader_result = pollster::block_on(store.read_file(&path, file_id));
+                match reader_result {
+                    Ok(mut reader) => {
+                        let mut content = Vec::new();
+                        let read_result = pollster::block_on(
+                            tokio::io::AsyncReadExt::read_to_end(&mut reader, &mut content)
+                        );
+                        if read_result.is_ok() {
+                            files.push((
+                                path.as_internal_file_string().to_string(),
+                                content,
+                            ));
+                        } else {
+                            warn!(
+                                path = %path.as_internal_file_string(),
+                                "read_commit_snapshot: failed to read file content (skipped)"
+                            );
+                        }
+                    }
+                    Err(e) => {
+                        warn!(
+                            path = %path.as_internal_file_string(),
+                            error = %e,
+                            "read_commit_snapshot: store.read_file failed (skipped)"
+                        );
+                    }
+                }
+            }
+
+            info!(
+                commit_id = %cid_hex,
+                description = %description.chars().take(80).collect::<String>(),
+                file_count = files.len(),
+                "read_commit_snapshot: snapshot lu depuis le tree jj"
+            );
+
+            Ok(CommitSnapshot { description, files })
+        })
+        .await
+        .map_err(|e| DomainError::Internal(format!("spawn_blocking join error: {e}")))?
+    }
 }
+
 
 #[async_trait]
 impl VcsEngine for JujutsuEngine {
@@ -507,19 +851,45 @@ impl VcsEngine for JujutsuEngine {
             let handle = &*guard;
 
             let view = handle.repo.view();
-            // Tri lexicographique pour un HEAD déterministe
-            // HashSet n'a aucun ordre garanti — sans tri, .first()
-            // retournerait un head arbitraire entre exécutions.
+
+            // ── Strategie 1 : bookmarks locaux (branches Git importees) ──
+            // Apres import_refs(), les branches pushees deviennent des
+            // bookmarks locaux. On cherche le commit le plus recent parmi eux.
+            let bookmark_commit_ids: Vec<CommitId> = view
+                .local_bookmarks()
+                .filter_map(|(_, target)| target.as_normal().cloned())
+                .collect();
+
+            if !bookmark_commit_ids.is_empty() {
+                // Trier pour un HEAD deterministe (meme commit entre executions)
+                let mut sorted = bookmark_commit_ids;
+                sorted.sort();
+                if let Some(head_id) = sorted.last() {
+                    let hex = head_id.hex();
+                    info!(head = %hex, source = "bookmark", "HEAD résolu depuis bookmark local");
+                    return Ok(Some(ContentId::new(hex)));
+                }
+            }
+
+            // ── Strategie 2 : heads jj (fallback pour workspaces locaux) ──
+            // Fonctionnel quand le repo a des commits crees via l'API
+            // (create_operation), pas via git push.
             let mut heads: Vec<_> = view.heads().iter().cloned().collect();
             heads.sort();
 
-            if let Some(head_id) = heads.first() {
-                // CommitId → hex string → ContentId (ACL : type jj ne sort pas)
+            // Filtrer le root commit (timestamp 0, tree vide)
+            let store = handle.repo.store();
+            let non_root_heads: Vec<_> = heads
+                .into_iter()
+                .filter(|id| id != store.root_commit_id())
+                .collect();
+
+            if let Some(head_id) = non_root_heads.last() {
                 let hex = head_id.hex();
-                info!(head = %hex, "HEAD résolu depuis le repo jj");
+                info!(head = %hex, source = "heads", "HEAD résolu depuis les heads jj");
                 Ok(Some(ContentId::new(hex)))
             } else {
-                info!("Repo vide — pas de HEAD");
+                info!("Repo vide — pas de HEAD (ni bookmarks, ni heads non-root)");
                 Ok(None)
             }
         })
@@ -559,14 +929,33 @@ impl VcsEngine for JujutsuEngine {
                     })?;
             let source_tree = source_commit.tree();
 
-            // 3. Récupérer le HEAD actuel (déterministe, trié)
-            let mut heads: Vec<CommitId> = repo.view().heads().iter().cloned().collect();
-            heads.sort();
-            let head_id = heads
-                .first()
+            // 3. Récupérer le HEAD actuel (bookmark-aware)
+            let view = repo.view();
+
+            // Essayer les bookmarks d'abord
+            let bookmark_ids: Vec<CommitId> = view
+                .local_bookmarks()
+                .filter_map(|(_, target)| target.as_normal().cloned())
+                .collect();
+
+            let head_id = if !bookmark_ids.is_empty() {
+                let mut sorted = bookmark_ids;
+                sorted.sort();
+                sorted.last().cloned()
+            } else {
+                // Fallback : heads jj (sans root)
+                let mut heads: Vec<CommitId> = repo.view().heads().iter().cloned().collect();
+                heads.sort();
+                heads
+                    .into_iter()
+                    .filter(|id| id != store.root_commit_id())
+                    .last()
+            };
+
+            let head_id = head_id
                 .ok_or_else(|| DomainError::VcsError("no heads in repo".to_string()))?;
             let head_commit = store
-                .get_commit(head_id)
+                .get_commit(&head_id)
                 .map_err(|e| DomainError::VcsError(format!("failed to get head commit: {e}")))?;
             let head_tree = head_commit.tree();
 
@@ -593,6 +982,7 @@ impl VcsEngine for JujutsuEngine {
         .map_err(|e| DomainError::Internal(format!("spawn_blocking join error: {e}")))?
     }
 }
+
 
 // ── Tests ──────────────────────────────────────────────────────────────────
 
@@ -1277,6 +1667,103 @@ mod tests {
         assert!(
             path_str.contains(&repo_id.to_string()),
             "Path should contain repo_id: {path_str}"
+        );
+    }
+
+    // ── Phase 12A-Fix — read_commit_snapshot ──────────────────────────────
+
+    #[tokio::test]
+    async fn test_read_commit_snapshot_returns_files_and_description() {
+        let tmp = tempfile::TempDir::new().expect("Failed to create temp dir");
+        let engine = JujutsuEngine::new(tmp.path());
+        let repo_id = test_repo_id();
+
+        engine.init_workspace(&repo_id).await.unwrap();
+
+        // Creer un commit avec des fichiers
+        let files = vec![
+            ("src/main.rs".to_string(), b"fn main() {}".to_vec()),
+            ("README.md".to_string(), b"# Hello".to_vec()),
+        ];
+        let cid = engine
+            .create_operation(&repo_id, "Test snapshot commit", &[], &files)
+            .await
+            .unwrap();
+
+        // Lire le snapshot
+        let snapshot = engine.read_commit_snapshot(&repo_id, &cid).await;
+        assert!(
+            snapshot.is_ok(),
+            "read_commit_snapshot should succeed: {:?}",
+            snapshot.err()
+        );
+
+        let snapshot = snapshot.unwrap();
+
+        // Verifier la description
+        assert!(
+            snapshot.description.contains("Test snapshot commit"),
+            "Description should contain commit message, got: '{}'",
+            snapshot.description
+        );
+
+        // Verifier les fichiers
+        assert_eq!(
+            snapshot.files.len(),
+            2,
+            "Snapshot should contain 2 files, got: {}",
+            snapshot.files.len()
+        );
+
+        let paths: Vec<&str> = snapshot.files.iter().map(|(p, _)| p.as_str()).collect();
+        assert!(
+            paths.contains(&"src/main.rs"),
+            "Should contain src/main.rs: {:?}",
+            paths
+        );
+        assert!(
+            paths.contains(&"README.md"),
+            "Should contain README.md: {:?}",
+            paths
+        );
+
+        // Verifier le contenu d'un fichier
+        let main_content = snapshot
+            .files
+            .iter()
+            .find(|(p, _)| p == "src/main.rs")
+            .map(|(_, c)| c.as_slice());
+        assert_eq!(
+            main_content,
+            Some(b"fn main() {}".as_slice()),
+            "src/main.rs content should match"
+        );
+    }
+
+    #[tokio::test]
+    async fn test_read_commit_snapshot_empty_commit() {
+        let tmp = tempfile::TempDir::new().expect("Failed to create temp dir");
+        let engine = JujutsuEngine::new(tmp.path());
+        let repo_id = test_repo_id();
+
+        engine.init_workspace(&repo_id).await.unwrap();
+
+        // Creer un commit vide (empty tree)
+        let cid = engine
+            .create_operation(&repo_id, "Empty commit", &[], &[])
+            .await
+            .unwrap();
+
+        let snapshot = engine.read_commit_snapshot(&repo_id, &cid).await.unwrap();
+
+        assert!(
+            snapshot.description.contains("Empty commit"),
+            "Description should contain commit message"
+        );
+        assert!(
+            snapshot.files.is_empty(),
+            "Empty commit should have no files, got: {}",
+            snapshot.files.len()
         );
     }
 }

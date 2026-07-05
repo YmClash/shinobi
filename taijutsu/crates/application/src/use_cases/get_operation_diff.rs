@@ -82,9 +82,31 @@ impl GetOperationDiffUseCase {
                 None => self.vcs.diff_since(&repo_id, &content_id).await.unwrap_or_default(),
             }
         } else {
-            // ── Sans parent → opération racine, tout est "ajouté" ────
-            // Résoudre les fichiers via IPFS pour connaître les chemins.
-            self.resolve_root_files(&operation).await
+            // ── Sans parent → opération racine ───────────────────────
+            // Phase 12A-Fix : utiliser diff_since() (qui compare vs empty tree
+            // pour les root commits) au lieu de resolve_root_files() qui
+            // renvoie des chemins IPFS bruts incompatibles avec l'affichage
+            // de diffs unifiés dans le frontend Makimono.
+            //
+            // Fallback IPFS si le VCS engine n'est pas disponible.
+            match self.vcs.diff_since(&repo_id, &content_id).await {
+                Ok(files) if !files.is_empty() => {
+                    info!(
+                        operation_id = %id,
+                        file_count = files.len(),
+                        "📂 Root operation — diff VCS résolu (vs empty tree)"
+                    );
+                    files
+                }
+                _ => {
+                    // Fallback IPFS si VCS echoue (repo non initialisé, etc.)
+                    info!(
+                        operation_id = %id,
+                        "📂 Root operation — fallback IPFS (VCS indisponible)"
+                    );
+                    self.resolve_root_files(&operation).await
+                }
+            }
         };
 
         Ok(DiffResult {

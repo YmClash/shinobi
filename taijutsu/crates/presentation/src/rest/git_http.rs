@@ -28,7 +28,7 @@ use axum::{Router, routing::get, routing::post};
 use serde::Deserialize;
 use tracing::{info, warn};
 
-use domain::entities::content_id::ContentId;
+
 use domain::entities::operation::Operation;
 use domain::ports::vcs_engine::VcsEngine as _;
 
@@ -305,13 +305,14 @@ async fn git_upload_pack(
 
 /// Sync Hook post-push — comble le vide entre Git et PostgreSQL.
 ///
-/// ## Flux
+/// ## Flux (Phase 12A-Fix — enrichi)
 /// 1. `reload_repo()` — jj voit les nouveaux commits Git
 /// 2. `resolve_head()` — recupere le nouveau SHA-1
-/// 3. Verifie si ce content_id existe deja dans PostgreSQL (evite les doublons)
-/// 4. Construit une `Operation` a la volee
-/// 5. Persiste dans PostgreSQL
-/// 6. Publie l'etincelle Kafka (fire-and-forget)
+/// 3. `read_commit_snapshot()` — lit les fichiers + description du commit
+/// 4. `store_dag()` — stocke les fichiers sur IPFS (graceful degradation)
+/// 5. Construit une `Operation` complete (description + IPFS CID)
+/// 6. Persiste dans PostgreSQL
+/// 7. Publie l'etincelle Kafka (fire-and-forget)
 async fn sync_hook_post_push(
     state: &GitHttpState,
     repository: &domain::entities::repository::Repository,
@@ -319,57 +320,140 @@ async fn sync_hook_post_push(
     let repo_id = repository.id;
 
     // 0. S'assurer que le workspace est enregistre dans le DashMap
-    // Le DashMap est en memoire — apres un redemarrage de Taijutsu,
-    // seul DEFAULT_REPO_ID est re-initialise au boot. Les autres repos
-    // (crees via l'API) ne sont pas recharges automatiquement.
-    // init_workspace() gere les deux cas :
-    //   - .jj n'existe pas → init_internal_git()
-    //   - .jj existe deja  → re-open via RepoLoader
     state.vcs_engine.init_workspace(&repo_id).await?;
 
     // 1. Recharger le repo jj (pour voir les nouveaux commits Git)
     state.vcs_engine.reload_repo(&repo_id).await?;
 
-    // 2. Resoudre le nouveau HEAD
-    let head = state
+    // 2. Resoudre le nouveau HEAD depuis les refs Git du bare repo.
+    //    On utilise resolve_git_head() au lieu de resolve_head() car :
+    //    - resolve_head() trie les heads JJ et peut retourner un ancien
+    //      commit orphelin cree par un precedent Sync Hook
+    //    - resolve_git_head() lit directement refs/heads/main dans le
+    //      bare git repo, garanti d'etre le commit qui vient d'etre pushe
+    let content_id = state
         .vcs_engine
-        .resolve_head(&repo_id)
-        .await?
+        .resolve_git_head(&repo_id)
         .ok_or_else(|| {
             domain::errors::DomainError::VcsError(
-                "No HEAD after reload — empty repo?".to_string(),
+                "No git HEAD after reload — empty repo?".to_string(),
             )
         })?;
-
-    let content_id = ContentId::new(head.to_string());
 
     info!(
         repo_id = %repo_id,
         head = %content_id,
-        "Sync Hook: HEAD resolu apres push"
+        "Sync Hook: HEAD Git resolu apres push (refs/heads)"
     );
 
-    // 3. Construire l'entite Operation
-    // author_id = owner_id (pas d'auth dans cette phase)
+    // 3. Lire le snapshot du commit (fichiers + description)
+    let snapshot = state
+        .vcs_engine
+        .read_commit_snapshot(&repo_id, &content_id)
+        .await?;
+
+    let description = if snapshot.description.trim().is_empty() {
+        "External git push".to_string()
+    } else {
+        snapshot.description.trim().to_string()
+    };
+
+    info!(
+        repo_id = %repo_id,
+        description = %description.chars().take(80).collect::<String>(),
+        file_count = snapshot.files.len(),
+        "Sync Hook: snapshot lu (fichiers + description)"
+    );
+
+    // 4. Stocker les fichiers sur IPFS via store_dag (graceful degradation)
+    let ipfs_cid = if let Some(store) = &state.content_store {
+        if !snapshot.files.is_empty() {
+            match store.store_dag(&description, &snapshot.files).await {
+                Ok((root_cid, manifest)) => {
+                    info!(
+                        ipfs_cid = %root_cid,
+                        file_count = manifest.files.len(),
+                        "Sync Hook: Merkle DAG stocke sur IPFS"
+                    );
+
+                    // Pin en background (fire-and-forget)
+                    let store_clone = store.clone();
+                    let cid_clone = root_cid.clone();
+                    tokio::spawn(async move {
+                        if let Err(e) = store_clone.pin(&cid_clone).await {
+                            warn!(
+                                ipfs_cid = %cid_clone,
+                                error = %e,
+                                "Sync Hook: pin IPFS echoue (contenu non epingle)"
+                            );
+                        }
+                    });
+
+                    Some(root_cid)
+                }
+                Err(e) => {
+                    warn!(
+                        error = %e,
+                        "Sync Hook: stockage IPFS echoue — operation continue sans CID IPFS"
+                    );
+                    None
+                }
+            }
+        } else {
+            None
+        }
+    } else {
+        None
+    };
+
+    // 5. Construire l'entite Operation complete
     let operation = Operation::new(
         repository.owner_id,
         repository.id,
         content_id,
-        None, // Pas d'IPFS pour les pushes Git externes
-        "External git push",
+        ipfs_cid,
+        &description,
         vec![],
     );
 
-    // 4. Persister dans PostgreSQL
-    state.operation_repo.save(&operation).await?;
+    // 6. Persister dans PostgreSQL (avec detection de doublon)
+    //    Si le meme content_id existe deja (push idempotent ou re-push),
+    //    on skip silencieusement au lieu de crasher.
+    match state.operation_repo.save(&operation).await {
+        Ok(()) => {
+            info!(
+                operation_id = %operation.id,
+                repo_id = %repo_id,
+                has_ipfs = operation.has_ipfs_content(),
+                file_count = snapshot.files.len(),
+                "Sync Hook: Operation persistee dans PostgreSQL"
+            );
+        }
+        Err(domain::errors::DomainError::Duplicate(msg)) => {
+            info!(
+                repo_id = %repo_id,
+                content_id = %operation.content_id,
+                msg = %msg,
+                "Sync Hook: content_id deja present (push idempotent) — skip"
+            );
+            return Ok(());
+        }
+        Err(e) => {
+            // Verifier si c'est une erreur de contrainte unique deguisee
+            let err_str = e.to_string();
+            if err_str.contains("duplicate key") || err_str.contains("unique constraint") {
+                info!(
+                    repo_id = %repo_id,
+                    content_id = %operation.content_id,
+                    "Sync Hook: content_id deja present (contrainte unique) — skip"
+                );
+                return Ok(());
+            }
+            return Err(e);
+        }
+    }
 
-    info!(
-        operation_id = %operation.id,
-        repo_id = %repo_id,
-        "Sync Hook: Operation persistee dans PostgreSQL"
-    );
-
-    // 5. Publier l'etincelle Kafka (fire-and-forget)
+    // 7. Publier l'etincelle Kafka (fire-and-forget)
     if let Some(publisher) = &state.event_publisher {
         let publisher = publisher.clone();
         let op = operation.clone();
@@ -387,7 +471,7 @@ async fn sync_hook_post_push(
     info!(
         repo_id = %repo_id,
         operation_id = %operation.id,
-        "Sync Hook: Phase 12A complete (PG + Kafka)"
+        "Sync Hook: Phase 12A complete (PG + IPFS + Kafka)"
     );
 
     Ok(())

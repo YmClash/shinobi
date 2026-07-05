@@ -85,6 +85,11 @@ pub struct GitHttpState {
     /// Persistence des opérations (combler le vide PostgreSQL).
     pub operation_repo: Arc<dyn domain::ports::repository::OperationRepository>,
 
+    /// ContentStore IPFS (Genjutsu) — optionnel pour graceful degradation.
+    /// Utilise par le Sync Hook pour stocker les fichiers pushes sur IPFS
+    /// via `store_dag()` (Phase 12A-Fix).
+    pub content_store: Option<Arc<dyn domain::ports::content_store::ContentStore>>,
+
     /// Racine des workspaces VCS (pour construire les chemins).
     pub workspace_root: PathBuf,
 }

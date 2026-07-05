@@ -314,6 +314,7 @@ async fn main() -> anyhow::Result<()> {
             git_cgi,
             event_publisher: event_publisher.clone(),
             operation_repo: repo.clone(),
+            content_store: content_store.clone(),
             workspace_root: std::path::PathBuf::from(&config.vcs_workspace_root),
         };
         create_router(shared_state.clone())
