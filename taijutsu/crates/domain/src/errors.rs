@@ -52,4 +52,10 @@ pub enum DomainError {
     /// Erreur interne inattendue.
     #[error("Erreur interne: {0}")]
     Internal(String),
+
+    /// Le chemin pointe vers un fichier, pas un répertoire.
+    /// Retourné par `list_tree` quand le path est un fichier —
+    /// signal au handler de basculer vers `read_blob`.
+    #[error("Le chemin est un fichier, pas un répertoire: {path}")]
+    IsFile { path: String },
 }

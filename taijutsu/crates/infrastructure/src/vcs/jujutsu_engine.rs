@@ -22,6 +22,7 @@
 //! Remplacer le `SimpleBackend` natif de Jujutsu par le `GitBackend` dans la phase 10
 //! Chaque dépôt Jujutsu est désormais adossé à un repo Git bare interne
 
+use std::collections::HashSet;
 use std::path::PathBuf;
 use std::sync::Arc;
 
@@ -34,7 +35,7 @@ use uuid::Uuid;
 
 use domain::entities::content_id::ContentId;
 use domain::errors::DomainError;
-use domain::ports::vcs_engine::VcsEngine;
+use domain::ports::vcs_engine::{EntryKind, RefInfo, RefKind, TreeEntry, VcsEngine};
 // ObjectId fournit la méthode .hex() sur CommitId — nécessaire pour l'ACL
 use jj_lib::backend::{CommitId, CopyId, TreeValue};
 use jj_lib::matchers::EverythingMatcher;
@@ -632,6 +633,182 @@ behavior = "drop"
     }
 }
 
+// ── Phase 6 — Helpers Explorateur de Code ──────────────────────────────
+
+/// Résout une révision (nom de bookmark ou SHA-1 40 hex) en `CommitId`.
+///
+/// ## Stratégie (ordre de priorité)
+/// 1. SHA-1 40 hex direct
+/// 2. Loose ref Git filesystem (`refs/heads/{revision}`)
+/// 3. packed-refs
+/// 4. HEAD du bare repo (fallback pour "HEAD" ou "")
+/// Note : les bookmarks jj sont synchronisés dans les refs Git après import_refs,
+/// donc chercher dans refs/heads/{revision} couvre aussi les bookmarks jj.
+fn resolve_revision_internal(
+    revision: &str,
+    git_dir: &std::path::Path,
+) -> Result<CommitId, DomainError> {
+    // 1. SHA-1 direct
+    if revision.len() == 40 && revision.chars().all(|c| c.is_ascii_hexdigit()) {
+        return CommitId::try_from_hex(revision).ok_or_else(|| {
+            DomainError::VcsError(format!("invalid hex commit id '{revision}'"))
+        });
+    }
+
+    // 2. Loose ref Git filesystem
+    let loose_ref = git_dir.join("refs").join("heads").join(revision);
+    if let Ok(sha) = std::fs::read_to_string(&loose_ref) {
+        let sha = sha.trim();
+        if sha.len() == 40 && sha.chars().all(|c| c.is_ascii_hexdigit()) {
+            return CommitId::try_from_hex(sha).ok_or_else(|| {
+                DomainError::VcsError(format!("invalid SHA in loose ref '{revision}'"))
+            });
+        }
+    }
+
+    // 3. packed-refs
+    let packed = git_dir.join("packed-refs");
+    if let Ok(content) = std::fs::read_to_string(&packed) {
+        let ref_name = format!("refs/heads/{revision}");
+        for line in content.lines() {
+            if line.starts_with('#') || line.starts_with('^') {
+                continue;
+            }
+            let parts: Vec<&str> = line.split_whitespace().collect();
+            if parts.len() >= 2 && parts[1] == ref_name {
+                return CommitId::try_from_hex(parts[0]).ok_or_else(|| {
+                    DomainError::VcsError(format!("invalid SHA in packed-refs for '{revision}'"))
+                });
+            }
+        }
+    }
+
+    // 4. HEAD fallback (pour "HEAD" ou "")
+    if revision.is_empty() || revision.eq_ignore_ascii_case("head") {
+        // Lire HEAD symref
+        let head_file = git_dir.join("HEAD");
+        if let Ok(head_content) = std::fs::read_to_string(&head_file) {
+            let head_content = head_content.trim();
+            // HEAD détaché
+            if head_content.len() == 40 && head_content.chars().all(|c| c.is_ascii_hexdigit()) {
+                return CommitId::try_from_hex(head_content).ok_or_else(|| {
+                    DomainError::VcsError("invalid detached HEAD SHA".to_string())
+                });
+            }
+            // Symref
+            if let Some(ref_name) = head_content.strip_prefix("ref: ") {
+                let ref_path = git_dir.join(ref_name);
+                if let Ok(sha) = std::fs::read_to_string(&ref_path) {
+                    let sha = sha.trim();
+                    if sha.len() == 40 {
+                        return CommitId::try_from_hex(sha).ok_or_else(|| {
+                            DomainError::VcsError("invalid symref HEAD SHA".to_string())
+                        });
+                    }
+                }
+            }
+        }
+    }
+
+    Err(DomainError::VcsError(format!(
+        "révision '{revision}' introuvable (bookmark/SHA-1/HEAD)"
+    )))
+}
+
+/// Détecte le langage Shiki depuis l'extension du fichier.
+fn detect_language_from_path(path: &str) -> Option<String> {
+    let ext = std::path::Path::new(path)
+        .extension()
+        .and_then(|e| e.to_str())
+        .unwrap_or("");
+    let filename = std::path::Path::new(path)
+        .file_name()
+        .and_then(|f| f.to_str())
+        .unwrap_or("");
+    let lang = match ext {
+        "rs" => "rust",
+        "ts" => "typescript",
+        "tsx" => "tsx",
+        "js" | "mjs" | "cjs" => "javascript",
+        "jsx" => "jsx",
+        "md" | "mdx" => "markdown",
+        "toml" => "toml",
+        "json" | "jsonc" => "json",
+        "yaml" | "yml" => "yaml",
+        "css" => "css",
+        "html" | "htm" => "html",
+        "py" => "python",
+        "sh" | "bash" | "zsh" => "bash",
+        "sql" => "sql",
+        "proto" => "protobuf",
+        "dockerfile" | "Dockerfile" => "dockerfile",
+        _ => match filename {
+            "Dockerfile" | "dockerfile" => "dockerfile",
+            "Makefile" | "makefile" => "makefile",
+            ".env" | ".env.example" => "bash",
+            _ => return None,
+        },
+    };
+    Some(lang.to_string())
+}
+
+/// Méthode publique pour exposer la détection de langage au handler REST.
+impl JujutsuEngine {
+    pub fn language_for_path(path: &str) -> Option<String> {
+        detect_language_from_path(path)
+    }
+}
+
+/// Scanne récursivement un répertoire de refs Git et collecte les `RefInfo`.
+/// `prefix` : chemin relatif accumulé pour les refs imbriquées (ex: `"feature/"`)
+fn collect_loose_refs_recursive(
+    dir: &std::path::Path,
+    prefix: &str,
+    refs: &mut Vec<RefInfo>,
+    seen: &mut HashSet<String>,
+    kind: RefKind,
+) {
+    let entries = match std::fs::read_dir(dir) {
+        Ok(e) => e,
+        Err(_) => return,
+    };
+    for entry in entries.flatten() {
+        let name = entry.file_name();
+        let name_str = name.to_string_lossy();
+        let full_name = if prefix.is_empty() {
+            name_str.to_string()
+        } else {
+            format!("{prefix}{name_str}")
+        };
+        let path = entry.path();
+        if path.is_dir() {
+            collect_loose_refs_recursive(
+                &path,
+                &format!("{full_name}/"),
+                refs,
+                seen,
+                kind.clone(),
+            );
+        } else if path.is_file() {
+            if let Ok(sha) = std::fs::read_to_string(&path) {
+                let sha = sha.trim().to_string();
+                if sha.len() == 40 && sha.chars().all(|c| c.is_ascii_hexdigit()) {
+                    let dedup_key = match kind {
+                        RefKind::Tag => format!("tag:{full_name}"),
+                        RefKind::Branch => full_name.clone(),
+                    };
+                    if seen.insert(dedup_key) {
+                        refs.push(RefInfo {
+                            name: full_name,
+                            target: sha,
+                            kind: kind.clone(),
+                        });
+                    }
+                }
+            }
+        }
+    }
+}
 
 #[async_trait]
 impl VcsEngine for JujutsuEngine {
@@ -977,6 +1154,290 @@ impl VcsEngine for JujutsuEngine {
             );
 
             Ok(changed_paths)
+        })
+        .await
+        .map_err(|e| DomainError::Internal(format!("spawn_blocking join error: {e}")))?
+    }
+
+    // ── Phase 6 — Explorateur de Code ────────────────────────────────
+
+    #[instrument(skip(self))]
+    async fn list_tree(
+        &self,
+        repo_id: &Uuid,
+        revision: &str,
+        path: &str,
+    ) -> Result<Vec<TreeEntry>, DomainError> {
+        let handle_arc = self.get_handle(repo_id).ok_or_else(|| {
+            DomainError::VcsError(format!("workspace not initialized for repo {repo_id}"))
+        })?;
+        let rid = *repo_id;
+        let revision_owned = revision.to_string();
+        let path_owned = path.trim_end_matches('/').to_string();
+        let git_dir = self.git_repo_path(repo_id);
+
+        tokio::task::spawn_blocking(move || {
+            let guard = handle_arc.lock();
+            let wh = &*guard;
+            let repo = &wh.repo;
+            let store = repo.store();
+
+            // 1. Résoudre la révision
+            let commit_id = resolve_revision_internal(&revision_owned, &git_dir)?;
+            let commit = store.get_commit(&commit_id).map_err(|e| {
+                DomainError::CommitNotFound { id: format!("{e}") }
+            })?;
+            let commit_tree = commit.tree();
+            let empty_tree = store.empty_merged_tree();
+
+            // 2. Collecter TOUS les fichiers via diff depuis empty tree
+            let diff_stream = empty_tree.diff_stream(&commit_tree, &EverythingMatcher);
+            let all_entries: Vec<_> = pollster::block_on(diff_stream.collect::<Vec<_>>());
+
+            // 3. Construire le préfixe de filtre
+            let path_prefix = if path_owned.is_empty() {
+                String::new()
+            } else {
+                format!("{}/", path_owned)
+            };
+
+            // 4. Listing virtuel : grouper par le prochain composant de chemin
+            let mut seen: HashSet<String> = HashSet::new();
+            let mut result: Vec<TreeEntry> = Vec::new();
+            let mut exact_file_found = false;
+
+            for entry in &all_entries {
+                let file_path = entry.path.as_internal_file_string().to_string();
+
+                // Vérifier correspondance exacte au path (c'est un fichier, pas un dossier)
+                if !path_owned.is_empty() && file_path == path_owned {
+                    exact_file_found = true;
+                    continue;
+                }
+
+                // Filtrer par préfixe
+                if !path_prefix.is_empty() && !file_path.starts_with(&path_prefix) {
+                    continue;
+                }
+
+                let relative = &file_path[path_prefix.len()..];
+                if relative.is_empty() {
+                    continue;
+                }
+
+                if let Some(slash_pos) = relative.find('/') {
+                    // Entrée dans un sous-répertoire
+                    let dir_name = &relative[..slash_pos];
+                    if seen.insert(dir_name.to_string()) {
+                        let full_path = if path_prefix.is_empty() {
+                            dir_name.to_string()
+                        } else {
+                            format!("{}{}", path_prefix, dir_name)
+                        };
+                        result.push(TreeEntry {
+                            name: dir_name.to_string(),
+                            path: full_path,
+                            kind: EntryKind::Directory,
+                            size: None,
+                        });
+                    }
+                } else {
+                    // Fichier direct dans ce répertoire
+                    if seen.insert(relative.to_string()) {
+                        let full_path = file_path.clone();
+                        result.push(TreeEntry {
+                            name: relative.to_string(),
+                            path: full_path,
+                            kind: EntryKind::File,
+                            size: None, // taille non calculée (évite un read par fichier)
+                        });
+                    }
+                }
+            }
+
+            // 5. Si aucune entrée de répertoire mais le path exact est un fichier → IsFile
+            if result.is_empty() && exact_file_found {
+                return Err(DomainError::IsFile { path: path_owned });
+            }
+
+            // 6. Tri : dossiers d'abord, puis fichiers, alphabétique dans chaque groupe
+            result.sort_by(|a, b| {
+                match (&a.kind, &b.kind) {
+                    (EntryKind::Directory, EntryKind::File) => std::cmp::Ordering::Less,
+                    (EntryKind::File, EntryKind::Directory) => std::cmp::Ordering::Greater,
+                    _ => a.name.cmp(&b.name),
+                }
+            });
+
+            info!(
+                repo_id = %rid,
+                revision = %revision_owned,
+                path = %path_owned,
+                entries = result.len(),
+                "list_tree: arborescence construite"
+            );
+
+            Ok(result)
+        })
+        .await
+        .map_err(|e| DomainError::Internal(format!("spawn_blocking join error: {e}")))?
+    }
+
+    #[instrument(skip(self))]
+    async fn read_blob(
+        &self,
+        repo_id: &Uuid,
+        revision: &str,
+        path: &str,
+    ) -> Result<Vec<u8>, DomainError> {
+        let handle_arc = self.get_handle(repo_id).ok_or_else(|| {
+            DomainError::VcsError(format!("workspace not initialized for repo {repo_id}"))
+        })?;
+        let revision_owned = revision.to_string();
+        let path_owned = path.to_string();
+        let git_dir = self.git_repo_path(repo_id);
+
+        tokio::task::spawn_blocking(move || {
+            let guard = handle_arc.lock();
+            let wh = &*guard;
+            let repo = &wh.repo;
+            let store = repo.store();
+
+            // 1. Résoudre la révision
+            let commit_id = resolve_revision_internal(&revision_owned, &git_dir)?;
+            let commit = store.get_commit(&commit_id).map_err(|e| {
+                DomainError::CommitNotFound { id: format!("{e}") }
+            })?;
+            let commit_tree = commit.tree();
+            let empty_tree = store.empty_merged_tree();
+
+            // 2. Chercher le fichier dans le diff (même pattern que read_commit_snapshot)
+            let diff_stream = empty_tree.diff_stream(&commit_tree, &EverythingMatcher);
+            let all_entries: Vec<_> = pollster::block_on(diff_stream.collect::<Vec<_>>());
+
+            for entry in all_entries {
+                let file_path = entry.path.as_internal_file_string().to_string();
+                if file_path != path_owned {
+                    continue;
+                }
+
+                let diff = match entry.values {
+                    Ok(d) => d,
+                    Err(_) => continue,
+                };
+
+                let tree_value = match diff.after.as_resolved() {
+                    Some(Some(tv)) => tv,
+                    _ => continue,
+                };
+
+                let file_id = match tree_value {
+                    TreeValue::File { id, .. } => id,
+                    _ => {
+                        return Err(DomainError::VcsError(format!(
+                            "le chemin '{path_owned}' n'est pas un fichier régulier"
+                        )));
+                    }
+                };
+
+                let repo_path = RepoPathBuf::from_internal_string(&path_owned)
+                    .map_err(|e| DomainError::VcsError(format!("chemin invalide: {e}")))?;
+
+                let mut reader = pollster::block_on(store.read_file(&repo_path, file_id))
+                    .map_err(|e| DomainError::VcsError(format!("read_file failed: {e}")))?;
+
+                let mut content = Vec::new();
+                pollster::block_on(
+                    tokio::io::AsyncReadExt::read_to_end(&mut reader, &mut content)
+                )
+                .map_err(|e| DomainError::VcsError(format!("read_to_end failed: {e}")))?;
+
+                info!(
+                    path = %path_owned,
+                    bytes = content.len(),
+                    "read_blob: fichier lu depuis le store jj"
+                );
+
+                return Ok(content);
+            }
+
+            Err(DomainError::VcsError(format!(
+                "fichier '{path_owned}' introuvable à la révision '{revision_owned}'"
+            )))
+        })
+        .await
+        .map_err(|e| DomainError::Internal(format!("spawn_blocking join error: {e}")))?
+    }
+
+    #[instrument(skip(self))]
+    async fn list_refs(&self, repo_id: &Uuid) -> Result<Vec<RefInfo>, DomainError> {
+        let handle_arc = self.get_handle(repo_id).ok_or_else(|| {
+            DomainError::VcsError(format!("workspace not initialized for repo {repo_id}"))
+        })?;
+        let git_dir = self.git_repo_path(repo_id);
+        let rid = *repo_id;
+
+        tokio::task::spawn_blocking(move || {
+            let guard = handle_arc.lock();
+            // Note: on n'utilise pas view.local_bookmarks() ici car le type exact
+            // n'est pas exposé publiquement dans jj-lib 0.41 op_store.
+            // Les bookmarks sont visibles via les refs Git filesystem après import_refs.
+            let _wh = &*guard;
+
+            let mut refs: Vec<RefInfo> = Vec::new();
+            let mut seen: HashSet<String> = HashSet::new();
+
+            // 1. Loose refs Git filesystem (refs/heads/* = branches + bookmarks jj)
+            let refs_heads = git_dir.join("refs").join("heads");
+            collect_loose_refs_recursive(&refs_heads, "", &mut refs, &mut seen, RefKind::Branch);
+
+            // 3. Tags Git filesystem (refs/tags/*)
+            let refs_tags = git_dir.join("refs").join("tags");
+            collect_loose_refs_recursive(&refs_tags, "", &mut refs, &mut seen, RefKind::Tag);
+
+            // 4. Packed-refs
+            let packed = git_dir.join("packed-refs");
+            if let Ok(content) = std::fs::read_to_string(&packed) {
+                for line in content.lines() {
+                    if line.starts_with('#') || line.starts_with('^') {
+                        continue;
+                    }
+                    let parts: Vec<&str> = line.split_whitespace().collect();
+                    if parts.len() < 2 {
+                        continue;
+                    }
+                    let sha = parts[0];
+                    let ref_full = parts[1];
+                    if let Some(name) = ref_full.strip_prefix("refs/heads/") {
+                        if seen.insert(name.to_string()) {
+                            refs.push(RefInfo {
+                                name: name.to_string(),
+                                target: sha.to_string(),
+                                kind: RefKind::Branch,
+                            });
+                        }
+                    } else if let Some(name) = ref_full.strip_prefix("refs/tags/") {
+                        if seen.insert(format!("tag:{name}")) {
+                            refs.push(RefInfo {
+                                name: name.to_string(),
+                                target: sha.to_string(),
+                                kind: RefKind::Tag,
+                            });
+                        }
+                    }
+                }
+            }
+
+            refs.sort_by(|a, b| a.name.cmp(&b.name));
+
+            info!(
+                repo_id = %rid,
+                branches = refs.iter().filter(|r| r.kind == RefKind::Branch).count(),
+                tags = refs.iter().filter(|r| r.kind == RefKind::Tag).count(),
+                "list_refs: références collectées"
+            );
+
+            Ok(refs)
         })
         .await
         .map_err(|e| DomainError::Internal(format!("spawn_blocking join error: {e}")))?

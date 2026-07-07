@@ -16,8 +16,10 @@ use application::use_cases::list_operations::ListFilter;
 use application::use_cases::search_chunks::ChunkSearchFilter;
 use domain::entities::operation::Operation;
 use domain::entities::repository::Visibility;
+use domain::errors::DomainError;
 use domain::ports::chunk_repository::{SimilarChunk, StoredChunk};
 use domain::ports::review_repository::OperationReview;
+use domain::ports::vcs_engine::{EntryKind, RefKind};
 
 use crate::errors::AppError;
 use crate::state::SharedState;
@@ -94,8 +96,12 @@ pub struct SemanticSearchBody {
     pub threshold: f32,
 }
 
-fn default_limit() -> usize { 10 }
-fn default_threshold() -> f32 { 0.5 }
+fn default_limit() -> usize {
+    10
+}
+fn default_threshold() -> f32 {
+    0.5
+}
 
 /// Réponse JSON pour une opération.
 #[derive(Debug, Serialize)]
@@ -230,12 +236,18 @@ pub fn create_router(state: SharedState) -> Router {
         .route("/api/v1/status", get(status))
         // ━━━ Global Routes (cross-repo) ━━━
         .route("/api/v1/chunks/search", get(search_chunks_handler))
-        .route("/api/v1/chunks/semantic-search", post(semantic_search_handler))
+        .route(
+            "/api/v1/chunks/semantic-search",
+            post(semantic_search_handler),
+        )
         .route("/api/v1/reviews/scores", get(get_score_history_handler))
         // ━━━ Forge Sociale (Phase 10D — Big Bang) ━━━
         .route("/api/v1/repos", post(create_repository_handler))
         // ━━━ Actors → Repos (Préambule Makimono Phase 5) ━━━
-        .route("/api/v1/actors/{handle}/repos", get(list_repositories_handler))
+        .route(
+            "/api/v1/actors/{handle}/repos",
+            get(list_repositories_handler),
+        )
         // ━━━ Repo Detail (Préambule Makimono Phase 5) ━━━
         .route("/api/v1/repos/{owner}/{repo}", get(get_repository_handler))
         // ━━━ Federated Routes (Phase 10C — /repos/:owner/:repo) ━━━
@@ -263,8 +275,20 @@ pub fn create_router(state: SharedState) -> Router {
             "/api/v1/repos/{owner}/{repo}/operations/{id}/chunks",
             get(federated_get_chunks),
         )
+        // ── Phase 6 — Explorateur de Code (lecture seule) ───────────────
+        .route(
+            "/api/v1/repos/{owner}/{repo}/tree/{revision}",
+            get(explorer_tree_handler),
+        )
+        .route(
+            "/api/v1/repos/{owner}/{repo}/refs",
+            get(explorer_refs_handler),
+        )
         // ── Métriques Prometheus ────────────────────
-        .route("/metrics", get(move || async move { metric_handle.render() }))
+        .route(
+            "/metrics",
+            get(move || async move { metric_handle.render() }),
+        )
         .with_state(state)
         // Le layer doit être appliqué APRÈS .with_state() pour couvrir toutes les routes
         .layer(prometheus_layer)
@@ -365,14 +389,19 @@ pub struct ScoreHistoryQuery {
     pub limit: usize,
 }
 
-fn default_score_limit() -> usize { 10 }
+fn default_score_limit() -> usize {
+    10
+}
 
 /// Récupérer l'historique des scores Oracle — `GET /api/v1/reviews/scores?limit=10`
 async fn get_score_history_handler(
     State(state): State<SharedState>,
     Query(params): Query<ScoreHistoryQuery>,
 ) -> Result<Json<serde_json::Value>, AppError> {
-    info!(limit = params.limit, "REST: GetScoreHistory reçu (Sparkline)");
+    info!(
+        limit = params.limit,
+        "REST: GetScoreHistory reçu (Sparkline)"
+    );
 
     let result = state.get_score_history.execute(params.limit).await?;
 
@@ -453,7 +482,9 @@ pub struct CreateRepoBody {
     pub visibility: String,
 }
 
-fn default_visibility() -> String { "public".to_string() }
+fn default_visibility() -> String {
+    "public".to_string()
+}
 
 /// Réponse JSON pour un dépôt créé.
 #[derive(Debug, Serialize)]
@@ -576,13 +607,11 @@ async fn federated_create_operation(
     let files: Vec<(String, Vec<u8>)> = body
         .files
         .iter()
-        .filter_map(|f| {
-            match decode_base64(&f.content_b64) {
-                Ok(bytes) => Some((f.path.clone(), bytes)),
-                Err(e) => {
-                    warn!(path = %f.path, error = %e, "⚠️ Décodage base64 échoué — fichier ignoré");
-                    None
-                }
+        .filter_map(|f| match decode_base64(&f.content_b64) {
+            Ok(bytes) => Some((f.path.clone(), bytes)),
+            Err(e) => {
+                warn!(path = %f.path, error = %e, "⚠️ Décodage base64 échoué — fichier ignoré");
+                None
             }
         })
         .collect();
@@ -719,7 +748,9 @@ async fn federated_get_chunks(
             operation_id: path.id,
             file_path,
         },
-        None => ChunkSearchFilter::ByOperation { operation_id: path.id },
+        None => ChunkSearchFilter::ByOperation {
+            operation_id: path.id,
+        },
     };
 
     let result = state.search_chunks.execute(filter).await?;
@@ -729,5 +760,158 @@ async fn federated_get_chunks(
         "operation_id": path.id,
         "chunks": chunks_json,
         "count": result.count,
+    })))
+}
+
+// ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+// ─── Phase 6 — Explorateur de Code (lecture seule)
+// ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+/// Paramètres de chemin pour l'explorateur.
+#[derive(Debug, Deserialize)]
+struct RepoRevPath {
+    owner: String,
+    repo: String,
+    revision: String,
+}
+
+/// Query string pour les routes explorer : `?path=src/main.rs`
+#[derive(Debug, Deserialize)]
+struct ExplorerPathQuery {
+    /// Chemin relatif à explorer (défaut : racine "")
+    #[serde(default)]
+    path: String,
+}
+
+/// Encode des bytes en base64 (RFC 4648, sans padding strict requis).
+fn encode_base64(input: &[u8]) -> String {
+    const TABLE: &[u8; 64] = b"ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/";
+    let mut result = String::with_capacity((input.len() + 2) / 3 * 4);
+    for chunk in input.chunks(3) {
+        let b0 = chunk[0] as u32;
+        let b1 = if chunk.len() > 1 { chunk[1] as u32 } else { 0 };
+        let b2 = if chunk.len() > 2 { chunk[2] as u32 } else { 0 };
+        let n = (b0 << 16) | (b1 << 8) | b2;
+        result.push(TABLE[((n >> 18) & 63) as usize] as char);
+        result.push(TABLE[((n >> 12) & 63) as usize] as char);
+        if chunk.len() > 1 {
+            result.push(TABLE[((n >> 6) & 63) as usize] as char);
+        } else {
+            result.push('=');
+        }
+        if chunk.len() > 2 {
+            result.push(TABLE[(n & 63) as usize] as char);
+        } else {
+            result.push('=');
+        }
+    }
+    result
+}
+
+/// Explorateur unifié — `GET /api/v1/repos/{owner}/{repo}/tree/{revision}?path=`
+///
+/// Retourne une réponse JSON discriminante :
+/// - `kind: "directory"` → liste des entrées (dossiers + fichiers)
+/// - `kind: "file"` → contenu du fichier en base64 + langage Shiki
+///
+/// Un seul appel suffit au frontend pour décider du composant à afficher.
+async fn explorer_tree_handler(
+    State(state): State<SharedState>,
+    Path(path): Path<RepoRevPath>,
+    Query(params): Query<ExplorerPathQuery>,
+) -> Result<Json<serde_json::Value>, AppError> {
+    info!(
+        owner = %path.owner,
+        repo = %path.repo,
+        revision = %path.revision,
+        query_path = %params.path,
+        "Phase 6: explorer_tree"
+    );
+
+    let file_path = params.path.trim_matches('/').to_string();
+
+    // 1. Tenter le listing de répertoire
+    match state
+        .get_tree
+        .execute(&path.owner, &path.repo, &path.revision, &file_path)
+        .await
+    {
+        Ok(result) => {
+            let entries_json: Vec<serde_json::Value> = result
+                .entries
+                .iter()
+                .map(|e| {
+                    serde_json::json!({
+                        "name": e.name,
+                        "path": e.path,
+                        "kind": if e.kind == EntryKind::Directory { "directory" } else { "file" },
+                        "size": e.size,
+                    })
+                })
+                .collect();
+
+            return Ok(Json(serde_json::json!({
+                "kind": "directory",
+                "revision": result.revision,
+                "path": result.path,
+                "entries": entries_json,
+                "count": entries_json.len(),
+            })));
+        }
+        Err(DomainError::IsFile { .. }) => {
+            // 2. C'est un fichier — lire le contenu
+            let content = state
+                .get_blob
+                .execute(&path.owner, &path.repo, &path.revision, &file_path)
+                .await?;
+
+            let size = content.len() as u64;
+            let content_b64 = encode_base64(&content);
+            // Détecter si le contenu est du texte valide UTF-8
+            let is_text = std::str::from_utf8(&content).is_ok();
+            let language =
+                infrastructure::vcs::jujutsu_engine::JujutsuEngine::language_for_path(&file_path);
+
+            return Ok(Json(serde_json::json!({
+                "kind": "file",
+                "revision": path.revision,
+                "path": file_path,
+                "size": size,
+                "is_text": is_text,
+                "language": language,
+                "content_b64": content_b64,
+            })));
+        }
+        Err(e) => return Err(AppError::from(e)),
+    }
+}
+
+/// Références — `GET /api/v1/repos/{owner}/{repo}/refs`
+///
+/// Retourne les branches et tags séparés pour alimenter le BranchSelector.
+async fn explorer_refs_handler(
+    State(state): State<SharedState>,
+    Path((owner, repo)): Path<(String, String)>,
+) -> Result<Json<serde_json::Value>, AppError> {
+    info!(owner = %owner, repo = %repo, "Phase 6: explorer_refs");
+
+    let refs = state.list_refs.execute(&owner, &repo).await?;
+
+    let branches: Vec<serde_json::Value> = refs
+        .iter()
+        .filter(|r| r.kind == RefKind::Branch)
+        .map(|r| serde_json::json!({ "name": r.name, "target": r.target }))
+        .collect();
+
+    let tags: Vec<serde_json::Value> = refs
+        .iter()
+        .filter(|r| r.kind == RefKind::Tag)
+        .map(|r| serde_json::json!({ "name": r.name, "target": r.target }))
+        .collect();
+
+    Ok(Json(serde_json::json!({
+        "branches": branches,
+        "tags": tags,
+        "total": refs.len(),
     })))
 }

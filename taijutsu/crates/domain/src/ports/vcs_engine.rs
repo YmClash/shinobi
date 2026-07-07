@@ -9,12 +9,60 @@
 //! Toutes les méthodes prennent un `repo_id: &Uuid` pour identifier
 //! le workspace VCS cible. Le `JujutsuEngine` maintient un registre
 //! `DashMap<Uuid, Arc<Mutex<WorkspaceHandle>>>` pour la concurrence par-repo.
+//!
+//! ## Explorer (Phase 6)
+//! Trois nouvelles méthodes en lecture seule pour naviguer l'arborescence :
+//! `list_tree`, `read_blob`, `list_refs`.
 
 use async_trait::async_trait;
 use uuid::Uuid;
 
 use crate::entities::content_id::ContentId;
 use crate::errors::DomainError;
+
+// ── Types Phase 6 — Explorateur de Code ──────────────────────────────
+
+/// Type d'une entrée dans l'arborescence du dépôt.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum EntryKind {
+    /// Fichier source.
+    File,
+    /// Répertoire (virtuel — reconstruit depuis la liste plate de jj).
+    Directory,
+}
+
+/// Entrée d'arborescence : fichier ou répertoire à un chemin donné.
+#[derive(Debug, Clone)]
+pub struct TreeEntry {
+    /// Nom court de l'entrée (ex: `"main.rs"`, `"src"`).
+    pub name: String,
+    /// Chemin complet relatif à la racine du dépôt (ex: `"src/main.rs"`).
+    pub path: String,
+    /// Type de l'entrée.
+    pub kind: EntryKind,
+    /// Taille en octets — `Some` pour les fichiers, `None` pour les dossiers.
+    pub size: Option<u64>,
+}
+
+/// Type d'une référence Git (branche ou tag).
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum RefKind {
+    Branch,
+    Tag,
+}
+
+/// Référence Git — bookmark jj ou tag.
+#[derive(Debug, Clone)]
+pub struct RefInfo {
+    /// Nom court (ex: `"main"`, `"feature/auth"`, `"v1.0.0"`).
+    pub name: String,
+    /// SHA-1 du commit pointé (40 hex chars).
+    pub target: String,
+    /// Type (branche ou tag).
+    pub kind: RefKind,
+}
+
+// ── Trait VcsEngine ───────────────────────────────────────────────────
 
 /// Contrat d'interaction avec le moteur VCS.
 ///
@@ -50,4 +98,41 @@ pub trait VcsEngine: Send + Sync {
 
     /// Liste les changements depuis une opération donnée dans un dépôt.
     async fn diff_since(&self, repo_id: &Uuid, content_id: &ContentId) -> Result<Vec<String>, DomainError>;
+
+    // ── Phase 6 — Explorateur de Code ────────────────────────────────
+
+    /// Liste les entrées d'un répertoire à une révision donnée.
+    ///
+    /// `revision` : nom de bookmark (`"main"`) ou SHA-1 40 hex chars.
+    /// `path` : chemin relatif (`""` pour la racine, `"src"` pour un sous-dossier).
+    ///
+    /// ## Comportement
+    /// - Si `path` pointe vers un **répertoire** → retourne `Vec<TreeEntry>`
+    /// - Si `path` pointe vers un **fichier** → retourne `Err(DomainError::IsFile)`
+    ///   (signal au handler pour basculer vers `read_blob`)
+    /// - Si `path` n'existe pas → retourne `Err(DomainError::CommitNotFound)`
+    ///   ou `Err(DomainError::VcsError)`
+    async fn list_tree(
+        &self,
+        repo_id: &Uuid,
+        revision: &str,
+        path: &str,
+    ) -> Result<Vec<TreeEntry>, DomainError>;
+
+    /// Retourne le contenu brut d'un fichier à une révision donnée.
+    ///
+    /// `revision` : nom de bookmark ou SHA-1 40 hex chars.
+    /// `path` : chemin complet du fichier (ex: `"src/main.rs"`).
+    async fn read_blob(
+        &self,
+        repo_id: &Uuid,
+        revision: &str,
+        path: &str,
+    ) -> Result<Vec<u8>, DomainError>;
+
+    /// Liste toutes les branches (bookmarks jj) et tags du dépôt.
+    ///
+    /// Combine les bookmarks locaux jj (issus de `import_refs` post-push)
+    /// et les refs Git du bare repo (loose refs + packed-refs).
+    async fn list_refs(&self, repo_id: &Uuid) -> Result<Vec<RefInfo>, DomainError>;
 }

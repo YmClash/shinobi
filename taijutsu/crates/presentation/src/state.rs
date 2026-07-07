@@ -8,12 +8,15 @@ use std::sync::Arc;
 
 use application::use_cases::create_operation::CreateOperationUseCase;
 use application::use_cases::create_repository::CreateRepositoryUseCase;
+use application::use_cases::get_blob::GetBlobUseCase;
 use application::use_cases::get_operation::GetOperationUseCase;
 use application::use_cases::get_operation_diff::GetOperationDiffUseCase;
 use application::use_cases::get_ipfs_content::GetIpfsContentUseCase;
 use application::use_cases::get_reviews::GetReviewsUseCase;
 use application::use_cases::get_score_history::GetScoreHistoryUseCase;
+use application::use_cases::get_tree::GetTreeUseCase;
 use application::use_cases::list_operations::ListOperationsUseCase;
+use application::use_cases::list_refs::ListRefsUseCase;
 use application::use_cases::list_repositories::ListRepositoriesUseCase;
 use application::use_cases::resolve_repo::ResolveRepoUseCase;
 use application::use_cases::search_chunks::SearchChunksUseCase;
@@ -56,6 +59,17 @@ pub struct SharedState {
 
     /// Use case: lister les dépôts d'un acteur (Phase 10D — Préambule Makimono 5).
     pub list_repositories: Arc<ListRepositoriesUseCase>,
+
+    // ── Phase 6 — Explorateur de Code ─────────────────────────────────
+
+    /// Use case: lister l'arborescence d'un dépôt (Phase 6).
+    pub get_tree: Arc<GetTreeUseCase>,
+
+    /// Use case: lire le contenu d'un fichier (Phase 6).
+    pub get_blob: Arc<GetBlobUseCase>,
+
+    /// Use case: lister les branches et tags (Phase 6).
+    pub list_refs: Arc<ListRefsUseCase>,
 }
 
 // ── Phase 12A — Git Bridge HTTP ──────────────────────────────────────

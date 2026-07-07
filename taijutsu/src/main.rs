@@ -23,13 +23,16 @@ use tracing_subscriber::{EnvFilter, layer::SubscriberExt, util::SubscriberInitEx
 use application::use_cases::analyze_operation::AnalyzeOperationUseCase;
 use application::use_cases::create_operation::CreateOperationUseCase;
 use application::use_cases::create_repository::CreateRepositoryUseCase;
-use application::use_cases::list_repositories::ListRepositoriesUseCase;
+use application::use_cases::get_blob::GetBlobUseCase;
 use application::use_cases::get_operation::GetOperationUseCase;
 use application::use_cases::get_operation_diff::GetOperationDiffUseCase;
 use application::use_cases::get_ipfs_content::GetIpfsContentUseCase;
 use application::use_cases::get_reviews::GetReviewsUseCase;
 use application::use_cases::get_score_history::GetScoreHistoryUseCase;
+use application::use_cases::get_tree::GetTreeUseCase;
 use application::use_cases::list_operations::ListOperationsUseCase;
+use application::use_cases::list_refs::ListRefsUseCase;
+use application::use_cases::list_repositories::ListRepositoriesUseCase;
 use application::use_cases::resolve_repo::ResolveRepoUseCase;
 use application::use_cases::review_operation::ReviewOperationUseCase;
 use application::use_cases::search_chunks::SearchChunksUseCase;
@@ -279,6 +282,20 @@ async fn main() -> anyhow::Result<()> {
         vcs.clone(),
     ));
 
+    // ── Phase 6 : Explorateur de Code ─────────────────────────────
+    let get_tree = Arc::new(GetTreeUseCase::new(
+        vcs.clone(),
+        resolve_repo.clone(),
+    ));
+    let get_blob = Arc::new(GetBlobUseCase::new(
+        vcs.clone(),
+        resolve_repo.clone(),
+    ));
+    let list_refs_uc = Arc::new(ListRefsUseCase::new(
+        vcs.clone(),
+        resolve_repo.clone(),
+    ));
+
     let shared_state = SharedState {
         create_operation,
         get_operation,
@@ -291,6 +308,9 @@ async fn main() -> anyhow::Result<()> {
         resolve_repo: resolve_repo.clone(),
         create_repository,
         list_repositories,
+        get_tree,
+        get_blob,
+        list_refs: list_refs_uc,
     };
 
     // ── Git Bridge HTTP (Phase 12A) ────────────────────
