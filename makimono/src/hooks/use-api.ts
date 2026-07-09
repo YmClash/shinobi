@@ -198,9 +198,50 @@ export function useScoreHistory(limit = 10) {
 
 // ── Repository hooks (Phase 5 — Forge Sociale) ──────────────
 
-/** Fetches repositories owned by an actor handle */
+/**
+ * Fetches repositories owned by an actor handle.
+ * - Auto-refresh toutes les 30 secondes
+ * - Refetch sur visibilitychange (retour onglet)
+ * - Refetch sur l'événement custom 'shinobi:repo-created'
+ */
 export function useRepositories(handle: string) {
-  return useApi<RepositoriesResponse>(() => listRepositories(handle), [handle]);
+  const state = useApi<RepositoriesResponse>(
+    () => listRepositories(handle),
+    [handle],
+    30_000, // Auto-refresh 30s
+  );
+
+  useEffect(() => {
+    // Refetch quand l'utilisateur revient sur l'onglet
+    const onVisible = () => {
+      if (document.visibilityState === "visible") {
+        state.refetch();
+      }
+    };
+
+    // Refetch quand un nouveau dépôt est créé (depuis n'importe quel composant)
+    const onRepoCreated = () => {
+      state.refetch();
+    };
+
+    document.addEventListener("visibilitychange", onVisible);
+    window.addEventListener("shinobi:repo-created", onRepoCreated);
+    return () => {
+      document.removeEventListener("visibilitychange", onVisible);
+      window.removeEventListener("shinobi:repo-created", onRepoCreated);
+    };
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [state.refetch]);
+
+  return state;
+}
+
+/**
+ * Émet l'événement 'shinobi:repo-created' pour notifier tous les
+ * composants qui écoutent (sidebar, forge page, etc.) de refetch.
+ */
+export function emitRepoCreated() {
+  window.dispatchEvent(new CustomEvent("shinobi:repo-created"));
 }
 
 /** Fetches a single repository by owner/name */

@@ -4,7 +4,8 @@ import { useState, useCallback } from "react";
 import { Skeleton } from "@/components/ui/skeleton";
 import { RepoCard } from "@/components/forge/repo-card";
 import { CreateRepoForm } from "@/components/forge/create-repo-form";
-import { useRepositories } from "@/hooks/use-api";
+import { useRepositories, emitRepoCreated } from "@/hooks/use-api";
+
 import { forgeRepository } from "./actions";
 
 // ═══════════════════════════════════════════════════════════════
@@ -19,8 +20,10 @@ export default function ForgePage() {
 
   const handleCreated = useCallback(() => {
     setShowForm(false);
-    refetch();
+    refetch();           // Mise à jour locale (forge page)
+    emitRepoCreated();  // Notifie la sidebar et tout autre listener
   }, [refetch]);
+
 
   const repos = data?.repositories ?? [];
 

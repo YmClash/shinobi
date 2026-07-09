@@ -118,7 +118,7 @@ export function Sidebar() {
         )}
 
         {!reposLoading && repos.map((repo) => {
-          const repoPath = `/system/${repo.name}/operations`;
+          const repoPath = `/system/${repo.name}`;
           const isActive = activeRepoOwner === "system" && activeRepoName === repo.name;
 
           const repoLink = (

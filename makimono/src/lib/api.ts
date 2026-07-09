@@ -7,6 +7,27 @@
 // Le prefix est désormais calculé à partir de l'URL (params.owner, params.repo).
 // Plus de constante hardcodée — chaque page passe son propre prefix.
 
+/**
+ * Retourne le base URL pour les appels API.
+ * - Côté navigateur : chaîne vide (URL relative, ex: "/api/v1/...")
+ * - Côté serveur Next.js (RSC / SSR) : URL absolue car Node.js
+ *   ne comprend pas les URLs relatives.
+ *
+ * Priorité : window (client) > NEXT_PUBLIC_APP_URL > port 3001 (dev fallback)
+ */
+export function getBaseUrl(): string {
+  // Client-side : URL relative suffit (même origine)
+  if (typeof window !== "undefined") return "";
+
+  // Variable explicite définie dans .env.local (dev) ou les vars d'env de prod
+  if (process.env.NEXT_PUBLIC_APP_URL) {
+    return process.env.NEXT_PUBLIC_APP_URL;
+  }
+
+  // Fallback dev — port hardcodé dans package.json "next dev --port 3001"
+  return "http://localhost:3001";
+}
+
 /** Construit le prefix API pour un dépôt donné. */
 export function buildRepoPrefix(owner: string, repo: string): string {
   return `/api/v1/repos/${encodeURIComponent(owner)}/${encodeURIComponent(repo)}`;
@@ -169,7 +190,9 @@ export class ApiError extends Error {
 // ── Fetch helper ─────────────────────────────────────────────
 
 async function apiFetch<T>(path: string, options?: RequestInit): Promise<T> {
-  const res = await fetch(path, {
+  // Préfixe l'URL avec le base URL si on est côté serveur
+  const url = `${getBaseUrl()}${path}`;
+  const res = await fetch(url, {
     ...options,
     headers: {
       "Content-Type": "application/json",

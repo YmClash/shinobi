@@ -11,30 +11,36 @@ interface Crumb {
 
 interface BreadcrumbNavProps {
   crumbs: Crumb[];
+  repoName?: string; // affiché comme label racine si fourni
 }
 
-export default function BreadcrumbNav({ crumbs }: BreadcrumbNavProps) {
+export default function BreadcrumbNav({ crumbs, repoName }: BreadcrumbNavProps) {
+  // Si repoName fourni, on remplace le label du crumb repo (index 1) par repoName
+  const displayCrumbs = crumbs.map((c, i) =>
+    repoName && i === 1 ? { ...c, label: repoName } : c
+  );
+
   return (
-    <nav className="breadcrumb-nav" aria-label="Chemin du fichier">
-      <ol className="breadcrumb-list">
-        {crumbs.map((crumb, i) => {
-          const isLast = i === crumbs.length - 1;
+    <nav className="bc-nav" aria-label="Chemin du fichier">
+      <ol className="bc-list">
+        {displayCrumbs.map((crumb, i) => {
+          const isLast = i === displayCrumbs.length - 1;
+          // On skip le premier crumb (owner) et le deuxième (repo) car
+          // ils sont déjà affichés dans le repo header
+          if (i < 2) return null;
+
           return (
-            <li key={crumb.href} className="breadcrumb-item">
+            <li key={crumb.href} className="bc-item">
               {isLast ? (
-                <span className="crumb-current" aria-current="page">
+                <span className="bc-current" aria-current="page">
                   {crumb.label}
                 </span>
               ) : (
                 <>
-                  <Link href={crumb.href} className="crumb-link">
+                  <Link href={crumb.href} className="bc-link">
                     {crumb.label}
                   </Link>
-                  <ChevronRight
-                    size={12}
-                    className="crumb-sep"
-                    aria-hidden="true"
-                  />
+                  <ChevronRight size={12} className="bc-sep" aria-hidden="true" />
                 </>
               )}
             </li>

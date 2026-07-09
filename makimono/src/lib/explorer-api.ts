@@ -3,7 +3,7 @@
 // Types and fetch helpers for the Code Explorer routes
 // ═══════════════════════════════════════════════════════════════
 
-import { buildRepoPrefix } from "./api";
+import { buildRepoPrefix, getBaseUrl } from "./api";
 
 // ── Types ────────────────────────────────────────────────────
 
@@ -55,7 +55,6 @@ export function decodeBase64(b64: string): string {
         .join("")
     );
   } catch {
-    // Fallback pour les binaires qui ne sont pas du UTF-8 valide
     return atob(b64);
   }
 }
@@ -76,7 +75,7 @@ export async function exploreTree(
 ): Promise<ExplorerResponse> {
   const prefix = buildRepoPrefix(owner, repo);
   const pathParam = path ? `?path=${encodeURIComponent(path)}` : "";
-  const url = `${prefix}/tree/${encodeURIComponent(revision)}${pathParam}`;
+  const url = `${getBaseUrl()}${prefix}/tree/${encodeURIComponent(revision)}${pathParam}`;
 
   const res = await fetch(url);
   if (!res.ok) {
@@ -94,13 +93,15 @@ export async function listRefs(
   repo: string
 ): Promise<RefsResponse> {
   const prefix = buildRepoPrefix(owner, repo);
-  const res = await fetch(`${prefix}/refs`);
+  const url = `${getBaseUrl()}${prefix}/refs`;
+  const res = await fetch(url);
   if (!res.ok) {
     const text = await res.text().catch(() => "Unknown error");
     throw new Error(`Refs API error ${res.status}: ${text}`);
   }
   return res.json() as Promise<RefsResponse>;
 }
+
 
 // ── Helpers ──────────────────────────────────────────────────
 

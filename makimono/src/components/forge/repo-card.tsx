@@ -31,7 +31,7 @@ export function RepoCard({ repo, ownerHandle, className = "" }: RepoCardProps) {
   const isPublic = repo.visibility === "public";
 
   return (
-    <Link href={`/${ownerHandle}/${repo.name}/operations`}>
+    <Link href={`/${ownerHandle}/${repo.name}`}>
       <div
         className={`
           forge-card group relative
