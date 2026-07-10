@@ -20,6 +20,17 @@ pub trait OperationRepository: Send + Sync {
     /// Retrouve une opération par son identifiant.
     async fn find_by_id(&self, id: &Uuid) -> Result<Option<Operation>, DomainError>;
 
+    /// Retrouve une opération par son content_id VCS (SHA-1 Git / CommitId jj).
+    ///
+    /// Filtrée par `repo_id` pour l'isolation multi-tenant.
+    /// Utilisé par le Sync Hook pour résoudre les parents Git → UUID Operation
+    /// (Phase 12A-Fix2 — La Lignée Sanguine).
+    async fn find_by_content_id(
+        &self,
+        repo_id: &Uuid,
+        content_id: &str,
+    ) -> Result<Option<Operation>, DomainError>;
+
     /// Liste les opérations les plus récentes d'un dépôt, ordonnées par date décroissante.
     /// Phase 10A : filtrée par `repository_id` pour l'isolation multi-tenant.
     async fn list_recent(&self, repo_id: &Uuid, limit: usize) -> Result<Vec<Operation>, DomainError>;

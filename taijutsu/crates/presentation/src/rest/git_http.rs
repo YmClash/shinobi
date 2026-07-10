@@ -406,14 +406,50 @@ async fn sync_hook_post_push(
         None
     };
 
-    // 5. Construire l'entite Operation complete
+    // 5. Résoudre les parents Git → UUID Operation (La Lignée Sanguine — Phase 12A-Fix2)
+    let mut parent_op_ids: Vec<uuid::Uuid> = Vec::new();
+    for parent_sha in &snapshot.parent_commit_ids {
+        match state.operation_repo.find_by_content_id(&repo_id, parent_sha).await {
+            Ok(Some(parent_op)) => {
+                parent_op_ids.push(parent_op.id);
+                info!(
+                    parent_sha = %parent_sha,
+                    parent_op_id = %parent_op.id,
+                    "Sync Hook: parent resolu (SHA-1 → UUID)"
+                );
+            }
+            Ok(None) => {
+                warn!(
+                    parent_sha = %parent_sha,
+                    repo_id = %repo_id,
+                    "Sync Hook: parent SHA-1 introuvable en base — orphelin accepte"
+                );
+            }
+            Err(e) => {
+                warn!(
+                    parent_sha = %parent_sha,
+                    error = %e,
+                    "Sync Hook: erreur resolution parent — skip"
+                );
+            }
+        }
+    }
+
+    info!(
+        repo_id = %repo_id,
+        parent_count = parent_op_ids.len(),
+        total_git_parents = snapshot.parent_commit_ids.len(),
+        "Sync Hook: lignee parentale resolue"
+    );
+
+    // 6. Construire l'entite Operation complete
     let operation = Operation::new(
         repository.owner_id,
         repository.id,
         content_id,
         ipfs_cid,
         &description,
-        vec![],
+        parent_op_ids,
     );
 
     // 6. Persister dans PostgreSQL (avec detection de doublon)

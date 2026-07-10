@@ -115,6 +115,28 @@ impl OperationRepository for PostgresOperationRepository {
     }
 
     #[instrument(skip(self))]
+    async fn find_by_content_id(
+        &self,
+        repo_id: &Uuid,
+        content_id: &str,
+    ) -> Result<Option<Operation>, DomainError> {
+        let row = sqlx::query(
+            "SELECT id, author_id, repository_id, content_id, ipfs_cid, description, parent_ids, created_at \
+             FROM operations WHERE repository_id = $1 AND content_id = $2",
+        )
+        .bind(repo_id)
+        .bind(content_id)
+        .fetch_optional(&self.pool)
+        .await
+        .map_err(|e| DomainError::Persistence(e.to_string()))?;
+
+        match row {
+            Some(r) => Ok(Some(row_to_operation(r)?)),
+            None => Ok(None),
+        }
+    }
+
+    #[instrument(skip(self))]
     async fn list_recent(&self, repo_id: &Uuid, limit: usize) -> Result<Vec<Operation>, DomainError> {
         let rows = sqlx::query(
             "SELECT id, author_id, repository_id, content_id, ipfs_cid, description, parent_ids, created_at \

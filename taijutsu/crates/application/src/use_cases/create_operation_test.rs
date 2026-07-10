@@ -75,6 +75,18 @@ mod tests {
         async fn diff_since(&self, _repo_id: &Uuid, _cid: &ContentId) -> Result<Vec<String>, DomainError> {
             Ok(vec![])
         }
+
+        async fn list_tree(&self, _repo_id: &Uuid, _revision: &str, _path: &str) -> Result<Vec<domain::ports::vcs_engine::TreeEntry>, DomainError> {
+            Ok(vec![])
+        }
+
+        async fn read_blob(&self, _repo_id: &Uuid, _revision: &str, _path: &str) -> Result<Vec<u8>, DomainError> {
+            Ok(vec![])
+        }
+
+        async fn list_refs(&self, _repo_id: &Uuid) -> Result<Vec<domain::ports::vcs_engine::RefInfo>, DomainError> {
+            Ok(vec![])
+        }
     }
 
     // ── Mock OperationRepository ──────────────────────────
@@ -99,6 +111,10 @@ mod tests {
         }
 
         async fn find_by_id(&self, _id: &Uuid) -> Result<Option<Operation>, DomainError> {
+            Ok(None)
+        }
+
+        async fn find_by_content_id(&self, _repo_id: &Uuid, _content_id: &str) -> Result<Option<Operation>, DomainError> {
             Ok(None)
         }
 

@@ -7,6 +7,7 @@ import {
   ReactFlow,
   Background,
   Controls,
+  MarkerType,
   type Node,
   type Edge,
   type NodeTypes,
@@ -103,8 +104,18 @@ function operationsToFlow(operations: Operation[]): {
           id: `${parentId}->${op.id}`,
           source: parentId,
           target: op.id,
-          animated: false,
-          style: { stroke: "hsl(var(--muted-foreground))", strokeWidth: 1.5 },
+          type: "smoothstep",
+          animated: true,
+          markerEnd: {
+            type: MarkerType.ArrowClosed,
+            width: 20,
+            height: 20,
+            color: "#10b981",
+          },
+          style: {
+            stroke: "#10b981",
+            strokeWidth: 2.5,
+          },
         });
       }
     }
@@ -197,8 +208,17 @@ export default function OperationsPage() {
     [data],
   );
 
-  const [nodes, , onNodesChange] = useNodesState(initialNodes);
-  const [edges, , onEdgesChange] = useEdgesState(initialEdges);
+  const [nodes, setNodes, onNodesChange] = useNodesState(initialNodes);
+  const [edges, setEdges, onEdgesChange] = useEdgesState(initialEdges);
+
+  // Sync ReactFlow internal state when data changes (async fetch)
+  useEffect(() => {
+    setNodes(initialNodes);
+  }, [initialNodes, setNodes]);
+
+  useEffect(() => {
+    setEdges(initialEdges);
+  }, [initialEdges, setEdges]);
 
   // Navigate to detail page on node click
   const onNodeClick = useCallback(
@@ -284,8 +304,8 @@ export default function OperationsPage() {
         style={{ height: "calc(100vh - 200px)", minHeight: "400px" }}
       >
         <ReactFlow
-          nodes={nodes.length > 0 ? nodes : initialNodes}
-          edges={edges.length > 0 ? edges : initialEdges}
+          nodes={nodes}
+          edges={edges}
           onNodesChange={onNodesChange}
           onEdgesChange={onEdgesChange}
           onNodeClick={onNodeClick}

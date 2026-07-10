@@ -57,6 +57,10 @@ pub struct CommitSnapshot {
     pub description: String,
     /// Fichiers du commit : (chemin, contenu bytes).
     pub files: Vec<(String, Vec<u8>)>,
+    /// SHA-1 hex des commits parents Git (filtré du root_commit_id jj).
+    /// Vide pour un root commit (premier push).
+    /// Utilisé par le Sync Hook pour résoudre la lignée (Phase 12A-Fix2).
+    pub parent_commit_ids: Vec<String>,
 }
 
 // ── Types internes ACL (ne sortent jamais du module) ───────────────────────
@@ -526,6 +530,14 @@ behavior = "drop"
             let description = commit.description().to_string();
             let commit_tree = commit.tree();
 
+            // 3b. Extraire les parent_ids Git (SHA-1 hex), en filtrant le root_commit_id jj
+            let parent_commit_ids: Vec<String> = commit
+                .parent_ids()
+                .iter()
+                .filter(|pid| *pid != store.root_commit_id())
+                .map(|pid| pid.hex())
+                .collect();
+
             // 4. Determiner le tree de base pour le diff
             //    - Si le commit a un parent → diff vs parent (fichiers modifies)
             //    - Si pas de parent (root commit) → diff vs empty tree (tous les fichiers)
@@ -626,7 +638,7 @@ behavior = "drop"
                 "read_commit_snapshot: snapshot lu depuis le tree jj"
             );
 
-            Ok(CommitSnapshot { description, files })
+            Ok(CommitSnapshot { description, files, parent_commit_ids })
         })
         .await
         .map_err(|e| DomainError::Internal(format!("spawn_blocking join error: {e}")))?

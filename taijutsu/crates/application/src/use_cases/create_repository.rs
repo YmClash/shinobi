@@ -294,6 +294,15 @@ mod tests {
         async fn diff_since(&self, _repo_id: &Uuid, _content_id: &ContentId) -> Result<Vec<String>, DomainError> {
             Ok(vec![])
         }
+        async fn list_tree(&self, _repo_id: &Uuid, _revision: &str, _path: &str) -> Result<Vec<domain::ports::vcs_engine::TreeEntry>, DomainError> {
+            Ok(vec![])
+        }
+        async fn read_blob(&self, _repo_id: &Uuid, _revision: &str, _path: &str) -> Result<Vec<u8>, DomainError> {
+            Ok(vec![])
+        }
+        async fn list_refs(&self, _repo_id: &Uuid) -> Result<Vec<domain::ports::vcs_engine::RefInfo>, DomainError> {
+            Ok(vec![])
+        }
     }
 
     // ── Helpers ──────────────────────────────────────
