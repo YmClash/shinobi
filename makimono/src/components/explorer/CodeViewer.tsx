@@ -23,6 +23,8 @@ interface CodeViewerProps {
   language: string | null;
   isText: boolean;
   size: number;
+  /** Callback pour ouvrir le panneau Tensai (Phase 14). */
+  onTensaiClick?: () => void;
 }
 
 export default function CodeViewer({
@@ -31,6 +33,7 @@ export default function CodeViewer({
   language,
   isText,
   size,
+  onTensaiClick,
 }: CodeViewerProps) {
   const [highlightedHtml, setHighlightedHtml] = useState<string | null>(null);
   const [copied, setCopied] = useState(false);
@@ -128,7 +131,11 @@ export default function CodeViewer({
           </button>
 
           {/* Tensai IA */}
-          <button className="cv-btn cv-btn-tensai" title="Analyser avec Tensai">
+          <button
+            className="cv-btn cv-btn-tensai"
+            title="Analyser avec Tensai"
+            onClick={onTensaiClick}
+          >
             <Sparkles size={14} />
             <span>Demander à Tensai</span>
           </button>

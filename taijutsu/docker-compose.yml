@@ -78,7 +78,7 @@ services:
       retries: 5
       start_period: 15s
 
-  # ── Oracle: Ollama (LLM local) ──────────────
+  # ── Oracle: Ollama (LLM local — code review) ──────────────
   ollama:
     image: ollama/ollama:latest
     container_name: shinobi-ollama
@@ -93,8 +93,27 @@ services:
       retries: 5
       start_period: 30s
 
+  # ── Sensei: Ollama #2 (LLM conversationnel — Phase 15) ────
+  # Instance séparée de l'Oracle pour garantir une latence UI < 500ms.
+  # Modèle recommandé : qwen2.5-coder:7b (Q4_K_M, ~5GB VRAM)
+  # Fallback GPU faible : qwen2.5-coder:3b (Q4_K_M, ~2.5GB VRAM)
+  ollama-sensei:
+    image: ollama/ollama:latest
+    container_name: shinobi-ollama-sensei
+    ports:
+      - "11436:11434"
+    volumes:
+      - ollama_sensei_data:/root/.ollama
+    healthcheck:
+      test: [ "CMD-SHELL", "curl -sf http://localhost:11434/api/tags || exit 1" ]
+      interval: 10s
+      timeout: 10s
+      retries: 5
+      start_period: 30s
+
 volumes:
   pgdata:
   kafkadata:
   ipfsdata:
   ollama_data:
+  ollama_sensei_data:

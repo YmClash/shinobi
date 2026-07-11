@@ -2691,6 +2691,7 @@ dependencies = [
  "sqlx",
  "tempfile",
  "tokio",
+ "tokio-stream",
  "tokio-util",
  "tracing",
  "uuid",
@@ -3733,11 +3734,13 @@ dependencies = [
  "axum-prometheus",
  "chrono",
  "domain",
+ "futures-util",
  "infrastructure",
  "prost",
  "serde",
  "serde_json",
  "tokio",
+ "tokio-stream",
  "tonic",
  "tonic-build",
  "tonic-prost",
@@ -5160,6 +5163,7 @@ dependencies = [
  "futures-core",
  "pin-project-lite",
  "tokio",
+ "tokio-util",
 ]
 
 [[package]]

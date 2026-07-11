@@ -20,11 +20,11 @@ import {
   ExternalLink,
 } from "lucide-react";
 import { exploreTree, listRefs, buildBreadcrumbs } from "@/lib/explorer-api";
-import { getRepository, listOperations, buildRepoPrefix } from "@/lib/api";
+import { getRepository, listOperations, getOperationReviews, buildRepoPrefix } from "@/lib/api";
 import BreadcrumbNav from "@/components/explorer/BreadcrumbNav";
 import BranchSelector from "@/components/explorer/BranchSelector";
 import FileBrowser from "@/components/explorer/FileBrowser";
-import CodeViewer from "@/components/explorer/CodeViewer";
+import ExplorerFileClient from "@/components/explorer/ExplorerFileClient";
 
 // ── Route params ─────────────────────────────────────────────
 
@@ -119,13 +119,35 @@ export default async function ExplorerPage({ params }: PageProps) {
       ? opsData.value.operations[0]
       : null;
 
+  // ── Oracle Score — fetch reviews du dernier commit (Phase 14) ──
+  let oracleScore: number | null = null;
+  let latestReviewSummary: string | null = null;
+  let latestReviewModel: string | null = null;
+
+  if (lastOp) {
+    try {
+      const prefix = buildRepoPrefix(owner, repo);
+      const reviewsData = await getOperationReviews(prefix, lastOp.id);
+      if (reviewsData.reviews.length > 0) {
+        const bestReview = reviewsData.reviews[0];
+        oracleScore = bestReview.score !== null
+          ? Math.round(bestReview.score * 100)
+          : null;
+        latestReviewSummary = bestReview.summary;
+        latestReviewModel = bestReview.model;
+      }
+    } catch {
+      // Graceful degradation — pas de review disponible
+    }
+  }
+
   const latestCommit = lastOp
     ? {
         hash: lastOp.content_id,
         message: lastOp.description,
         author: lastOp.author_id.slice(0, 8), // short UUID as author
         date: formatDate(lastOp.created_at),
-        oracleScore: null as number | null, // enrichi plus tard par Phase 9
+        oracleScore,
       }
     : undefined;
 
@@ -321,7 +343,7 @@ git push -u origin main`}</pre>
         {/* ── Colonne principale ── */}
         <main className="ex-main">
           {isFile ? (
-            <CodeViewer
+            <ExplorerFileClient
               path={data.path}
               contentB64={data.content_b64}
               language={data.language}
@@ -383,6 +405,32 @@ git push -u origin main`}</pre>
               )}
             </ul>
           </div>
+
+          {/* Oracle Score (Phase 14) */}
+          {oracleScore !== null && (
+            <div className="ex-sidebar-card ex-sidebar-card-oracle">
+              <h3 className="ex-sidebar-title">Oracle Tensai</h3>
+              <div className="ex-oracle-score-display">
+                <div className="ex-oracle-gauge">
+                  <span className={`ex-oracle-value ${
+                    oracleScore >= 80 ? "ex-oracle-good" :
+                    oracleScore >= 60 ? "ex-oracle-mid" : "ex-oracle-low"
+                  }`}>
+                    {oracleScore}
+                  </span>
+                  <span className="ex-oracle-max">/100</span>
+                </div>
+                {latestReviewModel && (
+                  <span className="ex-oracle-model">{latestReviewModel}</span>
+                )}
+              </div>
+              {latestReviewSummary && (
+                <p className="ex-sidebar-desc ex-oracle-summary">
+                  {latestReviewSummary}
+                </p>
+              )}
+            </div>
+          )}
 
           {/* Dernière révision */}
           {latestCommit && (

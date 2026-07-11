@@ -31,6 +31,10 @@ uuid        = { workspace = true }
 chrono      = { workspace = true }
 async-trait = { workspace = true }
 
+# — Streaming SSE (Phase 15 — Sensei) —
+tokio-stream = { workspace = true }
+futures-util = { workspace = true }
+
 [build-dependencies]
 tonic-build = { workspace = true }
 tonic-prost-build = { workspace = true }

@@ -52,6 +52,9 @@ reqwest = { workspace = true }
 fastembed = { workspace = true }
 pgvector = { workspace = true }
 
+# — Streaming LLM (Phase 15 — Sensei) —
+tokio-stream = { workspace = true }
+
 [dev-dependencies]
 tempfile = { workspace = true }
 tokio = { workspace = true }

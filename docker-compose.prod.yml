@@ -2,7 +2,7 @@
 # SHINOBI — Docker Compose Production
 # ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 #
-# Stack complet : 7 services + 2 observabilité
+# Stack complet : 8 services + 2 observabilité
 #
 # Architecture réseau :
 #   - Taijutsu : REST API (:3000) + Git Smart HTTP (:3000)
@@ -66,6 +66,10 @@ services:
       OLLAMA_MODEL: granite3-dense:2b
       ORACLE_CONSUMER_ENABLED: "true"
       ORACLE_CONSUMER_GROUP: shinobi-oracle-reviewer
+      # Sensei: Ollama #2 (LLM conversationnel — Phase 15)
+      SENSEI_ENABLED: "true"
+      SENSEI_OLLAMA_URL: http://ollama-sensei:11434
+      SENSEI_OLLAMA_MODEL: qwen2.5-coder:7b
       # Observabilité
       RUST_LOG: info,taijutsu=debug,domain=debug,application=debug,infrastructure=debug
     volumes:
@@ -80,6 +84,8 @@ services:
       ipfs:
         condition: service_healthy
       ollama:
+        condition: service_healthy
+      ollama-sensei:
         condition: service_healthy
     networks:
       - shinobi
@@ -189,12 +195,30 @@ services:
       - shinobi
     restart: unless-stopped
 
-  # ── Oracle: Ollama (LLM local) ───────────────
+  # ── Oracle: Ollama (LLM local — code review) ─
   ollama:
     image: ollama/ollama:latest
     container_name: shinobi-ollama
     volumes:
       - ollama_data:/root/.ollama
+    healthcheck:
+      test: ["CMD", "ollama", "list"]
+      interval: 10s
+      timeout: 10s
+      retries: 5
+      start_period: 60s
+    networks:
+      - shinobi
+    restart: unless-stopped
+
+  # ── Sensei: Ollama #2 (LLM conversationnel — Phase 15) ─
+  # Instance séparée de l'Oracle pour garantir une latence UI < 500ms.
+  # Modèle : qwen2.5-coder:7b (Q4_K_M)
+  ollama-sensei:
+    image: ollama/ollama:latest
+    container_name: shinobi-ollama-sensei
+    volumes:
+      - ollama_sensei_data:/root/.ollama
     healthcheck:
       test: ["CMD", "ollama", "list"]
       interval: 10s
@@ -269,6 +293,8 @@ volumes:
     name: shinobi-ipfsdata
   ollama_data:
     name: shinobi-ollama
+  ollama_sensei_data:
+    name: shinobi-ollama-sensei
   vcs_workspace:
     name: shinobi-vcs-workspace
   prometheus_data:
