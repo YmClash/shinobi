@@ -92,6 +92,24 @@ impl LlmService for MockLlmService {
             duration_ms: 100,
         })
     }
+    async fn generate_stream(
+        &self,
+        _prompt: &str,
+        _system: &str,
+    ) -> Result<tokio::sync::mpsc::Receiver<domain::ports::llm_service::LlmStreamChunk>, DomainError> {
+        let (tx, rx) = tokio::sync::mpsc::channel(1);
+        let response = self.response.clone();
+        tokio::spawn(async move {
+            let _ = tx.send(domain::ports::llm_service::LlmStreamChunk::Token {
+                content: response,
+            }).await;
+            let _ = tx.send(domain::ports::llm_service::LlmStreamChunk::Done {
+                model: "mock-model".to_string(),
+                duration_ms: 100,
+            }).await;
+        });
+        Ok(rx)
+    }
     fn model_name(&self) -> &str {
         "mock-model"
     }

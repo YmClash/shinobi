@@ -36,6 +36,7 @@ use application::use_cases::list_repositories::ListRepositoriesUseCase;
 use application::use_cases::resolve_repo::ResolveRepoUseCase;
 use application::use_cases::review_operation::ReviewOperationUseCase;
 use application::use_cases::search_chunks::SearchChunksUseCase;
+use application::use_cases::sensei_chat::SenseiChatUseCase;
 use infrastructure::cache::redis_cache::RedisCache;
 use infrastructure::content::ipfs_store::IpfsContentStore;
 use infrastructure::embeddings::nomic_service::NomicEmbedService;
@@ -89,6 +90,9 @@ async fn main() -> anyhow::Result<()> {
         ollama_url = %config.ollama_url,
         ollama_model = %config.ollama_model,
         oracle_enabled = config.oracle_consumer_enabled,
+        sensei_enabled = config.sensei_enabled,
+        sensei_ollama_url = %config.sensei_ollama_url,
+        sensei_ollama_model = %config.sensei_ollama_model,
         "Configuration chargée"
     );
 
@@ -296,6 +300,33 @@ async fn main() -> anyhow::Result<()> {
         resolve_repo.clone(),
     ));
 
+    // ── Phase 15 : Agent Sensei (先生) — LLM conversationnel ─────────
+    let sensei_chat: Option<Arc<SenseiChatUseCase>> = if config.sensei_enabled {
+        match OllamaService::new(&config.sensei_ollama_url, &config.sensei_ollama_model) {
+            Ok(sensei_llm) => {
+                let use_case = Arc::new(SenseiChatUseCase::new(
+                    search_chunks.clone(),
+                    review_repo.clone(),
+                    Arc::new(sensei_llm),
+                    repo.clone(),
+                ));
+                info!(
+                    url = %config.sensei_ollama_url,
+                    model = %config.sensei_ollama_model,
+                    "🥷 Sensei Agent — Initialisé (Ollama #2)"
+                );
+                Some(use_case)
+            }
+            Err(e) => {
+                warn!("⚠️ Sensei Agent désactivé — Ollama #2 non disponible: {e}");
+                None
+            }
+        }
+    } else {
+        info!("ℹ️ Sensei Agent désactivé par configuration (SENSEI_ENABLED=false)");
+        None
+    };
+
     let shared_state = SharedState {
         create_operation,
         get_operation,
@@ -311,6 +342,8 @@ async fn main() -> anyhow::Result<()> {
         get_tree,
         get_blob,
         list_refs: list_refs_uc,
+        sensei_chat,
+        sensei_ollama_url: if config.sensei_enabled { Some(config.sensei_ollama_url.clone()) } else { None },
     };
 
     // ── Git Bridge HTTP (Phase 12A) ────────────────────

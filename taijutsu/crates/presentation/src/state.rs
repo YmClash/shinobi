@@ -70,6 +70,15 @@ pub struct SharedState {
 
     /// Use case: lister les branches et tags (Phase 6).
     pub list_refs: Arc<ListRefsUseCase>,
+
+    // ── Phase 15 — Sensei (先生) ─────────────────────────────────
+
+    /// Use case: chat conversationnel IA avec streaming.
+    /// `None` si l'agent Sensei est désactivé (Ollama #2 non disponible).
+    pub sensei_chat: Option<Arc<application::use_cases::sensei_chat::SenseiChatUseCase>>,
+
+    /// URL du serveur Ollama Sensei pour les appels directs (models, warmup).
+    pub sensei_ollama_url: Option<String>,
 }
 
 // ── Phase 12A — Git Bridge HTTP ──────────────────────────────────────

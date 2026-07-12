@@ -137,12 +137,31 @@ async fn git_info_refs(
     // 2. Construire le chemin vers le bare Git repo
     let repo_git_path = state.vcs_engine.git_repo_path(&repository.id);
 
+    // Lazy init : si le bare Git repo n'existe pas (repo cree avec
+    // SimpleBackend avant Phase 11, ou workspace non initialise),
+    // on initialise le workspace jj+GitBackend a la volee.
     if !repo_git_path.exists() {
-        warn!(
+        info!(
+            repo_id = %repository.id,
             path = %repo_git_path.display(),
-            "Git HTTP: bare Git repo not found on disk"
+            "Git HTTP: bare Git repo absent — lazy init du workspace"
         );
-        return (StatusCode::NOT_FOUND, "Git repository not initialized").into_response();
+        if let Err(e) = state.vcs_engine.init_workspace(&repository.id).await {
+            warn!(error = %e, "Git HTTP: lazy init failed");
+            return (StatusCode::INTERNAL_SERVER_ERROR, "Failed to initialize Git repository").into_response();
+        }
+        // Re-verifier apres init
+        if !repo_git_path.exists() {
+            warn!(
+                path = %repo_git_path.display(),
+                "Git HTTP: bare Git repo toujours absent apres init"
+            );
+            return (StatusCode::NOT_FOUND, "Git repository not initialized").into_response();
+        }
+        info!(
+            repo_id = %repository.id,
+            "Git HTTP: workspace initialise avec succes (lazy init)"
+        );
     }
 
     // 3. Executer le CGI

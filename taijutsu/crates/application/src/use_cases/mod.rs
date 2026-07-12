@@ -17,6 +17,7 @@ pub mod resolve_ipfs;
 pub mod resolve_repo;
 pub mod review_operation;
 pub mod search_chunks;
+pub mod sensei_chat;
 
 
 #[cfg(test)]

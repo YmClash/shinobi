@@ -341,3 +341,181 @@ export async function createRepository(
     body: JSON.stringify(body),
   });
 }
+
+// ── Sensei Agent (Phase 15 — 先生) ─────────────────────────────
+
+/** Message dans l'historique de conversation. */
+export interface SenseiMessage {
+  role: "user" | "assistant";
+  content: string;
+}
+
+// ── Sensei Models & Warmup ──────────────────────────────────────────
+
+/** Modèle installé sur Ollama Sensei. */
+export interface SenseiModelInfo {
+  name: string;
+  size: number;
+}
+
+/** Réponse de GET /api/v1/sensei/models. */
+export interface SenseiModelsResponse {
+  models: SenseiModelInfo[];
+  active: string;
+}
+
+/** Récupère la liste des modèles installés sur Ollama #2 (Sensei). */
+export async function getSenseiModels(): Promise<SenseiModelsResponse> {
+  const res = await fetch(`${getBaseUrl()}/api/v1/sensei/models`);
+  if (!res.ok) throw new Error(`Models fetch failed: ${res.status}`);
+  return res.json();
+}
+
+/** Pré-charge un modèle dans la RAM d'Ollama (élimine le cold-start ~30s). */
+export async function warmupSenseiModel(model: string): Promise<void> {
+  const res = await fetch(`${getBaseUrl()}/api/v1/sensei/warmup`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ model }),
+  });
+  if (!res.ok) {
+    const text = await res.text().catch(() => "");
+    throw new Error(`Warmup failed (${res.status}): ${text}`);
+  }
+}
+
+/** Corps de la requête POST /api/v1/sensei/chat. */
+export interface SenseiChatRequest {
+  query: string;
+  file_path: string;
+  file_content?: string;
+  language: string | null;
+  owner: string;
+  repo: string;
+  history: SenseiMessage[];
+}
+
+/** Source RAG trouvée par Tensai. */
+export interface SenseiSource {
+  file_path: string;
+  name: string | null;
+  similarity: number;
+  language: string;
+  start_line: number;
+  end_line: number;
+}
+
+/** Événement SSE reçu du stream Sensei. */
+export type SenseiStreamEvent =
+  | { type: "context"; sources: SenseiSource[]; oracle_score: number | null; oracle_summary: string | null }
+  | { type: "token"; content: string }
+  | { type: "done"; model: string; duration_ms: number }
+  | { type: "error"; message: string };
+
+/** Callbacks pour le stream SSE Sensei. */
+export interface SenseiStreamCallbacks {
+  onContext: (sources: SenseiSource[], oracleScore: number | null, oracleSummary: string | null) => void;
+  onToken: (token: string) => void;
+  onDone: (model: string, durationMs: number) => void;
+  onError: (error: string) => void;
+}
+
+/**
+ * Ouvre un stream SSE vers l'agent Sensei (先生).
+ *
+ * Utilise fetch + ReadableStream (pas EventSource, car POST avec body).
+ * Retourne un AbortController pour permettre l'annulation (bouton Stop).
+ *
+ * @example
+ * ```ts
+ * const controller = senseiChatStream(request, {
+ *   onContext: (sources, score, summary) => setSources(sources),
+ *   onToken: (token) => setContent(prev => prev + token),
+ *   onDone: (model, ms) => setDone(true),
+ *   onError: (err) => setError(err),
+ * });
+ *
+ * // Pour annuler :
+ * controller.abort();
+ * ```
+ */
+export function senseiChatStream(
+  body: SenseiChatRequest,
+  callbacks: SenseiStreamCallbacks,
+): AbortController {
+  const controller = new AbortController();
+
+  fetch(`${getBaseUrl()}/api/v1/sensei/chat`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(body),
+    signal: controller.signal,
+  })
+    .then(async (response) => {
+      if (!response.ok) {
+        const text = await response.text().catch(() => "Unknown error");
+        callbacks.onError(`HTTP ${response.status}: ${text}`);
+        return;
+      }
+
+      const reader = response.body?.getReader();
+      if (!reader) {
+        callbacks.onError("No readable stream available");
+        return;
+      }
+
+      const decoder = new TextDecoder();
+      let buffer = "";
+
+      while (true) {
+        const { done, value } = await reader.read();
+        if (done) break;
+
+        buffer += decoder.decode(value, { stream: true });
+
+        // Parse SSE events (format: "data: {...}\n\n")
+        const lines = buffer.split("\n");
+        buffer = lines.pop() ?? ""; // Keep incomplete line in buffer
+
+        for (const line of lines) {
+          const trimmed = line.trim();
+          if (!trimmed || trimmed === ":") continue; // SSE comment / keep-alive
+
+          if (trimmed.startsWith("data:")) {
+            const jsonStr = trimmed.slice(5).trim();
+            if (!jsonStr) continue;
+
+            try {
+              const event = JSON.parse(jsonStr) as SenseiStreamEvent;
+
+              switch (event.type) {
+                case "context":
+                  callbacks.onContext(event.sources, event.oracle_score, event.oracle_summary);
+                  break;
+                case "token":
+                  callbacks.onToken(event.content);
+                  break;
+                case "done":
+                  callbacks.onDone(event.model, event.duration_ms);
+                  break;
+                case "error":
+                  callbacks.onError(event.message);
+                  break;
+              }
+            } catch {
+              // Skip unparseable lines (keep-alive, etc.)
+            }
+          }
+        }
+      }
+    })
+    .catch((err) => {
+      if (err instanceof DOMException && err.name === "AbortError") {
+        // User cancelled — normal behavior
+        return;
+      }
+      callbacks.onError(String(err));
+    });
+
+  return controller;
+}

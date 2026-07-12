@@ -1,14 +1,14 @@
 "use client";
 
 // ═══════════════════════════════════════════════════════════════
-// ExplorerFileClient — Wrapper client pour CodeViewer + Tensai
-// Gère l'état d'ouverture du panneau Tensai IA (Phase 14).
+// ExplorerFileClient — Wrapper client pour CodeViewer + Sensei
+// Gère l'état d'ouverture du panneau Sensei IA (Phase 15).
 // Nécessaire car la page explorer est un Server Component.
 // ═══════════════════════════════════════════════════════════════
 
 import React, { useState } from "react";
 import CodeViewer from "@/components/explorer/CodeViewer";
-import TensaiPanel from "@/components/explorer/TensaiPanel";
+import SenseiPanel from "@/components/explorer/SenseiPanel";
 import { decodeBase64 } from "@/lib/explorer-api";
 
 interface ExplorerFileClientProps {
@@ -17,6 +17,10 @@ interface ExplorerFileClientProps {
   language: string | null;
   isText: boolean;
   size: number;
+  /** Owner du dépôt (ex: "system") — Phase 15: Sensei context. */
+  owner: string;
+  /** Nom du dépôt (ex: "hello-world") — Phase 15: Sensei context. */
+  repo: string;
 }
 
 export default function ExplorerFileClient({
@@ -25,8 +29,10 @@ export default function ExplorerFileClient({
   language,
   isText,
   size,
+  owner,
+  repo,
 }: ExplorerFileClientProps) {
-  const [isTensaiOpen, setIsTensaiOpen] = useState(false);
+  const [isSenseiOpen, setIsSenseiOpen] = useState(false);
 
   const fileContent = isText ? decodeBase64(contentB64) : "";
 
@@ -38,14 +44,16 @@ export default function ExplorerFileClient({
         language={language}
         isText={isText}
         size={size}
-        onTensaiClick={() => setIsTensaiOpen(true)}
+        onTensaiClick={() => setIsSenseiOpen(true)}
       />
-      <TensaiPanel
-        isOpen={isTensaiOpen}
-        onClose={() => setIsTensaiOpen(false)}
+      <SenseiPanel
+        isOpen={isSenseiOpen}
+        onClose={() => setIsSenseiOpen(false)}
         filePath={path}
         fileContent={fileContent}
         language={language}
+        owner={owner}
+        repo={repo}
       />
     </>
   );

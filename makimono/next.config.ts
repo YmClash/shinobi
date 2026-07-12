@@ -9,6 +9,12 @@ const nextConfig: NextConfig = {
   // Requis pour le Dockerfile multi-stage (Stage 3 runtime slim)
   output: "standalone",
 
+  // Timeout HTTP étendu pour le streaming SSE (Sensei chat) et
+  // le chargement initial du modèle Ollama (~30s cold start).
+  httpAgentOptions: {
+    keepAlive: true,
+  },
+
   // Proxy API requests to the Taijutsu backend
   // En dev: localhost:3000 | En Docker: http://taijutsu:3000 (réseau shinobi)
   async rewrites() {

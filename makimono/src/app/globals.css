@@ -2964,3 +2964,374 @@ html * {
 [data-theme="scroll"] .tensai-msg-user .tensai-msg-content {
   background: linear-gradient(135deg, oklch(0.45 0.08 60), oklch(0.55 0.10 40));
 }
+
+/* ═══════════════════════════════════════════════════════════════
+   SENSEI PANEL — Agent Conversationnel IA (Phase 15 — 先生)
+   
+   Sensei réutilise la même structure visuelle que Tensai,
+   avec des ajouts pour le streaming, les sources RAG,
+   le badge Oracle, et le bouton Stop.
+   ═══════════════════════════════════════════════════════════════ */
+
+@keyframes sensei-slide-in {
+  from { opacity: 0; transform: translateX(100%); }
+  to { opacity: 1; transform: translateX(0); }
+}
+@keyframes sensei-fade-in {
+  from { opacity: 0; }
+  to { opacity: 1; }
+}
+@keyframes sensei-spin {
+  to { transform: rotate(360deg); }
+}
+@keyframes sensei-blink {
+  0%, 100% { opacity: 1; }
+  50% { opacity: 0; }
+}
+@keyframes sensei-pulse-stop {
+  0%, 100% { box-shadow: 0 0 0 0 oklch(0.60 0.25 25 / 40%); }
+  50% { box-shadow: 0 0 0 4px oklch(0.60 0.25 25 / 0%); }
+}
+
+.sensei-overlay {
+  position: fixed; inset: 0; z-index: 1000;
+  background: oklch(0 0 0 / 50%);
+  animation: sensei-fade-in 0.2s ease-out;
+  display: flex; justify-content: flex-end;
+}
+
+.sensei-panel {
+  width: 520px; max-width: 92vw; height: 100vh;
+  display: flex; flex-direction: column;
+  background: var(--card);
+  border-left: 1px solid var(--border);
+  animation: sensei-slide-in 0.3s ease-out;
+  box-shadow: -8px 0 32px oklch(0 0 0 / 20%);
+}
+
+/* ── Header ─────────────────────────────────────────────── */
+.sensei-header {
+  display: flex; align-items: center; justify-content: space-between;
+  padding: 0.75rem 1rem;
+  border-bottom: 1px solid var(--border);
+  background: var(--card);
+}
+.sensei-header-left {
+  display: flex; align-items: center; gap: 0.5rem;
+}
+.sensei-icon-sparkle {
+  color: oklch(0.72 0.22 150);
+}
+.sensei-title {
+  font-size: 0.95rem; font-weight: 800;
+  background: linear-gradient(135deg, oklch(0.72 0.22 150), oklch(0.65 0.18 280));
+  -webkit-background-clip: text; -webkit-text-fill-color: transparent;
+  background-clip: text;
+}
+.sensei-model-badge {
+  font-size: 0.55rem; font-weight: 600;
+  padding: 0.15rem 0.45rem; border-radius: 9999px;
+  background: oklch(0.72 0.22 150 / 12%);
+  color: oklch(0.72 0.22 150);
+  font-family: var(--font-mono);
+}
+.sensei-model-select {
+  font-size: 0.6rem; font-weight: 600;
+  padding: 0.2rem 0.5rem; border-radius: 6px;
+  background: oklch(0.72 0.22 150 / 12%);
+  color: oklch(0.72 0.22 150);
+  font-family: var(--font-mono);
+  border: 1px solid oklch(0.72 0.22 150 / 25%);
+  cursor: pointer; outline: none;
+  transition: all 0.15s ease;
+  max-width: 180px;
+}
+.sensei-model-select:hover {
+  background: oklch(0.72 0.22 150 / 20%);
+  border-color: oklch(0.72 0.22 150 / 40%);
+}
+.sensei-model-select:focus {
+  border-color: oklch(0.72 0.22 150 / 60%);
+  box-shadow: 0 0 0 2px oklch(0.72 0.22 150 / 15%);
+}
+.sensei-model-select:disabled {
+  opacity: 0.5; cursor: not-allowed;
+}
+.sensei-warmup-badge {
+  display: inline-flex; align-items: center; gap: 4px;
+  font-size: 0.55rem; font-weight: 500;
+  padding: 0.15rem 0.45rem; border-radius: 9999px;
+  background: oklch(0.78 0.15 80 / 12%);
+  color: oklch(0.78 0.15 80);
+  font-family: var(--font-mono);
+}
+.sensei-spinner {
+  animation: spin 1s linear infinite;
+}
+.sensei-close {
+  display: flex; align-items: center; justify-content: center;
+  width: 28px; height: 28px; border: none; border-radius: 6px;
+  background: var(--muted); color: var(--muted-foreground);
+  cursor: pointer; transition: all 0.15s ease;
+}
+.sensei-close:hover {
+  background: var(--destructive); color: white;
+}
+
+/* ── File Context Bar ───────────────────────────────────── */
+.sensei-context {
+  display: flex; align-items: center; gap: 0.5rem;
+  padding: 0.5rem 1rem; font-size: 0.72rem;
+  background: var(--muted); color: var(--muted-foreground);
+  border-bottom: 1px solid var(--border);
+}
+.sensei-context-file {
+  font-weight: 600; color: var(--foreground);
+  font-family: var(--font-mono);
+}
+.sensei-context-meta { font-size: 0.65rem; opacity: 0.7; }
+
+/* ── Messages ───────────────────────────────────────────── */
+.sensei-messages {
+  flex: 1; overflow-y: auto; padding: 1rem;
+  display: flex; flex-direction: column; gap: 0.75rem;
+}
+
+/* ── Welcome State ──────────────────────────────────────── */
+.sensei-welcome {
+  display: flex; flex-direction: column; align-items: center;
+  justify-content: center; gap: 0.75rem;
+  padding: 2rem 1.5rem; text-align: center;
+  animation: sensei-fade-in 0.4s ease-out;
+}
+.sensei-welcome-icon {
+  font-size: 2.5rem; line-height: 1;
+  animation: sensei-fade-in 0.6s ease-out;
+}
+.sensei-welcome h3 {
+  font-size: 1rem; font-weight: 700; margin: 0;
+}
+.sensei-welcome p {
+  font-size: 0.78rem; color: var(--muted-foreground);
+  line-height: 1.5; margin: 0;
+}
+
+/* ── Quick Actions ──────────────────────────────────────── */
+.sensei-quick-actions {
+  display: flex; flex-direction: column; gap: 0.4rem;
+  width: 100%; margin-top: 0.5rem;
+}
+.sensei-quick-btn {
+  display: flex; align-items: center; gap: 0.5rem;
+  padding: 0.6rem 0.85rem; border: 1px solid var(--border);
+  border-radius: 8px; background: var(--card); color: var(--foreground);
+  font-size: 0.75rem; font-weight: 500; cursor: pointer;
+  transition: all 0.15s ease; text-align: left;
+}
+.sensei-quick-btn:hover {
+  border-color: oklch(0.72 0.22 150 / 50%);
+  background: oklch(0.72 0.22 150 / 8%);
+  transform: translateX(4px);
+}
+
+/* ── Message Bubbles ────────────────────────────────────── */
+.sensei-msg {
+  display: flex; flex-direction: column; gap: 0.25rem;
+  animation: sensei-fade-in 0.3s ease-out;
+}
+.sensei-msg-user { align-items: flex-end; }
+.sensei-msg-user .sensei-msg-content {
+  background: linear-gradient(135deg, oklch(0.72 0.22 150), oklch(0.60 0.18 180));
+  color: white; border-radius: 12px 12px 2px 12px;
+  padding: 0.6rem 0.85rem; max-width: 85%;
+}
+.sensei-msg-user .sensei-msg-content p {
+  margin: 0; font-size: 0.8rem; line-height: 1.5;
+}
+.sensei-msg-assistant { align-items: flex-start; }
+.sensei-msg-assistant .sensei-msg-content {
+  background: var(--muted); border-radius: 12px 12px 12px 2px;
+  padding: 0.75rem 1rem; max-width: 95%;
+}
+.sensei-msg-system { align-items: center; }
+.sensei-msg-system .sensei-msg-content {
+  background: oklch(0.60 0.25 25 / 10%);
+  border: 1px solid oklch(0.60 0.25 25 / 25%);
+  border-radius: 8px; padding: 0.5rem 0.75rem;
+}
+.sensei-msg-error {
+  font-size: 0.75rem; color: oklch(0.60 0.25 25); margin: 0;
+}
+.sensei-msg-footer {
+  display: flex; align-items: center; gap: 0.5rem;
+}
+.sensei-msg-time {
+  font-size: 0.55rem; color: var(--muted-foreground); opacity: 0.6;
+}
+.sensei-msg-duration {
+  display: inline-flex; align-items: center; gap: 0.2rem;
+  font-size: 0.55rem; color: var(--muted-foreground); opacity: 0.7;
+  font-family: var(--font-mono);
+}
+
+/* ── Streaming Cursor ───────────────────────────────────── */
+.sensei-cursor {
+  display: inline-block; width: 2px; height: 1em;
+  background: oklch(0.72 0.22 150);
+  margin-left: 1px; vertical-align: text-bottom;
+  animation: sensei-blink 1s step-end infinite;
+}
+
+/* ── Oracle Badge ───────────────────────────────────────── */
+.sensei-oracle-badge {
+  display: inline-flex; align-items: center; gap: 0.35rem;
+  margin-top: 0.5rem; padding: 0.3rem 0.6rem;
+  border-radius: 6px; font-size: 0.65rem;
+  background: oklch(0.72 0.18 280 / 8%);
+  border: 1px solid oklch(0.72 0.18 280 / 20%);
+}
+.sensei-oracle-score {
+  font-weight: 700; font-family: var(--font-mono);
+}
+.sensei-score-good { color: oklch(0.72 0.22 150); }
+.sensei-score-mid { color: oklch(0.75 0.18 80); }
+.sensei-score-low { color: oklch(0.60 0.25 25); }
+.sensei-oracle-summary-text {
+  font-size: 0.6rem; color: var(--muted-foreground);
+  font-style: italic; max-width: 200px;
+  overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+}
+
+/* ── RAG Sources Chips ──────────────────────────────────── */
+.sensei-sources {
+  display: flex; flex-wrap: wrap; align-items: center; gap: 0.35rem;
+  margin-top: 0.5rem; padding-top: 0.5rem;
+  border-top: 1px solid var(--border);
+}
+.sensei-sources-label {
+  font-size: 0.6rem; color: var(--muted-foreground);
+  font-weight: 600;
+}
+.sensei-source-chip {
+  display: inline-flex; align-items: center; gap: 0.25rem;
+  font-size: 0.6rem; font-family: var(--font-mono);
+  padding: 0.15rem 0.45rem; border-radius: 9999px;
+  background: oklch(0.72 0.22 150 / 10%);
+  border: 1px solid oklch(0.72 0.22 150 / 20%);
+  color: oklch(0.72 0.22 150);
+  cursor: default; transition: all 0.15s;
+}
+.sensei-source-chip:hover {
+  background: oklch(0.72 0.22 150 / 18%);
+  border-color: oklch(0.72 0.22 150 / 40%);
+}
+.sensei-source-sim {
+  font-size: 0.5rem; opacity: 0.7;
+  padding: 0 0.15rem; border-radius: 2px;
+  background: oklch(0.72 0.22 150 / 12%);
+}
+
+/* ── Markdown in messages ───────────────────────────────── */
+.sensei-msg-md {
+  font-size: 0.78rem; line-height: 1.6; color: var(--foreground);
+}
+.sensei-msg-md strong { font-weight: 700; }
+.sensei-msg-md em { font-style: italic; opacity: 0.85; }
+.sensei-md-h2 {
+  font-size: 0.85rem; font-weight: 700; margin: 0.5rem 0 0.25rem;
+  color: oklch(0.72 0.22 150);
+}
+.sensei-md-h3 {
+  font-size: 0.78rem; font-weight: 600; margin: 0.4rem 0 0.2rem;
+}
+
+.sensei-code-block {
+  margin: 0.5rem 0; padding: 0.6rem 0.75rem; border-radius: 6px;
+  background: oklch(0.15 0.02 260 / 80%); overflow-x: auto;
+  font-family: var(--font-mono); font-size: 0.68rem;
+  line-height: 1.5; color: oklch(0.85 0.03 80);
+}
+.sensei-inline-code {
+  font-family: var(--font-mono); font-size: 0.72rem;
+  padding: 0.1rem 0.3rem; border-radius: 4px;
+  background: var(--muted); color: oklch(0.72 0.22 150);
+}
+
+/* ── Loading State ──────────────────────────────────────── */
+.sensei-msg-loading {
+  display: flex; align-items: center; gap: 0.5rem;
+  padding: 0.6rem 0.85rem; font-size: 0.75rem;
+  color: var(--muted-foreground); background: var(--muted);
+  border-radius: 12px 12px 12px 2px;
+}
+.sensei-spinner {
+  animation: sensei-spin 1s linear infinite;
+  color: oklch(0.72 0.22 150);
+}
+
+/* ── Input Bar ──────────────────────────────────────────── */
+.sensei-input-bar {
+  display: flex; align-items: center; gap: 0.5rem;
+  padding: 0.75rem 1rem; border-top: 1px solid var(--border);
+  background: var(--card);
+}
+.sensei-input {
+  flex: 1; padding: 0.55rem 0.75rem;
+  border: 1px solid var(--border); border-radius: 8px;
+  background: var(--background); color: var(--foreground);
+  font-size: 0.8rem; outline: none;
+  transition: border-color 0.15s ease;
+}
+.sensei-input:focus {
+  border-color: oklch(0.72 0.22 150);
+  box-shadow: 0 0 0 2px oklch(0.72 0.22 150 / 15%);
+}
+.sensei-input:disabled { opacity: 0.5; }
+.sensei-input::placeholder { color: var(--muted-foreground); opacity: 0.6; }
+
+.sensei-send {
+  display: flex; align-items: center; justify-content: center;
+  width: 36px; height: 36px; border: none; border-radius: 8px;
+  background: linear-gradient(135deg, oklch(0.72 0.22 150), oklch(0.60 0.18 180));
+  color: white; cursor: pointer; transition: all 0.15s ease; flex-shrink: 0;
+}
+.sensei-send:hover:not(:disabled) {
+  transform: scale(1.05);
+  box-shadow: 0 2px 12px oklch(0.72 0.22 150 / 40%);
+}
+.sensei-send:disabled { opacity: 0.4; cursor: not-allowed; }
+
+/* ── Stop Button (pulsing red) ──────────────────────────── */
+.sensei-stop {
+  display: flex; align-items: center; justify-content: center;
+  width: 36px; height: 36px; border: none; border-radius: 8px;
+  background: oklch(0.60 0.25 25); color: white;
+  cursor: pointer; transition: all 0.15s ease; flex-shrink: 0;
+  animation: sensei-pulse-stop 1.5s ease-in-out infinite;
+}
+.sensei-stop:hover {
+  background: oklch(0.55 0.28 25);
+  transform: scale(1.05);
+}
+
+/* ── Theme-specific ─────────────────────────────────────── */
+[data-theme="cyberpunk"] .sensei-panel {
+  border-left-color: oklch(0.72 0.25 310 / 40%);
+  box-shadow: -8px 0 32px oklch(0.72 0.25 310 / 15%),
+              inset 1px 0 0 oklch(0.72 0.25 310 / 10%);
+}
+[data-theme="glass"] .sensei-panel {
+  backdrop-filter: blur(20px) saturate(180%);
+  -webkit-backdrop-filter: blur(20px) saturate(180%);
+  background: oklch(0.12 0.02 260 / 85%);
+}
+[data-theme="scroll"] .sensei-panel {
+  background: oklch(0.97 0.01 80);
+}
+[data-theme="scroll"] .sensei-msg-user .sensei-msg-content {
+  background: linear-gradient(135deg, oklch(0.45 0.08 150), oklch(0.50 0.10 140));
+}
+[data-theme="scroll"] .sensei-code-block {
+  background: oklch(0.93 0.02 80);
+  color: oklch(0.25 0.02 60);
+}

@@ -35,6 +35,9 @@ async-trait = { workspace = true }
 tokio-stream = { workspace = true }
 futures-util = { workspace = true }
 
+# — HTTP Client (Sensei models/warmup — Phase 16) —
+reqwest = { workspace = true }
+
 [build-dependencies]
 tonic-build = { workspace = true }
 tonic-prost-build = { workspace = true }

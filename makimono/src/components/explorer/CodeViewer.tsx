@@ -137,7 +137,7 @@ export default function CodeViewer({
             onClick={onTensaiClick}
           >
             <Sparkles size={14} />
-            <span>Demander à Tensai</span>
+            <span>Demander à Sensai</span>
           </button>
         </div>
       </div>

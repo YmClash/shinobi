@@ -4,8 +4,10 @@
 //! Les use cases sont injectés via `SharedState` (Axum State extractor).
 
 use axum::extract::{Path, Query, State};
+use axum::response::sse::{Event, KeepAlive, Sse};
 use axum::{Json, Router, routing::get, routing::post};
 use chrono::{DateTime, Utc};
+use futures_util::StreamExt;
 use serde::{Deserialize, Serialize};
 use tracing::{info, warn};
 use uuid::Uuid;
@@ -14,6 +16,7 @@ use application::use_cases::create_operation::CreateOperationCommand;
 use application::use_cases::create_repository::CreateRepositoryCommand;
 use application::use_cases::list_operations::ListFilter;
 use application::use_cases::search_chunks::ChunkSearchFilter;
+use application::use_cases::sensei_chat::{ChatMessage, SenseiChatRequest};
 use domain::entities::operation::Operation;
 use domain::entities::repository::Visibility;
 use domain::errors::DomainError;
@@ -284,6 +287,10 @@ pub fn create_router(state: SharedState) -> Router {
             "/api/v1/repos/{owner}/{repo}/refs",
             get(explorer_refs_handler),
         )
+        // ── Phase 15 — Sensei Chat IA (SSE streaming) ───────────────
+        .route("/api/v1/sensei/chat", post(sensei_chat_handler))
+        .route("/api/v1/sensei/models", get(sensei_models_handler))
+        .route("/api/v1/sensei/warmup", post(sensei_warmup_handler))
         // ── Métriques Prometheus ────────────────────
         .route(
             "/metrics",
@@ -914,4 +921,240 @@ async fn explorer_refs_handler(
         "tags": tags,
         "total": refs.len(),
     })))
+}
+
+// ═══════════════════════════════════════════════════════════════════
+//  Phase 15 — Sensei (先生) : Chat IA Streaming (SSE)
+// ═══════════════════════════════════════════════════════════════════
+
+/// Corps de la requête `POST /api/v1/sensei/chat`.
+#[derive(Debug, Deserialize)]
+struct SenseiChatBody {
+    /// Question de l'utilisateur.
+    query: String,
+    /// Chemin du fichier ouvert dans l'explorateur.
+    file_path: String,
+    /// Contenu du fichier (tronqué à ~3000 chars côté frontend).
+    file_content: Option<String>,
+    /// Langage du fichier (ex: "rust", "typescript").
+    language: Option<String>,
+    /// Owner du dépôt (ex: "system").
+    owner: String,
+    /// Nom du dépôt (ex: "hello-world").
+    repo: String,
+    /// Historique de la conversation (multi-tour).
+    #[serde(default)]
+    history: Vec<SenseiHistoryMessage>,
+}
+
+/// Message dans l'historique de conversation (sérialisation JSON).
+#[derive(Debug, Deserialize)]
+struct SenseiHistoryMessage {
+    role: String,
+    content: String,
+}
+
+/// Handler SSE pour l'agent Sensei.
+///
+/// `POST /api/v1/sensei/chat` → `text/event-stream`
+///
+/// ## Événements SSE émis
+///
+/// 1. `data: {"type":"context","sources":[...],"oracle_score":85,"oracle_summary":"..."}`
+/// 2. `data: {"type":"token","content":"Cette"}`
+/// 3. `data: {"type":"token","content":" fonction"}`
+/// 4. ... (un événement par token)
+/// 5. `data: {"type":"done","model":"qwen2.5-coder:7b","duration_ms":3200}`
+///
+/// ## Annulation
+/// Le client peut fermer la connexion à tout moment (bouton Stop).
+/// Le stream se termine proprement grâce au `mpsc::Sender::is_closed()`.
+async fn sensei_chat_handler(
+    State(state): State<SharedState>,
+    Json(body): Json<SenseiChatBody>,
+) -> Result<Sse<impl futures_util::Stream<Item = Result<Event, std::convert::Infallible>>>, AppError>
+{
+    info!(
+        query = %body.query,
+        file_path = %body.file_path,
+        owner = %body.owner,
+        repo = %body.repo,
+        "Phase 15: sensei_chat SSE"
+    );
+
+    // Vérifier que Sensei est disponible.
+    let sensei = state.sensei_chat.as_ref().ok_or_else(|| {
+        AppError::from(DomainError::Internal(
+            "Sensei Agent non disponible — Ollama #2 est désactivé ou inaccessible".to_string(),
+        ))
+    })?;
+
+    // Convertir les messages de l'historique.
+    let history: Vec<ChatMessage> = body
+        .history
+        .into_iter()
+        .map(|m| ChatMessage {
+            role: m.role,
+            content: m.content,
+        })
+        .collect();
+
+    // Construire la requête Sensei.
+    let request = SenseiChatRequest {
+        query: body.query,
+        file_path: body.file_path,
+        file_content: body.file_content,
+        language: body.language,
+        owner: body.owner,
+        repo: body.repo,
+        history,
+    };
+
+    // Exécuter le pipeline Sensei (RAG + Oracle + LLM streaming).
+    let (context, rx) = sensei.execute_stream(request).await?;
+
+    // Convertir le Receiver en Stream SSE.
+    let context_event = Event::default().data(
+        serde_json::to_string(&serde_json::json!({
+            "type": "context",
+            "sources": context.sources,
+            "oracle_score": context.oracle_score,
+            "oracle_summary": context.oracle_summary,
+        }))
+        .unwrap_or_default(),
+    );
+
+    // ── Primer SSE : forcer l'envoi immédiat des headers ──────────
+    // Ce premier événement "status" oblige Axum à flusher les headers
+    // HTTP 200 + Content-Type: text/event-stream instantanément.
+    // Le proxy Next.js voit la connexion vivante et attend patiemment
+    // que le modèle LLM se charge (~30s cold start).
+    let primer_event = Event::default().data(
+        serde_json::to_string(&serde_json::json!({
+            "type": "status",
+            "message": "loading_model"
+        }))
+        .unwrap_or_default(),
+    );
+
+    // Stream : primer → context → tokens LLM.
+    let token_stream =
+        tokio_stream::wrappers::ReceiverStream::new(rx).map(|chunk| -> Result<Event, std::convert::Infallible> {
+            let data = serde_json::to_string(&chunk).unwrap_or_default();
+            Ok(Event::default().data(data))
+        });
+
+    // Prépendre le primer et le context au stream de tokens.
+    let primer_stream = futures_util::stream::once(async move {
+        Ok::<Event, std::convert::Infallible>(primer_event)
+    });
+    let context_stream = futures_util::stream::once(async move {
+        Ok::<Event, std::convert::Infallible>(context_event)
+    });
+
+    let full_stream = primer_stream.chain(context_stream).chain(token_stream);
+
+    Ok(Sse::new(full_stream).keep_alive(KeepAlive::default()))
+}
+
+// ── Sensei Models & Warmup ───────────────────────────────────────────
+
+/// Réponse de GET /api/v1/sensei/models.
+#[derive(Debug, Serialize)]
+struct SenseiModelsResponse {
+    models: Vec<SenseiModelInfo>,
+    active: String,
+}
+
+#[derive(Debug, Serialize, Deserialize)]
+struct SenseiModelInfo {
+    name: String,
+    size: u64,
+}
+
+/// GET /api/v1/sensei/models — Liste les modèles installés sur Ollama #2.
+async fn sensei_models_handler(
+    State(state): State<SharedState>,
+) -> Result<Json<SenseiModelsResponse>, AppError> {
+    let ollama_url = state.sensei_ollama_url.as_ref().ok_or_else(|| {
+        AppError::from(DomainError::Internal("Sensei non activé".to_string()))
+    })?;
+
+    let active = state.sensei_chat.as_ref()
+        .map(|s| s.model_name().to_string())
+        .unwrap_or_default();
+
+    // Appeler l'API Ollama /api/tags pour lister les modèles.
+    let resp = reqwest::get(format!("{ollama_url}/api/tags"))
+        .await
+        .map_err(|e| AppError::from(DomainError::Internal(format!("Ollama tags: {e}"))))?;
+
+    #[derive(Deserialize)]
+    struct OllamaTags { models: Vec<OllamaModel> }
+    #[derive(Deserialize)]
+    struct OllamaModel { name: String, size: u64 }
+
+    let tags: OllamaTags = resp.json().await
+        .map_err(|e| AppError::from(DomainError::Internal(format!("Ollama tags parse: {e}"))))?;
+
+    let models = tags.models.into_iter().map(|m| SenseiModelInfo {
+        name: m.name,
+        size: m.size,
+    }).collect();
+
+    Ok(Json(SenseiModelsResponse { models, active }))
+}
+
+/// Corps de POST /api/v1/sensei/warmup.
+#[derive(Debug, Deserialize)]
+struct SenseiWarmupBody {
+    model: String,
+}
+
+/// POST /api/v1/sensei/warmup — Pré-charge un modèle dans la RAM d'Ollama.
+///
+/// Le frontend appelle cette route quand l'utilisateur sélectionne un modèle
+/// dans le dropdown. Cela force Ollama à charger le modèle en arrière-plan,
+/// éliminant le cold-start (~30s) lors du premier message chat.
+async fn sensei_warmup_handler(
+    State(state): State<SharedState>,
+    Json(body): Json<SenseiWarmupBody>,
+) -> Result<Json<serde_json::Value>, AppError> {
+    let ollama_url = state.sensei_ollama_url.as_ref().ok_or_else(|| {
+        AppError::from(DomainError::Internal("Sensei non activé".to_string()))
+    })?;
+
+    info!(model = %body.model, "🥷 Sensei — Warmup modèle demandé");
+
+    let client = reqwest::Client::builder()
+        .timeout(std::time::Duration::from_secs(120))
+        .build()
+        .map_err(|e| AppError::from(DomainError::Internal(format!("HTTP client: {e}"))))?;
+
+    // Envoyer un prompt vide avec keep_alive pour forcer le chargement.
+    let resp = client
+        .post(format!("{ollama_url}/api/generate"))
+        .json(&serde_json::json!({
+            "model": body.model,
+            "prompt": "",
+            "keep_alive": "24h"
+        }))
+        .send()
+        .await
+        .map_err(|e| AppError::from(DomainError::Internal(format!("Warmup failed: {e}"))))?;
+
+    if resp.status().is_success() {
+        info!(model = %body.model, "🥷 Sensei — Modèle chargé en RAM ✅");
+        Ok(Json(serde_json::json!({
+            "status": "ok",
+            "model": body.model,
+            "message": "Modèle chargé en RAM"
+        })))
+    } else {
+        let status = resp.status();
+        let text = resp.text().await.unwrap_or_default();
+        Err(AppError::from(DomainError::Internal(
+            format!("Warmup error (HTTP {status}): {text}")
+        )))
+    }
 }

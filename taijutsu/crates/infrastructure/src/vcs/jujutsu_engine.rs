@@ -846,41 +846,74 @@ impl VcsEngine for JujutsuEngine {
                 let jj_dir = workspace_path.join(".jj");
 
                 let wh = if jj_dir.exists() {
-                    // ── Workspace existant → rouvrir le repo ────────────────
-                    // jj-lib refuse init_simple si .jj/ existe déjà.
-                    // On charge le repo directement via RepoLoader.
-                    // Note : `WorkspaceHandle.workspace` est `#[allow(dead_code)]`
-                    // — on ne l'utilise pas pour les opérations VCS.
-                    info!(
-                        path = %workspace_path.display(),
-                        repo_id = %rid,
-                        "Workspace jj existant détecté — réouverture (skip init)"
-                    );
+                    // ── Vérifier si le store est legacy (SimpleBackend) ──────
+                    // Les repos créés avant Phase 11 utilisent SimpleBackend
+                    // (pas de bare Git repo). On détecte et migre vers GitBackend.
+                    let store_type_path = jj_dir.join("repo").join("store").join("type");
+                    let is_simple_backend = std::fs::read_to_string(&store_type_path)
+                        .map(|t| t.trim() == "Simple")
+                        .unwrap_or(false);
 
-                    // RepoLoader::init_from_file_system lit les fichiers `type`
-                    // dans .jj/repo/store, .jj/repo/op_store, etc. et charge
-                    // les bons backends via StoreFactories::default().
+                    if is_simple_backend {
+                        // ── Migration SimpleBackend → GitBackend ─────────────
+                        // On supprime l'ancien .jj/ et on réinitialise avec
+                        // init_internal_git qui crée le bare Git repo.
+                        info!(
+                            path = %workspace_path.display(),
+                            repo_id = %rid,
+                            "Migration SimpleBackend → GitBackend : suppression ancien .jj/"
+                        );
+                        if let Err(e) = std::fs::remove_dir_all(&jj_dir) {
+                            return Err(DomainError::VcsError(format!(
+                                "Cannot remove legacy .jj dir for migration: {e}"
+                            )));
+                        }
 
-                    let store_factories = jj_lib::repo::StoreFactories::default();
-                    let repo_loader = jj_lib::repo::RepoLoader::init_from_file_system(
-                        &settings,
-                        &jj_dir.join("repo"),
-                        &store_factories,
-                    )
-                    .map_err(|e| {
-                        DomainError::VcsError(format!(
-                            "RepoLoader init_from_file_system failed: {e}"
-                        ))
-                    })?;
+                        let (workspace, repo) = pollster::block_on(
+                            jj_lib::workspace::Workspace::init_internal_git(&settings, &workspace_path),
+                        )
+                        .map_err(|e| DomainError::VcsError(format!("Migration init_internal_git failed: {e}")))?;
 
-                    let repo = pollster::block_on(repo_loader.load_at_head()).map_err(|e| {
-                        DomainError::VcsError(format!("RepoLoader load_at_head failed: {e}"))
-                    })?;
+                        info!(
+                            path = %workspace_path.display(),
+                            repo_id = %rid,
+                            "Migration SimpleBackend → GitBackend réussie"
+                        );
 
-                    WorkspaceHandle {
-                        workspace: None,
-                        repo,
-                        settings,
+                        WorkspaceHandle {
+                            workspace: Some(workspace),
+                            repo,
+                            settings,
+                        }
+                    } else {
+                        // ── Workspace existant (GitBackend) → rouvrir ────────
+                        info!(
+                            path = %workspace_path.display(),
+                            repo_id = %rid,
+                            "Workspace jj existant détecté — réouverture (skip init)"
+                        );
+
+                        let store_factories = jj_lib::repo::StoreFactories::default();
+                        let repo_loader = jj_lib::repo::RepoLoader::init_from_file_system(
+                            &settings,
+                            &jj_dir.join("repo"),
+                            &store_factories,
+                        )
+                        .map_err(|e| {
+                            DomainError::VcsError(format!(
+                                "RepoLoader init_from_file_system failed: {e}"
+                            ))
+                        })?;
+
+                        let repo = pollster::block_on(repo_loader.load_at_head()).map_err(|e| {
+                            DomainError::VcsError(format!("RepoLoader load_at_head failed: {e}"))
+                        })?;
+
+                        WorkspaceHandle {
+                            workspace: None,
+                            repo,
+                            settings,
+                        }
                     }
                 } else {
                     let (workspace, repo) = pollster::block_on(
@@ -891,7 +924,7 @@ impl VcsEngine for JujutsuEngine {
                     info!(
                         path = %workspace_path.display(),
                         repo_id = %rid,
-                        "Workspace jj existant détecté — réouverture (skip init)"
+                        "Nouveau workspace jj+GitBackend initialise"
                     );
 
                     WorkspaceHandle {

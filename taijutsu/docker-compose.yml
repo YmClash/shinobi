@@ -95,13 +95,15 @@ services:
 
   # ── Sensei: Ollama #2 (LLM conversationnel — Phase 15) ────
   # Instance séparée de l'Oracle pour garantir une latence UI < 500ms.
-  # Modèle recommandé : qwen2.5-coder:7b (Q4_K_M, ~5GB VRAM)
-  # Fallback GPU faible : qwen2.5-coder:3b (Q4_K_M, ~2.5GB VRAM)
+  # Modèle : smollm2:1.7b (~1.8 GB, optimal dev local)
+  # KEEP_ALIVE=24h : garde le modèle en RAM pour éviter le cold start (~30s)
   ollama-sensei:
     image: ollama/ollama:latest
     container_name: shinobi-ollama-sensei
     ports:
       - "11436:11434"
+    environment:
+      - OLLAMA_KEEP_ALIVE=24h
     volumes:
       - ollama_sensei_data:/root/.ollama
     healthcheck:

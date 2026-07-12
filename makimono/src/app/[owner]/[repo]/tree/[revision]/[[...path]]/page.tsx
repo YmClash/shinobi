@@ -349,6 +349,8 @@ git push -u origin main`}</pre>
               language={data.language}
               isText={data.is_text}
               size={data.size}
+              owner={owner}
+              repo={repo}
             />
           ) : (
             <FileBrowser
