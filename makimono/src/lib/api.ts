@@ -76,6 +76,8 @@ export interface SemanticChunk extends Chunk {
 export interface OperationsResponse {
   operations: Operation[];
   count: number;
+  /** Nombre total absolu d'opérations dans le dépôt (Phase 17). */
+  total_count?: number;
 }
 
 export interface ChunksResponse {
@@ -95,6 +97,42 @@ export interface DiffResponse {
   content_id: string;
   changed_files: string[];
   count: number;
+}
+
+// ── Phase 17 — Diff Colorisé (line-by-line) ───────────────────
+
+export type DiffLineKind = "add" | "remove" | "context";
+export type DiffStatusKind = "added" | "modified" | "deleted";
+
+export interface DiffLine {
+  kind: DiffLineKind;
+  content: string;
+  old_line: number | null;
+  new_line: number | null;
+}
+
+export interface DiffHunk {
+  header: string;
+  lines: DiffLine[];
+}
+
+export interface FileDiff {
+  path: string;
+  status: DiffStatusKind;
+  hunks: DiffHunk[];
+  additions: number;
+  deletions: number;
+  too_large: boolean;
+}
+
+export interface DiffContentResponse {
+  operation_id: string;
+  files: FileDiff[];
+  stats: {
+    files_changed: number;
+    additions: number;
+    deletions: number;
+  };
 }
 
 export interface IpfsFile {
@@ -257,6 +295,14 @@ export async function getOperationDiff(
   id: string,
 ): Promise<DiffResponse> {
   return apiFetch<DiffResponse>(`${repoPrefix}/operations/${id}/diff`);
+}
+
+/** Récupère le diff ligne par ligne (Phase 17 — Diff Colorisé). */
+export async function getDiffContent(
+  repoPrefix: string,
+  id: string,
+): Promise<DiffContentResponse> {
+  return apiFetch<DiffContentResponse>(`${repoPrefix}/operations/${id}/diff-content`);
 }
 
 export async function getIpfsContent(

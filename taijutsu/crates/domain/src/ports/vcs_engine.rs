@@ -135,4 +135,91 @@ pub trait VcsEngine: Send + Sync {
     /// Combine les bookmarks locaux jj (issus de `import_refs` post-push)
     /// et les refs Git du bare repo (loose refs + packed-refs).
     async fn list_refs(&self, repo_id: &Uuid) -> Result<Vec<RefInfo>, DomainError>;
+
+    // ── Phase 17 — Diff Colorisé ────────────────────────────────────
+
+    /// Calcule le diff ligne par ligne entre un commit et son parent.
+    ///
+    /// Pour chaque fichier modifié, retourne les hunks avec les lignes
+    /// `Add`, `Remove` et `Context` — prêts pour l'affichage GitHub-style.
+    ///
+    /// Utilise la crate `similar` pour le calcul du diff textuel.
+    ///
+    /// ## Comportement
+    /// - Commit avec parent → diff vs parent
+    /// - Commit sans parent (root) → diff vs empty tree (tous les fichiers = Added)
+    /// - Fichiers binaires → status `Binary`, pas de hunks
+    /// - Fichiers >1000 lignes de diff → flag `too_large: true`
+    async fn diff_content(
+        &self,
+        repo_id: &Uuid,
+        content_id: &ContentId,
+    ) -> Result<Vec<FileDiff>, DomainError>;
 }
+
+// ── Phase 17 — Types de Diff Colorisé ────────────────────────────────
+
+/// Status d'un fichier dans le diff.
+#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize)]
+#[serde(rename_all = "lowercase")]
+pub enum DiffStatus {
+    /// Fichier ajouté (n'existait pas dans le parent).
+    Added,
+    /// Fichier modifié (contenu différent du parent).
+    Modified,
+    /// Fichier supprimé (présent dans le parent, absent dans le commit).
+    Deleted,
+}
+
+/// Type d'une ligne dans un hunk de diff.
+#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize)]
+#[serde(rename_all = "lowercase")]
+pub enum DiffLineKind {
+    /// Ligne ajoutée (+).
+    Add,
+    /// Ligne supprimée (-).
+    Remove,
+    /// Ligne de contexte (inchangée).
+    Context,
+}
+
+/// Une ligne individuelle dans un hunk de diff.
+#[derive(Debug, Clone, serde::Serialize)]
+pub struct DiffLine {
+    /// Type de la ligne (add, remove, context).
+    pub kind: DiffLineKind,
+    /// Contenu textuel de la ligne.
+    pub content: String,
+    /// Numéro de ligne dans le fichier original (avant). `None` pour les lignes ajoutées.
+    pub old_line: Option<u32>,
+    /// Numéro de ligne dans le fichier modifié (après). `None` pour les lignes supprimées.
+    pub new_line: Option<u32>,
+}
+
+/// Un bloc contigu de changements dans un fichier.
+#[derive(Debug, Clone, serde::Serialize)]
+pub struct DiffHunk {
+    /// En-tête du hunk (ex: `"@@ -1,5 +1,7 @@"`).
+    pub header: String,
+    /// Lignes du hunk (add, remove, context).
+    pub lines: Vec<DiffLine>,
+}
+
+/// Diff complet d'un fichier individuel.
+#[derive(Debug, Clone, serde::Serialize)]
+pub struct FileDiff {
+    /// Chemin du fichier (relatif à la racine du dépôt).
+    pub path: String,
+    /// Status du fichier dans le diff (added, modified, deleted).
+    pub status: DiffStatus,
+    /// Hunks de diff (blocs de changements).
+    /// Vide si `too_large` est `true` ou si le fichier est binaire.
+    pub hunks: Vec<DiffHunk>,
+    /// Nombre de lignes ajoutées.
+    pub additions: u32,
+    /// Nombre de lignes supprimées.
+    pub deletions: u32,
+    /// `true` si le diff dépasse 1000 lignes — protection du DOM navigateur.
+    pub too_large: bool,
+}
+

@@ -55,6 +55,9 @@ pgvector = { workspace = true }
 # — Streaming LLM (Phase 15 — Sensei) —
 tokio-stream = { workspace = true }
 
+# — Text Diff (Phase 17 — Commits & Diff Colorisé) —
+similar = { workspace = true }
+
 [dev-dependencies]
 tempfile = { workspace = true }
 tokio = { workspace = true }

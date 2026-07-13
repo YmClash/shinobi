@@ -3335,3 +3335,924 @@ html * {
   background: oklch(0.93 0.02 80);
   color: oklch(0.25 0.02 60);
 }
+
+/* ═══════════════════════════════════════════════════════════════
+   PHASE 17 — Commits Page & Diff Colorisé
+   GitHub-inspired commit timeline and unified diff viewer
+   ═══════════════════════════════════════════════════════════════ */
+
+/* ── Spinner Animation ─────────────────────────────────────── */
+@keyframes commits-spin {
+  to { transform: rotate(360deg); }
+}
+
+.commits-spinner {
+  width: 20px;
+  height: 20px;
+  border: 2px solid var(--muted);
+  border-top-color: var(--primary);
+  border-radius: 50%;
+  animation: commits-spin 0.8s linear infinite;
+}
+
+/* ── Commits Page Layout ───────────────────────────────────── */
+.commits-page {
+  max-width: 960px;
+  margin: 0 auto;
+  padding: 1.5rem 1rem;
+}
+
+/* ── Header ────────────────────────────────────────────────── */
+.commits-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  margin-bottom: 1.5rem;
+  padding-bottom: 1rem;
+  border-bottom: 1px solid var(--border);
+}
+
+.commits-header-left {
+  display: flex;
+  align-items: center;
+  gap: 0.75rem;
+}
+
+.commits-back-btn {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.35rem;
+  font-size: 0.8rem;
+  font-weight: 500;
+  color: var(--primary);
+  background: none;
+  border: none;
+  cursor: pointer;
+  padding: 0.35rem 0.6rem;
+  border-radius: 6px;
+  transition: background 0.2s;
+}
+.commits-back-btn:hover {
+  background: var(--muted);
+}
+
+.commits-title {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+  font-size: 1.15rem;
+  font-weight: 700;
+  color: var(--foreground);
+  margin: 0;
+}
+
+.commits-icon {
+  color: var(--muted-foreground);
+}
+
+.commits-count-badge {
+  font-size: 0.72rem;
+  font-weight: 600;
+  color: var(--muted-foreground);
+  background: var(--muted);
+  padding: 0.25rem 0.65rem;
+  border-radius: 9999px;
+}
+
+/* ── Loading & Error ───────────────────────────────────────── */
+.commits-loading {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 0.75rem;
+  padding: 3rem 0;
+  color: var(--muted-foreground);
+  font-size: 0.85rem;
+}
+
+.commits-error {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+  padding: 1rem;
+  border-radius: 8px;
+  background: oklch(0.60 0.25 25 / 10%);
+  color: oklch(0.60 0.25 25);
+  font-size: 0.85rem;
+}
+
+.commits-empty {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 0.75rem;
+  padding: 4rem 0;
+  color: var(--muted-foreground);
+  font-size: 0.9rem;
+}
+
+/* ── Timeline Groups ───────────────────────────────────────── */
+.commits-timeline {
+  display: flex;
+  flex-direction: column;
+  gap: 1.5rem;
+}
+
+.commits-group {
+  display: flex;
+  flex-direction: column;
+  gap: 0;
+}
+
+.commits-date-header {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+  font-size: 0.78rem;
+  font-weight: 600;
+  color: var(--foreground);
+  padding: 0.5rem 0;
+  margin-bottom: 0.25rem;
+}
+.commits-date-header svg {
+  color: var(--muted-foreground);
+}
+
+/* ── Commit Rows ───────────────────────────────────────────── */
+.commits-list {
+  display: flex;
+  flex-direction: column;
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  overflow: hidden;
+}
+
+.commit-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 0.75rem 1rem;
+  background: var(--card);
+  border-bottom: 1px solid var(--border);
+  cursor: pointer;
+  transition: background 0.15s;
+  gap: 1rem;
+}
+.commit-row:last-child {
+  border-bottom: none;
+}
+.commit-row:hover {
+  background: var(--muted);
+}
+
+.commit-row-left {
+  display: flex;
+  align-items: center;
+  gap: 0.75rem;
+  min-width: 0;
+  flex: 1;
+}
+
+.commit-avatar {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 32px;
+  height: 32px;
+  border-radius: 50%;
+  background: var(--muted);
+  color: var(--muted-foreground);
+  flex-shrink: 0;
+}
+
+.commit-info {
+  display: flex;
+  flex-direction: column;
+  gap: 0.2rem;
+  min-width: 0;
+}
+
+.commit-message {
+  font-size: 0.85rem;
+  font-weight: 600;
+  color: var(--foreground);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  max-width: 500px;
+}
+.commit-row:hover .commit-message {
+  color: var(--primary);
+}
+
+.commit-meta {
+  display: flex;
+  align-items: center;
+  gap: 0.35rem;
+  font-size: 0.7rem;
+  color: var(--muted-foreground);
+}
+
+.commit-author {
+  font-weight: 500;
+  font-family: var(--font-mono);
+  font-size: 0.65rem;
+}
+
+.commit-meta-sep {
+  opacity: 0.5;
+}
+
+.commit-date, .commit-parents {
+  color: var(--muted-foreground);
+}
+
+.commit-row-right {
+  display: flex;
+  align-items: center;
+  gap: 0.35rem;
+  flex-shrink: 0;
+}
+
+.commit-sha {
+  font-family: var(--font-mono);
+  font-size: 0.72rem;
+  font-weight: 500;
+  color: var(--primary);
+  background: var(--muted);
+  padding: 0.2rem 0.5rem;
+  border-radius: 4px;
+  letter-spacing: -0.01em;
+}
+
+.commit-copy-btn {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  background: none;
+  border: none;
+  color: var(--muted-foreground);
+  cursor: pointer;
+  padding: 0.25rem;
+  border-radius: 4px;
+  transition: color 0.15s, background 0.15s;
+}
+.commit-copy-btn:hover {
+  color: var(--foreground);
+  background: var(--muted);
+}
+
+/* ── Load More Button ──────────────────────────────────────── */
+.commits-load-more {
+  display: block;
+  width: 100%;
+  padding: 0.75rem;
+  margin-top: 0.5rem;
+  font-size: 0.82rem;
+  font-weight: 500;
+  color: var(--primary);
+  background: var(--card);
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  cursor: pointer;
+  transition: background 0.15s, border-color 0.15s;
+  text-align: center;
+}
+.commits-load-more:hover {
+  background: var(--muted);
+  border-color: var(--primary);
+}
+.commits-load-more:disabled {
+  opacity: 0.5;
+  cursor: not-allowed;
+}
+
+/* ═══════════════════════════════════════════════════════════════
+   COMMIT DETAIL — Diff Colorisé View
+   ═══════════════════════════════════════════════════════════════ */
+
+.commit-detail-page {
+  max-width: 1100px;
+  margin: 0 auto;
+  padding: 1.5rem 1rem;
+}
+
+/* ── Header ────────────────────────────────────────────────── */
+.commit-detail-header {
+  margin-bottom: 1rem;
+}
+
+.commit-detail-info {
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  background: var(--card);
+  padding: 1rem 1.25rem;
+  margin-bottom: 1rem;
+}
+
+.commit-detail-message {
+  font-size: 1.1rem;
+  font-weight: 700;
+  color: var(--foreground);
+  margin-bottom: 0.75rem;
+  line-height: 1.4;
+}
+
+.commit-detail-meta {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  flex-wrap: wrap;
+  gap: 0.75rem;
+}
+
+.commit-detail-meta-left {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+  font-size: 0.78rem;
+  color: var(--muted-foreground);
+}
+
+.commit-detail-meta-right {
+  display: flex;
+  align-items: center;
+  gap: 0.75rem;
+}
+
+.commit-sha-group {
+  display: flex;
+  align-items: center;
+  gap: 0.35rem;
+}
+
+.commit-sha-label {
+  font-size: 0.65rem;
+  font-weight: 500;
+  color: var(--muted-foreground);
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+}
+
+.commit-sha-full {
+  font-family: var(--font-mono);
+  font-size: 0.65rem;
+  font-weight: 500;
+  color: var(--foreground);
+  background: var(--muted);
+  padding: 0.2rem 0.5rem;
+  border-radius: 4px;
+  max-width: 200px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.commit-parent-sha {
+  display: flex;
+  align-items: center;
+  gap: 0.35rem;
+}
+
+/* ── Diff Stats Bar ────────────────────────────────────────── */
+.diff-stats-bar {
+  display: flex;
+  align-items: center;
+  padding: 0.65rem 1rem;
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  background: var(--card);
+  margin-bottom: 1rem;
+  font-size: 0.82rem;
+  color: var(--muted-foreground);
+}
+
+.diff-stats-info strong {
+  color: var(--foreground);
+}
+
+.diff-stat-add {
+  color: oklch(0.72 0.22 150);
+  font-weight: 600;
+}
+
+.diff-stat-del {
+  color: oklch(0.60 0.25 25);
+  font-weight: 600;
+}
+
+/* ── File Tree (quick nav) ─────────────────────────────────── */
+.diff-file-tree {
+  display: flex;
+  flex-direction: column;
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  background: var(--card);
+  margin-bottom: 1rem;
+  overflow: hidden;
+}
+
+.diff-file-tree-item {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+  padding: 0.45rem 0.75rem;
+  font-size: 0.78rem;
+  color: var(--foreground);
+  text-decoration: none;
+  border-bottom: 1px solid var(--border);
+  transition: background 0.15s;
+}
+.diff-file-tree-item:last-child {
+  border-bottom: none;
+}
+.diff-file-tree-item:hover {
+  background: var(--muted);
+}
+
+.diff-file-status {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 18px;
+  height: 18px;
+  font-size: 0.6rem;
+  font-weight: 700;
+  font-family: var(--font-mono);
+  border-radius: 3px;
+  flex-shrink: 0;
+}
+
+.diff-file-status-added {
+  background: oklch(0.72 0.22 150 / 15%);
+  color: oklch(0.72 0.22 150);
+}
+
+.diff-file-status-modified {
+  background: oklch(0.75 0.18 80 / 15%);
+  color: oklch(0.75 0.18 80);
+}
+
+.diff-file-status-deleted {
+  background: oklch(0.60 0.25 25 / 15%);
+  color: oklch(0.60 0.25 25);
+}
+
+.diff-file-tree-name {
+  font-family: var(--font-mono);
+  font-size: 0.75rem;
+  flex: 1;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.diff-file-tree-stats {
+  display: flex;
+  gap: 0.5rem;
+  font-size: 0.7rem;
+  font-family: var(--font-mono);
+  flex-shrink: 0;
+}
+
+/* ── File Diff Panel ───────────────────────────────────────── */
+.diff-files {
+  display: flex;
+  flex-direction: column;
+  gap: 1rem;
+}
+
+.diff-file-panel {
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  overflow: hidden;
+}
+
+.diff-file-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 0.5rem 0.75rem;
+  background: var(--muted);
+  border-bottom: 1px solid var(--border);
+}
+
+.diff-file-header-left {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+}
+
+.diff-file-name {
+  font-family: var(--font-mono);
+  font-size: 0.78rem;
+  font-weight: 600;
+  color: var(--foreground);
+}
+
+.diff-file-header-right {
+  display: flex;
+  gap: 0.5rem;
+  font-size: 0.72rem;
+  font-family: var(--font-mono);
+}
+
+/* ── Too Large Warning ─────────────────────────────────────── */
+.diff-too-large {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 0.5rem;
+  padding: 2rem;
+  font-size: 0.85rem;
+  color: var(--muted-foreground);
+  background: var(--card);
+  font-style: italic;
+}
+
+/* ── Diff Content (hunks & lines) ──────────────────────────── */
+.diff-file-content {
+  font-family: var(--font-mono);
+  font-size: 0.72rem;
+  line-height: 1.45;
+  overflow-x: auto;
+}
+
+.diff-hunk {
+  border-bottom: 1px solid var(--border);
+}
+.diff-hunk:last-child {
+  border-bottom: none;
+}
+
+.diff-hunk-header {
+  padding: 0.35rem 0.75rem;
+  background: oklch(0.55 0.15 220 / 8%);
+  color: oklch(0.55 0.15 220);
+  font-size: 0.68rem;
+  font-weight: 500;
+  border-bottom: 1px solid var(--border);
+  user-select: none;
+}
+
+/* ── Diff Lines ────────────────────────────────────────────── */
+.diff-line {
+  display: flex;
+  white-space: pre;
+  min-height: 1.35em;
+}
+
+.diff-line-num {
+  display: inline-block;
+  width: 48px;
+  min-width: 48px;
+  padding: 0 8px;
+  text-align: right;
+  color: var(--muted-foreground);
+  opacity: 0.5;
+  user-select: none;
+  flex-shrink: 0;
+  border-right: 1px solid var(--border);
+}
+
+.diff-line-marker {
+  display: inline-block;
+  width: 20px;
+  min-width: 20px;
+  text-align: center;
+  user-select: none;
+  flex-shrink: 0;
+  font-weight: 700;
+}
+
+.diff-line-content {
+  flex: 1;
+  padding-left: 4px;
+  padding-right: 8px;
+  min-width: 0;
+}
+
+/* ── Add (green) ───────────────────────────────────────────── */
+.diff-line-add {
+  background: oklch(0.72 0.22 150 / 10%);
+}
+.diff-line-add .diff-line-marker {
+  color: oklch(0.72 0.22 150);
+}
+.diff-line-add .diff-line-content {
+  color: oklch(0.85 0.12 150);
+}
+.diff-line-add .diff-line-num {
+  background: oklch(0.72 0.22 150 / 6%);
+}
+
+/* ── Remove (red) ──────────────────────────────────────────── */
+.diff-line-remove {
+  background: oklch(0.60 0.25 25 / 10%);
+}
+.diff-line-remove .diff-line-marker {
+  color: oklch(0.60 0.25 25);
+}
+.diff-line-remove .diff-line-content {
+  color: oklch(0.80 0.12 25);
+}
+.diff-line-remove .diff-line-num {
+  background: oklch(0.60 0.25 25 / 6%);
+}
+
+/* ── Context ───────────────────────────────────────────────── */
+.diff-line-context {
+  background: var(--card);
+}
+.diff-line-context .diff-line-marker {
+  color: transparent;
+}
+.diff-line-context .diff-line-content {
+  color: var(--muted-foreground);
+}
+
+/* ── Line hover ────────────────────────────────────────────── */
+.diff-line:hover .diff-line-num {
+  opacity: 1;
+}
+
+/* ═══════════════════════════════════════════════════════════════
+   PHASE 17 — Theme-specific Enhancements
+   ═══════════════════════════════════════════════════════════════ */
+
+/* Light theme adjustments */
+[data-theme="scroll"] .diff-line-add {
+  background: oklch(0.72 0.22 150 / 12%);
+}
+[data-theme="scroll"] .diff-line-add .diff-line-content {
+  color: oklch(0.35 0.15 150);
+}
+[data-theme="scroll"] .diff-line-remove {
+  background: oklch(0.60 0.25 25 / 12%);
+}
+[data-theme="scroll"] .diff-line-remove .diff-line-content {
+  color: oklch(0.40 0.20 25);
+}
+[data-theme="scroll"] .diff-line-context .diff-line-content {
+  color: oklch(0.40 0.02 60);
+}
+[data-theme="scroll"] .commit-row {
+  background: oklch(0.98 0.01 80);
+}
+[data-theme="scroll"] .commit-row:hover {
+  background: oklch(0.95 0.02 80);
+}
+
+/* Cyberpunk neon glow */
+[data-theme="cyberpunk"] .diff-file-panel {
+  border-color: oklch(0.72 0.25 310 / 20%);
+}
+[data-theme="cyberpunk"] .diff-hunk-header {
+  background: oklch(0.72 0.25 310 / 8%);
+  color: oklch(0.72 0.25 310);
+}
+[data-theme="cyberpunk"] .diff-stat-add {
+  text-shadow: 0 0 6px oklch(0.72 0.22 150 / 40%);
+}
+[data-theme="cyberpunk"] .diff-stat-del {
+  text-shadow: 0 0 6px oklch(0.60 0.25 25 / 40%);
+}
+[data-theme="cyberpunk"] .commit-sha {
+  color: oklch(0.72 0.25 310);
+}
+
+/* Glass morphism */
+[data-theme="glass"] .diff-file-panel {
+  backdrop-filter: blur(12px) saturate(180%);
+  -webkit-backdrop-filter: blur(12px) saturate(180%);
+  background: oklch(0.15 0.02 260 / 60%);
+}
+[data-theme="glass"] .diff-file-header {
+  background: oklch(0.15 0.02 260 / 80%);
+}
+[data-theme="glass"] .commit-row {
+  background: oklch(0.15 0.02 260 / 40%);
+}
+
+/* ═══════════════════════════════════════════════════════════════
+   PHASE 17C — Layout Toggle (Unified / Split) & Split Diff View
+   ═══════════════════════════════════════════════════════════════ */
+
+/* ── Layout Toggle Button ──────────────────────────────────── */
+.diff-stats-bar {
+  justify-content: space-between;
+}
+
+.diff-layout-toggle {
+  display: flex;
+  align-items: center;
+  gap: 2px;
+  background: var(--muted);
+  border-radius: 6px;
+  padding: 2px;
+  flex-shrink: 0;
+}
+
+.diff-layout-btn {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.3rem;
+  padding: 0.3rem 0.55rem;
+  font-size: 0.68rem;
+  font-weight: 500;
+  color: var(--muted-foreground);
+  background: transparent;
+  border: none;
+  border-radius: 4px;
+  cursor: pointer;
+  transition: all 0.15s;
+  white-space: nowrap;
+}
+
+.diff-layout-btn:hover {
+  color: var(--foreground);
+}
+
+.diff-layout-btn-active {
+  background: var(--card);
+  color: var(--foreground);
+  box-shadow: 0 1px 3px oklch(0 0 0 / 15%);
+}
+
+.diff-layout-label {
+  display: none;
+}
+
+@media (min-width: 640px) {
+  .diff-layout-label {
+    display: inline;
+  }
+}
+
+/* ── Split View ────────────────────────────────────────────── */
+.diff-split {
+  overflow-x: auto;
+}
+
+.diff-split-hunk-header {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 0;
+}
+
+.diff-split-hunk-label {
+  padding: 0.35rem 0.75rem;
+  border-right: 1px solid var(--border);
+}
+
+.diff-split-hunk-label:last-child {
+  border-right: none;
+}
+
+/* ── Split Row (side-by-side) ──────────────────────────────── */
+.diff-split-row {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  min-width: 0;
+  border-bottom: 1px solid oklch(0.5 0 0 / 5%);
+}
+
+.diff-split-row:last-child {
+  border-bottom: none;
+}
+
+/* ── Split Cell ────────────────────────────────────────────── */
+.diff-split-cell {
+  display: flex;
+  white-space: pre;
+  min-height: 1.35em;
+  font-family: var(--font-mono);
+  font-size: 0.72rem;
+  line-height: 1.45;
+  border-right: 1px solid var(--border);
+  overflow: hidden;
+}
+
+.diff-split-cell:last-child {
+  border-right: none;
+}
+
+.diff-split-cell .diff-line-num {
+  display: inline-block;
+  width: 40px;
+  min-width: 40px;
+  padding: 0 6px;
+  text-align: right;
+  color: var(--muted-foreground);
+  opacity: 0.5;
+  user-select: none;
+  flex-shrink: 0;
+  border-right: 1px solid var(--border);
+}
+
+.diff-split-cell .diff-line-marker {
+  display: inline-block;
+  width: 16px;
+  min-width: 16px;
+  text-align: center;
+  user-select: none;
+  flex-shrink: 0;
+  font-weight: 700;
+}
+
+.diff-split-cell .diff-line-content {
+  flex: 1;
+  padding-left: 4px;
+  padding-right: 4px;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+/* ── Split Empty Cell ──────────────────────────────────────── */
+.diff-split-cell-empty {
+  background: var(--muted);
+  opacity: 0.4;
+}
+
+/* ── Split: inherit colors from unified ────────────────────── */
+.diff-split-cell.diff-line-add {
+  background: oklch(0.72 0.22 150 / 10%);
+}
+.diff-split-cell.diff-line-add .diff-line-marker {
+  color: oklch(0.72 0.22 150);
+}
+.diff-split-cell.diff-line-add .diff-line-content {
+  color: oklch(0.85 0.12 150);
+}
+.diff-split-cell.diff-line-add .diff-line-num {
+  background: oklch(0.72 0.22 150 / 6%);
+}
+
+.diff-split-cell.diff-line-remove {
+  background: oklch(0.60 0.25 25 / 10%);
+}
+.diff-split-cell.diff-line-remove .diff-line-marker {
+  color: oklch(0.60 0.25 25);
+}
+.diff-split-cell.diff-line-remove .diff-line-content {
+  color: oklch(0.80 0.12 25);
+}
+.diff-split-cell.diff-line-remove .diff-line-num {
+  background: oklch(0.60 0.25 25 / 6%);
+}
+
+.diff-split-cell.diff-line-context {
+  background: var(--card);
+}
+.diff-split-cell.diff-line-context .diff-line-marker {
+  color: transparent;
+}
+.diff-split-cell.diff-line-context .diff-line-content {
+  color: var(--muted-foreground);
+}
+
+/* ── Split: hover ──────────────────────────────────────────── */
+.diff-split-row:hover .diff-split-cell .diff-line-num {
+  opacity: 1;
+}
+
+/* ── Split: center divider ─────────────────────────────────── */
+.diff-split-row > .diff-split-cell:first-child {
+  border-right: 2px solid var(--border);
+}
+
+/* ═══════════════════════════════════════════════════════════════
+   PHASE 17C — Split View Theme Enhancements
+   ═══════════════════════════════════════════════════════════════ */
+
+/* Scroll/Light */
+[data-theme="scroll"] .diff-split-cell.diff-line-add .diff-line-content {
+  color: oklch(0.35 0.15 150);
+}
+[data-theme="scroll"] .diff-split-cell.diff-line-remove .diff-line-content {
+  color: oklch(0.40 0.20 25);
+}
+[data-theme="scroll"] .diff-split-cell.diff-line-context .diff-line-content {
+  color: oklch(0.40 0.02 60);
+}
+[data-theme="scroll"] .diff-layout-btn-active {
+  background: oklch(0.98 0.01 80);
+}
+
+/* Cyberpunk */
+[data-theme="cyberpunk"] .diff-layout-btn-active {
+  box-shadow: 0 0 6px oklch(0.72 0.25 310 / 20%);
+  border: 1px solid oklch(0.72 0.25 310 / 20%);
+}
+[data-theme="cyberpunk"] .diff-split-row > .diff-split-cell:first-child {
+  border-right-color: oklch(0.72 0.25 310 / 20%);
+}
+
+/* Glass */
+[data-theme="glass"] .diff-split-cell-empty {
+  background: oklch(0.15 0.02 260 / 30%);
+}
+[data-theme="glass"] .diff-layout-btn-active {
+  background: oklch(0.15 0.02 260 / 80%);
+}

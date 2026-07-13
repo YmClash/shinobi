@@ -7,6 +7,7 @@ import {
   getOperation,
   getChunksByOperation,
   getOperationDiff,
+  getDiffContent,
   getIpfsContent,
   getOperationReviews,
   getScoreHistory,
@@ -19,6 +20,7 @@ import {
   type Operation,
   type ChunksResponse,
   type DiffResponse,
+  type DiffContentResponse,
   type IpfsContentResponse,
   type OperationsResponse,
   type ReviewsResponse,
@@ -179,6 +181,11 @@ export function useOperationChunks(repoPrefix: string, id: string) {
 /** Fetches diff for an operation */
 export function useOperationDiff(repoPrefix: string, id: string) {
   return useApi<DiffResponse>(() => getOperationDiff(repoPrefix, id), [repoPrefix, id]);
+}
+
+/** Fetches diff content (line-by-line) for a commit — Phase 17 */
+export function useCommitDiff(repoPrefix: string, id: string) {
+  return useApi<DiffContentResponse>(() => getDiffContent(repoPrefix, id), [repoPrefix, id]);
 }
 
 /** Fetches IPFS content for an operation */

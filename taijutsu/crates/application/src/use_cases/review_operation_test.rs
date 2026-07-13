@@ -42,6 +42,9 @@ impl OperationRepository for MockOperationRepo {
     async fn find_by_author(&self, _author_id: &Uuid) -> Result<Vec<Operation>, DomainError> {
         Ok(vec![])
     }
+    async fn count_by_repo(&self, _repo_id: &Uuid) -> Result<i64, DomainError> {
+        Ok(0)
+    }
 }
 
 struct MockVcsEngine {
@@ -75,6 +78,9 @@ impl VcsEngine for MockVcsEngine {
         Ok(vec![])
     }
     async fn list_refs(&self, _repo_id: &Uuid) -> Result<Vec<domain::ports::vcs_engine::RefInfo>, DomainError> {
+        Ok(vec![])
+    }
+    async fn diff_content(&self, _repo_id: &Uuid, _cid: &ContentId) -> Result<Vec<domain::ports::vcs_engine::FileDiff>, DomainError> {
         Ok(vec![])
     }
 }

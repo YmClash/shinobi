@@ -164,4 +164,19 @@ impl OperationRepository for PostgresOperationRepository {
 
         rows.into_iter().map(row_to_operation).collect()
     }
+
+    #[instrument(skip(self))]
+    async fn count_by_repo(&self, repo_id: &Uuid) -> Result<i64, DomainError> {
+        let row = sqlx::query(
+            "SELECT COUNT(*) as count FROM operations WHERE repository_id = $1",
+        )
+        .bind(repo_id)
+        .fetch_one(&self.pool)
+        .await
+        .map_err(|e| DomainError::Persistence(e.to_string()))?;
+
+        row.try_get::<i64, _>("count")
+            .map_err(|e| DomainError::Persistence(e.to_string()))
+    }
 }
+

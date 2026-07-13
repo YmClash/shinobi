@@ -120,3 +120,6 @@ pgvector = { version = "0.4", features = ["sqlx"] }
 # — Streaming SSE (Phase 15 — Sensei) —
 tokio-stream = { version = "0.1", features = ["sync"] }
 futures-util = { version = "0.3" }
+
+# — Text Diff (Phase 17 — Commits & Diff Colorisé) —
+similar = { version = "2" }

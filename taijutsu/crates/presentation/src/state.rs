@@ -79,6 +79,14 @@ pub struct SharedState {
 
     /// URL du serveur Ollama Sensei pour les appels directs (models, warmup).
     pub sensei_ollama_url: Option<String>,
+
+    // ── Phase 17 — Diff Colorisé ─────────────────────────────────
+
+    /// Moteur VCS abstrait pour le diff ligne par ligne (Phase 17).
+    pub vcs_engine: Arc<dyn domain::ports::vcs_engine::VcsEngine>,
+
+    /// Repository des opérations pour le total_count (Phase 17).
+    pub operation_repo: Arc<dyn domain::ports::repository::OperationRepository>,
 }
 
 // ── Phase 12A — Git Bridge HTTP ──────────────────────────────────────

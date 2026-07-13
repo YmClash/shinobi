@@ -1487,6 +1487,239 @@ impl VcsEngine for JujutsuEngine {
         .await
         .map_err(|e| DomainError::Internal(format!("spawn_blocking join error: {e}")))?
     }
+
+    // ── Phase 17 — Diff Colorisé (line-by-line) ────────────────────
+
+    #[instrument(skip(self))]
+    async fn diff_content(
+        &self,
+        repo_id: &Uuid,
+        content_id: &ContentId,
+    ) -> Result<Vec<domain::ports::vcs_engine::FileDiff>, DomainError> {
+        use domain::ports::vcs_engine::{
+            DiffHunk, DiffLine, DiffLineKind, DiffStatus, FileDiff,
+        };
+
+        let handle_arc = self.get_handle(repo_id).ok_or_else(|| {
+            DomainError::VcsError(format!("workspace not initialized for repo {repo_id}"))
+        })?;
+        let cid_hex = content_id.to_string();
+
+        tokio::task::spawn_blocking(move || {
+            let guard = handle_arc.lock();
+            let wh = &*guard;
+            let repo = &wh.repo;
+            let store = repo.store();
+
+            // 1. Résoudre le commit
+            let commit_id = CommitId::try_from_hex(&cid_hex).ok_or_else(|| {
+                DomainError::VcsError(format!("invalid hex commit id: {cid_hex}"))
+            })?;
+
+            let commit = store
+                .get_commit(&commit_id)
+                .map_err(|_| DomainError::CommitNotFound {
+                    id: cid_hex.clone(),
+                })?;
+
+            let commit_tree = commit.tree();
+
+            // 2. Déterminer le base tree (parent ou empty)
+            let parent_ids = commit.parent_ids();
+            let base_tree = if !parent_ids.is_empty()
+                && parent_ids[0] != *store.root_commit_id()
+            {
+                match store.get_commit(&parent_ids[0]) {
+                    Ok(parent_commit) => parent_commit.tree(),
+                    Err(_) => store.empty_merged_tree(),
+                }
+            } else {
+                store.empty_merged_tree()
+            };
+
+            // 3. Diff entre les deux trees
+            let diff_stream = base_tree.diff_stream(&commit_tree, &EverythingMatcher);
+            let entries: Vec<_> = pollster::block_on(diff_stream.collect::<Vec<_>>());
+
+            let mut file_diffs: Vec<FileDiff> = Vec::new();
+
+            for entry in entries {
+                let diff = match entry.values {
+                    Ok(d) => d,
+                    Err(_) => continue,
+                };
+
+                let path = entry.path.as_internal_file_string().to_string();
+
+                // Déterminer le status et lire les contenus before/after
+                let before_value = diff.before.as_resolved().and_then(|v| v.as_ref());
+                let after_value = diff.after.as_resolved().and_then(|v| v.as_ref());
+
+                let status = match (before_value, after_value) {
+                    (None, Some(_)) => DiffStatus::Added,
+                    (Some(_), None) => DiffStatus::Deleted,
+                    (Some(_), Some(_)) => DiffStatus::Modified,
+                    (None, None) => continue,
+                };
+
+                // Lire le contenu "before" (du parent)
+                let before_content = if let Some(TreeValue::File { id, .. }) = before_value {
+                    let entry_path = &entry.path;
+                    match pollster::block_on(store.read_file(entry_path, id)) {
+                        Ok(mut reader) => {
+                            let mut buf = Vec::new();
+                            match pollster::block_on(
+                                tokio::io::AsyncReadExt::read_to_end(&mut reader, &mut buf),
+                            ) {
+                                Ok(_) => Some(buf),
+                                Err(_) => None,
+                            }
+                        }
+                        Err(_) => None,
+                    }
+                } else {
+                    None
+                };
+
+                // Lire le contenu "after" (du commit)
+                let after_content = if let Some(TreeValue::File { id, .. }) = after_value {
+                    let entry_path = &entry.path;
+                    match pollster::block_on(store.read_file(entry_path, id)) {
+                        Ok(mut reader) => {
+                            let mut buf = Vec::new();
+                            match pollster::block_on(
+                                tokio::io::AsyncReadExt::read_to_end(&mut reader, &mut buf),
+                            ) {
+                                Ok(_) => Some(buf),
+                                Err(_) => None,
+                            }
+                        }
+                        Err(_) => None,
+                    }
+                } else {
+                    None
+                };
+
+                // Détecter les fichiers binaires (contiennent des octets nuls)
+                let is_binary = |data: &[u8]| -> bool {
+                    data.iter().take(8000).any(|&b| b == 0)
+                };
+
+                let before_binary = before_content.as_ref().is_some_and(|c| is_binary(c));
+                let after_binary = after_content.as_ref().is_some_and(|c| is_binary(c));
+
+                if before_binary || after_binary {
+                    file_diffs.push(FileDiff {
+                        path,
+                        status,
+                        hunks: Vec::new(),
+                        additions: 0,
+                        deletions: 0,
+                        too_large: false,
+                    });
+                    continue;
+                }
+
+                // Convertir en texte UTF-8
+                let before_text = before_content
+                    .as_ref()
+                    .map(|c| String::from_utf8_lossy(c).to_string())
+                    .unwrap_or_default();
+                let after_text = after_content
+                    .as_ref()
+                    .map(|c| String::from_utf8_lossy(c).to_string())
+                    .unwrap_or_default();
+
+                // 4. Calculer le diff avec `similar`
+                let text_diff = similar::TextDiff::from_lines(&before_text, &after_text);
+
+                // Compter additions/deletions pour le flag too_large
+                let mut total_additions: u32 = 0;
+                let mut total_deletions: u32 = 0;
+
+                for change in text_diff.iter_all_changes() {
+                    match change.tag() {
+                        similar::ChangeTag::Insert => total_additions += 1,
+                        similar::ChangeTag::Delete => total_deletions += 1,
+                        similar::ChangeTag::Equal => {}
+                    }
+                }
+
+                let total_diff_lines = total_additions + total_deletions;
+
+                if total_diff_lines > 1000 {
+                    file_diffs.push(FileDiff {
+                        path,
+                        status,
+                        hunks: Vec::new(),
+                        additions: total_additions,
+                        deletions: total_deletions,
+                        too_large: true,
+                    });
+                    continue;
+                }
+
+                // 5. Construire les hunks avec 3 lignes de contexte
+                let mut hunks: Vec<DiffHunk> = Vec::new();
+
+                for hunk in text_diff.unified_diff().context_radius(3).iter_hunks() {
+                    let header = hunk.header().to_string();
+                    let mut lines: Vec<DiffLine> = Vec::new();
+
+                    for change in hunk.iter_changes() {
+                        let (kind, old_line, new_line) = match change.tag() {
+                            similar::ChangeTag::Insert => (
+                                DiffLineKind::Add,
+                                None,
+                                change.new_index().map(|i| (i + 1) as u32),
+                            ),
+                            similar::ChangeTag::Delete => (
+                                DiffLineKind::Remove,
+                                change.old_index().map(|i| (i + 1) as u32),
+                                None,
+                            ),
+                            similar::ChangeTag::Equal => (
+                                DiffLineKind::Context,
+                                change.old_index().map(|i| (i + 1) as u32),
+                                change.new_index().map(|i| (i + 1) as u32),
+                            ),
+                        };
+
+                        // Retirer le trailing newline pour un affichage propre
+                        let content = change.as_str().unwrap_or("").trim_end_matches('\n').to_string();
+
+                        lines.push(DiffLine {
+                            kind,
+                            content,
+                            old_line,
+                            new_line,
+                        });
+                    }
+
+                    hunks.push(DiffHunk { header, lines });
+                }
+
+                file_diffs.push(FileDiff {
+                    path,
+                    status,
+                    hunks,
+                    additions: total_additions,
+                    deletions: total_deletions,
+                    too_large: false,
+                });
+            }
+
+            info!(
+                commit_id = %cid_hex,
+                file_count = file_diffs.len(),
+                "diff_content: diff ligne par ligne calculé"
+            );
+
+            Ok(file_diffs)
+        })
+        .await
+        .map_err(|e| DomainError::Internal(format!("spawn_blocking join error: {e}")))?
+    }
 }
 
 

@@ -327,13 +327,13 @@ git push -u origin main`}</pre>
             <GitBranch size={13} />
             <span>{refs.branches.length} Bookmarks</span>
           </div>
-          <div className="ex-stat">
+          <div className="ex-stat" style={{ cursor: 'pointer' }}>
             <History size={13} />
-            <span>
+            <a href={`/${owner}/${repo}/commits`} style={{ textDecoration: 'none', color: 'inherit' }}>
               {opsData.status === "fulfilled"
-                ? `${opsData.value.count} Commits`
+                ? `${opsData.value.total_count ?? opsData.value.count} Commits`
                 : "…"}
-            </span>
+            </a>
           </div>
         </div>
       </div>
@@ -361,7 +361,7 @@ git push -u origin main`}</pre>
               latestCommit={latestCommit}
               branchCount={refs.branches.length}
               commitCount={
-                opsData.status === "fulfilled" ? opsData.value.count : 0
+                opsData.status === "fulfilled" ? (opsData.value.total_count ?? opsData.value.count) : 0
               }
             />
           )}

@@ -37,4 +37,11 @@ pub trait OperationRepository: Send + Sync {
 
     /// Retrouve toutes les opérations d'un auteur donné.
     async fn find_by_author(&self, author_id: &Uuid) -> Result<Vec<Operation>, DomainError>;
+
+    /// Compte le nombre total d'opérations d'un dépôt (Phase 17 — total_count).
+    ///
+    /// Retourne le COUNT(*) absolu sans pagination — O(1) sur l'index PostgreSQL.
+    /// Utilisé pour afficher "142 Commits" sur la page explorateur sans charger
+    /// toutes les opérations en mémoire.
+    async fn count_by_repo(&self, repo_id: &Uuid) -> Result<i64, DomainError>;
 }

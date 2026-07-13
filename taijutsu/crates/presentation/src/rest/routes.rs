@@ -278,6 +278,11 @@ pub fn create_router(state: SharedState) -> Router {
             "/api/v1/repos/{owner}/{repo}/operations/{id}/chunks",
             get(federated_get_chunks),
         )
+        // ── Phase 17 — Diff Colorisé (line-by-line) ─────────────────
+        .route(
+            "/api/v1/repos/{owner}/{repo}/operations/{id}/diff-content",
+            get(federated_get_diff_content),
+        )
         // ── Phase 6 — Explorateur de Code (lecture seule) ───────────────
         .route(
             "/api/v1/repos/{owner}/{repo}/tree/{revision}",
@@ -662,12 +667,17 @@ async fn federated_list_operations(
     };
 
     let operations = state.list_operations.execute(filter).await?;
+
+    // Phase 17 : total_count absolu via COUNT(*) — indépendant du limit
+    let total_count = state.operation_repo.count_by_repo(&repository.id).await.unwrap_or(operations.len() as i64);
+
     let operations_json: Vec<OperationJson> =
         operations.into_iter().map(OperationJson::from).collect();
 
     Ok(Json(serde_json::json!({
         "operations": operations_json,
         "count": operations_json.len(),
+        "total_count": total_count,
     })))
 }
 
@@ -767,6 +777,55 @@ async fn federated_get_chunks(
         "operation_id": path.id,
         "chunks": chunks_json,
         "count": result.count,
+    })))
+}
+
+// ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+// ─── Phase 17 — Diff Colorisé (line-by-line)
+// ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+/// Diff ligne par ligne — `GET /api/v1/repos/:owner/:repo/operations/:id/diff-content`
+///
+/// Retourne le diff structuré avec hunks, lignes add/remove/context,
+/// numéros de ligne et flag too_large pour la protection du DOM.
+async fn federated_get_diff_content(
+    State(state): State<SharedState>,
+    Path(path): Path<RepoOperationPath>,
+) -> Result<Json<serde_json::Value>, AppError> {
+    info!(
+        owner = %path.owner,
+        repo = %path.repo,
+        id = %path.id,
+        "REST Fédéré: GetDiffContent (Phase 17)"
+    );
+
+    let repository = state.resolve_repo.execute(&path.owner, &path.repo).await?;
+
+    // Retrouver l'opération pour obtenir le content_id
+    let operation = state.get_operation.execute(path.id).await?;
+
+    // Calculer le diff ligne par ligne via le VcsEngine
+    let content_id = domain::entities::content_id::ContentId::new(
+        operation.content_id.into_inner(),
+    );
+    let file_diffs = state
+        .vcs_engine
+        .diff_content(&repository.id, &content_id)
+        .await?;
+
+    // Calculer les stats globales
+    let total_additions: u32 = file_diffs.iter().map(|f| f.additions).sum();
+    let total_deletions: u32 = file_diffs.iter().map(|f| f.deletions).sum();
+    let files_changed = file_diffs.len();
+
+    Ok(Json(serde_json::json!({
+        "operation_id": path.id,
+        "files": file_diffs,
+        "stats": {
+            "files_changed": files_changed,
+            "additions": total_additions,
+            "deletions": total_deletions,
+        }
     })))
 }
 

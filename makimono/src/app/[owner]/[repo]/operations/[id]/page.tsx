@@ -3,13 +3,13 @@
 import { useState } from "react";
 import { useParams } from "next/navigation";
 import { Skeleton } from "@/components/ui/skeleton";
-import { useOperation, useOperationChunks, useOperationDiff } from "@/hooks/use-api";
+import { useOperation, useOperationChunks, useOperationDiff, useCommitDiff } from "@/hooks/use-api";
 import { buildRepoPrefix } from "@/lib/api";
 import { OperationHeader } from "@/components/operations/operation-header";
 import { FileExplorer } from "@/components/operations/file-explorer";
-import { DiffViewer } from "@/components/operations/diff-viewer";
 import { IpfsExplorer } from "@/components/operations/ipfs-explorer";
 import { OracleReview } from "@/components/operations/oracle-review";
+import { UnifiedDiffViewer } from "@/components/operations/unified-diff-viewer";
 
 type Tab = "chunks" | "diff" | "ipfs";
 
@@ -25,6 +25,7 @@ export default function OperationDetailPage() {
   const { data: operation, loading: loadingOp, error: errorOp } = useOperation(repoPrefix, id);
   const { data: chunksData, loading: loadingChunks } = useOperationChunks(repoPrefix, id);
   const { data: diffData, loading: loadingDiff } = useOperationDiff(repoPrefix, id);
+  const { data: diffContent, loading: loadingDiffContent } = useCommitDiff(repoPrefix, id);
 
   if (errorOp) {
     return (
@@ -57,7 +58,7 @@ export default function OperationDetailPage() {
       id: "diff",
       label: "Diff Complet",
       icon: "📝",
-      count: diffData?.count,
+      count: diffContent?.stats.files_changed ?? diffData?.count,
     },
     {
       id: "ipfs" as Tab,
@@ -115,10 +116,33 @@ export default function OperationDetailPage() {
         )}
 
         {activeTab === "diff" && (
-          loadingDiff ? (
-            <Skeleton className="h-64 w-full rounded-lg" />
+          loadingDiffContent ? (
+            <div className="commits-loading">
+              <div className="commits-spinner" />
+              <span>Chargement du diff colorisé...</span>
+            </div>
+          ) : diffContent ? (
+            <UnifiedDiffViewer
+              files={diffContent.files}
+              stats={diffContent.stats}
+            />
           ) : (
-            <DiffViewer changedFiles={diffData?.changed_files ?? []} />
+            /* Fallback : ancien diff (liste de fichiers) si l'API diff-content échoue */
+            <div className="diff-files">
+              <div className="diff-file-tree">
+                {(diffData?.changed_files ?? []).map((file) => (
+                  <div key={file} className="diff-file-tree-item">
+                    <span className="diff-file-status diff-file-status-added">A</span>
+                    <span className="diff-file-tree-name">{file}</span>
+                  </div>
+                ))}
+              </div>
+              {(diffData?.changed_files ?? []).length === 0 && (
+                <div className="commits-empty">
+                  <p>Aucun fichier modifié détecté</p>
+                </div>
+              )}
+            </div>
           )
         )}
 

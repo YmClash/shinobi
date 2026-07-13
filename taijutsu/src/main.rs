@@ -344,6 +344,9 @@ async fn main() -> anyhow::Result<()> {
         list_refs: list_refs_uc,
         sensei_chat,
         sensei_ollama_url: if config.sensei_enabled { Some(config.sensei_ollama_url.clone()) } else { None },
+        // Phase 17 — Diff Colorisé
+        vcs_engine: vcs.clone(),
+        operation_repo: repo.clone(),
     };
 
     // ── Git Bridge HTTP (Phase 12A) ────────────────────
