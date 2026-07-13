@@ -77,7 +77,9 @@ export async function exploreTree(
   const pathParam = path ? `?path=${encodeURIComponent(path)}` : "";
   const url = `${getBaseUrl()}${prefix}/tree/${encodeURIComponent(revision)}${pathParam}`;
 
-  const res = await fetch(url);
+  const res = await fetch(url, {
+    next: { revalidate: 60, tags: [`tree:${owner}:${repo}:${revision}`] },
+  });
   if (!res.ok) {
     const text = await res.text().catch(() => "Unknown error");
     throw new Error(`Explorer API error ${res.status}: ${text}`);
@@ -94,7 +96,9 @@ export async function listRefs(
 ): Promise<RefsResponse> {
   const prefix = buildRepoPrefix(owner, repo);
   const url = `${getBaseUrl()}${prefix}/refs`;
-  const res = await fetch(url);
+  const res = await fetch(url, {
+    next: { revalidate: 120, tags: [`refs:${owner}:${repo}`] },
+  });
   if (!res.ok) {
     const text = await res.text().catch(() => "Unknown error");
     throw new Error(`Refs API error ${res.status}: ${text}`);
