@@ -38,4 +38,11 @@ pub trait AuthService: Send + Sync {
 
     /// Vérifie un PAT en clair contre un hash SHA-256 stocké.
     fn verify_pat(&self, raw_token: &str, stored_hash: &str) -> bool;
+
+    /// Calcule le hash SHA-256 d'un PAT brut (pour lookup en DB).
+    ///
+    /// Utilisé par le Git HTTP Bridge pour transformer le token reçu
+    /// via Basic Auth en hash searchable dans la table credentials.
+    /// Même algorithme que `generate_pat()` et `verify_pat()`.
+    fn hash_pat_for_lookup(&self, raw_token: &str) -> String;
 }

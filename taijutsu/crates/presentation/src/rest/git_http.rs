@@ -13,6 +13,11 @@
 //! - `POST /{owner}/{repo}.git/git-receive-pack`   — Push
 //! - `POST /{owner}/{repo}.git/git-upload-pack`    — Clone/Fetch
 //!
+//! ## Authentification (Phase 19A-Git — Les Portes de Fer)
+//! - **Push** (`git-receive-pack`) : PAT obligatoire via Basic Auth
+//! - **Clone/Fetch** (`git-upload-pack`) : Public (V1 — pas de repos prives)
+//! - **info/refs** : Auth conditionnelle (seulement si `service=git-receive-pack`)
+//!
 //! ## Sync Hook (post receive-pack)
 //! Apres chaque push reussi, le handler :
 //! 1. Recharge le repo jj (jj ne voit pas les commits Git externes)
@@ -25,10 +30,12 @@ use axum::extract::{Path, Query, State};
 use axum::http::{HeaderMap, HeaderValue, StatusCode};
 use axum::response::{IntoResponse, Response};
 use axum::{Router, routing::get, routing::post};
+use base64::Engine;
 use serde::Deserialize;
 use tracing::{info, warn};
 
 
+use domain::entities::actor::Actor;
 use domain::entities::operation::Operation;
 use domain::ports::vcs_engine::VcsEngine as _;
 
@@ -74,6 +81,104 @@ pub fn create_git_router(state: GitHttpState) -> Router {
         .with_state(state)
 }
 
+// ── Auth Helpers (Phase 19A-Git) ─────────────────────────────────────
+
+/// Retourne une reponse 401 avec le challenge WWW-Authenticate.
+///
+/// Le client Git recevant ce 401 demandera automatiquement les
+/// credentials a l'utilisateur (ou au credential helper configure).
+fn challenge_401(message: &str) -> Response {
+    let mut headers = HeaderMap::new();
+    headers.insert(
+        "WWW-Authenticate",
+        HeaderValue::from_static("Basic realm=\"shinobi\""),
+    );
+    (StatusCode::UNAUTHORIZED, headers, message.to_string()).into_response()
+}
+
+/// Extrait les credentials Basic Auth du header `Authorization`.
+///
+/// Format attendu : `Basic base64(username:password)`
+/// - **username** : handle de l'acteur (informatif, pas utilise pour le lookup)
+/// - **password** : PAT brut (ex: `shb_abc123...`)
+fn extract_basic_auth(headers: &HeaderMap) -> Option<(String, String)> {
+    let header = headers.get("authorization")?.to_str().ok()?;
+    let encoded = header.strip_prefix("Basic ")
+        .or_else(|| header.strip_prefix("basic "))?;
+    let decoded = String::from_utf8(
+        base64::engine::general_purpose::STANDARD.decode(encoded).ok()?
+    ).ok()?;
+    let (user, pass) = decoded.split_once(':')?;
+    Some((user.to_string(), pass.to_string()))
+}
+
+/// Authentifie un PAT via Basic Auth et retourne l'acteur associe.
+///
+/// ## Flux
+/// 1. Extrait le header `Authorization: Basic ...`
+/// 2. Decode base64 → `(username, password)`
+/// 3. Hash SHA-256 du password (= PAT brut)
+/// 4. Reverse lookup en DB : hash → Actor
+///
+/// ## Erreurs
+/// Retourne une `Response` 401 avec challenge si :
+/// - Header absent ou mal forme
+/// - PAT inconnu en base
+async fn authenticate_pat(
+    state: &GitHttpState,
+    headers: &HeaderMap,
+) -> Result<Actor, Response> {
+    let (username, password) = extract_basic_auth(headers)
+        .ok_or_else(|| challenge_401("Authentication required — use a Personal Access Token"))?;
+
+    // Hash SHA-256 du PAT brut pour lookup
+    let pat_hash = state.auth_service.hash_pat_for_lookup(&password);
+
+    // Reverse lookup : hash → actor
+    let actor = state.actor_repo
+        .find_actor_by_credential_hash(&pat_hash, "api_key")
+        .await
+        .map_err(|e| {
+            warn!(error = %e, "Git Auth: erreur DB pendant le lookup PAT");
+            (StatusCode::INTERNAL_SERVER_ERROR, "Authentication error").into_response()
+        })?
+        .ok_or_else(|| {
+            warn!(
+                username = %username,
+                "Git Auth: PAT invalide ou inconnu"
+            );
+            challenge_401("Invalid Personal Access Token")
+        })?;
+
+    info!(
+        actor_handle = %actor.handle,
+        actor_id = %actor.id,
+        "Git Auth: PAT valide — acteur authentifie"
+    );
+
+    Ok(actor)
+}
+
+/// Verifie si un acteur a le droit de pusher dans un repo.
+///
+/// V1 : owner OU collaborateur (tout role).
+/// Le RBAC granulaire (maintainer vs contributor) viendra en V2.
+async fn is_authorized_to_push(
+    state: &GitHttpState,
+    actor: &Actor,
+    repository: &domain::entities::repository::Repository,
+) -> bool {
+    // L'owner a toujours acces
+    if actor.id == repository.owner_id {
+        return true;
+    }
+    // Sinon, verifier si collaborateur
+    state.repo_repo
+        .is_collaborator(&actor.id, &repository.id)
+        .await
+        .unwrap_or(false)
+}
+
 // ── Helpers ──────────────────────────────────────────────────────────
 
 /// Extrait le nom du repo en supprimant le suffixe `.git`.
@@ -111,10 +216,15 @@ fn cgi_to_axum_response(
 ///
 /// VSCode/terminal appelle cette route pour demander la liste des
 /// branches et commits du depot distant.
+///
+/// ## Auth (Phase 19A-Git)
+/// - Si `service=git-receive-pack` (push) : PAT obligatoire
+/// - Si `service=git-upload-pack` (clone) : Public (V1)
 async fn git_info_refs(
     State(state): State<GitHttpState>,
     Path(path): Path<GitRepoPath>,
     Query(query): Query<InfoRefsQuery>,
+    headers: HeaderMap,
 ) -> Response {
     let repo_name = strip_git_suffix(&path.repo_dot_git);
 
@@ -133,6 +243,31 @@ async fn git_info_refs(
             return (StatusCode::NOT_FOUND, "Repository not found").into_response();
         }
     };
+
+    // 1b. Auth conditionnelle : exiger PAT si push (Phase 19A-Git)
+    if query.service.as_deref() == Some("git-receive-pack") {
+        let actor = match authenticate_pat(&state, &headers).await {
+            Ok(actor) => actor,
+            Err(response) => return response,
+        };
+
+        // Verifier l'ownership/collaboration
+        if !is_authorized_to_push(&state, &actor, &repository).await {
+            warn!(
+                actor = %actor.handle,
+                repo = %repo_name,
+                owner = %path.owner,
+                "Git Auth: acces refuse — pas owner ni collaborateur"
+            );
+            return challenge_401("No access to this repository");
+        }
+
+        info!(
+            actor = %actor.handle,
+            repo = %repo_name,
+            "Git HTTP: push auth OK (info/refs)"
+        );
+    }
 
     // 2. Construire le chemin vers le bare Git repo
     let repo_git_path = state.vcs_engine.git_repo_path(&repository.id);
@@ -188,6 +323,9 @@ async fn git_info_refs(
 ///
 /// VSCode/terminal envoie un packfile compresse contenant les commits.
 /// Apres reception reussie, le Sync Hook comble PostgreSQL et declenche Kafka.
+///
+/// ## Auth (Phase 19A-Git)
+/// PAT obligatoire — toute ecriture est authentifiee.
 async fn git_receive_pack(
     State(state): State<GitHttpState>,
     Path(path): Path<GitRepoPath>,
@@ -203,6 +341,12 @@ async fn git_receive_pack(
         "Git HTTP: receive-pack (push)"
     );
 
+    // 0. Auth PAT obligatoire (Phase 19A-Git)
+    let actor = match authenticate_pat(&state, &headers).await {
+        Ok(actor) => actor,
+        Err(response) => return response,
+    };
+
     // 1. Resoudre le repo
     let repository = match state.resolve_repo.execute(&path.owner, repo_name).await {
         Ok(repo) => repo,
@@ -211,6 +355,23 @@ async fn git_receive_pack(
             return (StatusCode::NOT_FOUND, "Repository not found").into_response();
         }
     };
+
+    // 1b. Verifier l'ownership/collaboration (Phase 19A-Git)
+    if !is_authorized_to_push(&state, &actor, &repository).await {
+        warn!(
+            actor = %actor.handle,
+            repo = %repo_name,
+            owner = %path.owner,
+            "Git Auth: push refuse — pas owner ni collaborateur"
+        );
+        return challenge_401("No access to this repository");
+    }
+
+    info!(
+        actor = %actor.handle,
+        repo = %repo_name,
+        "Git HTTP: push authentifie et autorise"
+    );
 
     // 2. Construire le chemin vers le bare Git repo
     let repo_git_path = state.vcs_engine.git_repo_path(&repository.id);
@@ -266,6 +427,10 @@ async fn git_receive_pack(
 /// Clone/Fetch Git — `POST /{owner}/{repo}.git/git-upload-pack`
 ///
 /// Lecture seule — pas de Sync Hook ni d'etincelle Kafka.
+///
+/// ## Auth (Phase 19A-Git)
+/// Public en V1 — pas de repos prives. L'auth sera ajoutee quand
+/// le concept `visibility = 'private'` sera implemente (Phase 20).
 async fn git_upload_pack(
     State(state): State<GitHttpState>,
     Path(path): Path<GitRepoPath>,

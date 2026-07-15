@@ -58,6 +58,21 @@ pub trait ActorRepository: Send + Sync {
         cred_type: &str,
     ) -> Result<Vec<String>, DomainError>;
 
+    /// Retrouve un acteur par le hash de son credential (reverse lookup).
+    ///
+    /// Utilisé par le Git HTTP Bridge pour authentifier les PAT via Basic Auth :
+    /// le PAT brut est hashé (SHA-256) puis recherché dans la table credentials
+    /// pour retrouver l'acteur propriétaire.
+    ///
+    /// ## Arguments
+    /// - `secret_hash` : hash SHA-256 hex du token brut
+    /// - `cred_type` : type de credential (ex: `"api_key"` pour les PAT)
+    async fn find_actor_by_credential_hash(
+        &self,
+        secret_hash: &str,
+        cred_type: &str,
+    ) -> Result<Option<Actor>, DomainError>;
+
     /// Liste les PAT d'un acteur (label + created_at, pas le hash).
     async fn list_pats(
         &self,

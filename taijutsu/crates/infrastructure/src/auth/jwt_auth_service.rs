@@ -112,6 +112,12 @@ impl AuthService for JwtAuthService {
         let computed_hash = hex::encode(hasher.finalize());
         computed_hash == stored_hash
     }
+
+    fn hash_pat_for_lookup(&self, raw_token: &str) -> String {
+        let mut hasher = Sha256::new();
+        hasher.update(raw_token.as_bytes());
+        hex::encode(hasher.finalize())
+    }
 }
 
 #[cfg(test)]

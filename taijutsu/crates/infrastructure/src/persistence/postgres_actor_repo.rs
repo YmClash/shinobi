@@ -222,6 +222,32 @@ impl ActorRepository for PostgresActorRepository {
     }
 
     #[instrument(skip(self))]
+    async fn find_actor_by_credential_hash(
+        &self,
+        secret_hash: &str,
+        cred_type: &str,
+    ) -> Result<Option<Actor>, DomainError> {
+        let row = sqlx::query(
+            "SELECT a.id, a.handle, a.display_name, a.actor_type::text, \
+                    a.avatar_url, a.email, a.bio, a.created_at \
+             FROM actors a \
+             INNER JOIN credentials c ON c.actor_id = a.id \
+             WHERE c.secret_hash = $1 AND c.cred_type = $2::credential_type \
+             LIMIT 1",
+        )
+        .bind(secret_hash)
+        .bind(cred_type)
+        .fetch_optional(&self.pool)
+        .await
+        .map_err(|e| DomainError::Persistence(e.to_string()))?;
+
+        match row {
+            Some(r) => Ok(Some(row_to_actor(r)?)),
+            None => Ok(None),
+        }
+    }
+
+    #[instrument(skip(self))]
     async fn list_pats(&self, actor_id: &Uuid) -> Result<Vec<PatInfo>, DomainError> {
         let rows = sqlx::query(
             "SELECT id, label, created_at FROM credentials \

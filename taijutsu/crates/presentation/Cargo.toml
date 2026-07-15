@@ -38,6 +38,9 @@ futures-util = { workspace = true }
 # — HTTP Client (Sensei models/warmup — Phase 16) —
 reqwest = { workspace = true }
 
+# — Git HTTP Basic Auth (Phase 19A-Git) —
+base64 = "0.22"
+
 [build-dependencies]
 tonic-build = { workspace = true }
 tonic-prost-build = { workspace = true }

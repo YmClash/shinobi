@@ -9,9 +9,9 @@ use std::sync::Arc;
 use application::use_cases::create_operation::CreateOperationUseCase;
 use application::use_cases::create_repository::CreateRepositoryUseCase;
 use application::use_cases::get_blob::GetBlobUseCase;
+use application::use_cases::get_ipfs_content::GetIpfsContentUseCase;
 use application::use_cases::get_operation::GetOperationUseCase;
 use application::use_cases::get_operation_diff::GetOperationDiffUseCase;
-use application::use_cases::get_ipfs_content::GetIpfsContentUseCase;
 use application::use_cases::get_reviews::GetReviewsUseCase;
 use application::use_cases::get_score_history::GetScoreHistoryUseCase;
 use application::use_cases::get_tree::GetTreeUseCase;
@@ -61,7 +61,6 @@ pub struct SharedState {
     pub list_repositories: Arc<ListRepositoriesUseCase>,
 
     // ── Phase 6 — Explorateur de Code ─────────────────────────────────
-
     /// Use case: lister l'arborescence d'un dépôt (Phase 6).
     pub get_tree: Arc<GetTreeUseCase>,
 
@@ -72,7 +71,6 @@ pub struct SharedState {
     pub list_refs: Arc<ListRefsUseCase>,
 
     // ── Phase 15 — Sensei (先生) ─────────────────────────────────
-
     /// Use case: chat conversationnel IA avec streaming.
     /// `None` si l'agent Sensei est désactivé (Ollama #2 non disponible).
     pub sensei_chat: Option<Arc<application::use_cases::sensei_chat::SenseiChatUseCase>>,
@@ -81,7 +79,6 @@ pub struct SharedState {
     pub sensei_ollama_url: Option<String>,
 
     // ── Phase 17 — Diff Colorisé ─────────────────────────────────
-
     /// Moteur VCS abstrait pour le diff ligne par ligne (Phase 17).
     pub vcs_engine: Arc<dyn domain::ports::vcs_engine::VcsEngine>,
 
@@ -89,7 +86,6 @@ pub struct SharedState {
     pub operation_repo: Arc<dyn domain::ports::repository::OperationRepository>,
 
     // ── Phase 19A — Auth & RBAC ──────────────────────────────────
-
     /// Service d'authentification (JWT + Argon2 + PAT).
     pub auth_service: Arc<dyn domain::ports::auth_service::AuthService>,
 
@@ -143,4 +139,14 @@ pub struct GitHttpState {
 
     /// Racine des workspaces VCS (pour construire les chemins).
     pub workspace_root: PathBuf,
+
+    // ── Phase 19A-Git — PAT Auth pour Git HTTP ──────────────────────
+    /// Service d'authentification (SHA-256 hash pour PAT lookup).
+    pub auth_service: Arc<dyn domain::ports::auth_service::AuthService>,
+
+    /// Repository des acteurs (reverse PAT lookup → Actor).
+    pub actor_repo: Arc<dyn domain::ports::actor_repository::ActorRepository>,
+
+    /// Repository des dépôts (ownership check pour push).
+    pub repo_repo: Arc<dyn domain::ports::repo_repository::RepoRepository>,
 }

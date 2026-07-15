@@ -407,6 +407,10 @@ async fn main() -> anyhow::Result<()> {
             operation_repo: repo.clone(),
             content_store: content_store.clone(),
             workspace_root: std::path::PathBuf::from(&config.vcs_workspace_root),
+            // Phase 19A-Git — PAT Auth pour Git HTTP
+            auth_service: auth_service.clone(),
+            actor_repo: actor_repo.clone(),
+            repo_repo: repo_repo.clone(),
         };
         create_router(shared_state.clone())
             .merge(create_git_router(git_state))

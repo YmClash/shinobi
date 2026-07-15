@@ -2474,6 +2474,35 @@ html * {
   letter-spacing: 0.01em;
 }
 
+/* Description texte dans une étape */
+.ex-step-desc {
+  font-size: 0.8rem;
+  color: #9898b0;
+  line-height: 1.6;
+  padding: 0.5rem 1rem 0;
+  margin: 0;
+}
+
+.ex-step-link {
+  color: #10b981;
+  text-decoration: underline;
+  text-decoration-style: dashed;
+  text-underline-offset: 2px;
+  transition: color 0.2s;
+}
+.ex-step-link:hover {
+  color: #34d399;
+}
+
+/* Hint interne à une étape (ex: avertissement PAT) */
+.ex-step-hint {
+  font-size: 0.75rem;
+  color: #8b8ba0;
+  padding: 0.4rem 1rem 0.75rem;
+  margin: 0;
+  line-height: 1.55;
+}
+
 /* Bloc de code */
 .ex-code-block {
   background: #0d0d14;

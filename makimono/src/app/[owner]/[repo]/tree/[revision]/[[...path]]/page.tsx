@@ -224,10 +224,34 @@ git checkout -b main`}</pre>
                 </div>
               </div>
 
-              {/* Étape 3 : Premier push */}
+              {/* Étape 3 : Authentification PAT (Phase 19A-Git) */}
               <div className="ex-empty-step">
                 <div className="ex-step-header">
                   <span className="ex-step-num">3</span>
+                  <span className="ex-step-label">Authentification (PAT)</span>
+                </div>
+                <p className="ex-step-desc">
+                  Créez un <a href="/settings/tokens" className="ex-step-link">Personal Access Token</a> puis configurez Git :
+                </p>
+                <div className="ex-code-block">
+                  <pre>{`# Option A : Git credential store (persistant)
+git config --global credential.helper store
+# Lors du premier push, entrez :
+#   Username: ${owner}
+#   Password: shb_votre_token_ici
+
+# Option B : URL avec token intégré
+git remote set-url origin http://${owner}:VOTRE_PAT@localhost:3000/${owner}/${repo}.git`}</pre>
+                </div>
+                <p className="ex-step-hint">
+                  🔑 Le token n&apos;est affiché qu&apos;une seule fois lors de sa création. Copiez-le avant de quitter la page.
+                </p>
+              </div>
+
+              {/* Étape 4 : Premier push */}
+              <div className="ex-empty-step">
+                <div className="ex-step-header">
+                  <span className="ex-step-num">4</span>
                   <span className="ex-step-label">Premier commit &amp; push</span>
                 </div>
                 <div className="ex-code-block">
