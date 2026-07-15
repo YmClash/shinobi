@@ -123,3 +123,10 @@ futures-util = { version = "0.3" }
 
 # — Text Diff (Phase 17 — Commits & Diff Colorisé) —
 similar = { version = "2" }
+
+# — Auth (Phase 19A — Les Portes de Babylone) —
+argon2 = { version = "0.5", features = ["std"] }
+jsonwebtoken = { version = "9" }
+rand = { version = "0.9" }
+sha2 = { version = "0.10" }
+hex = { version = "0.4" }

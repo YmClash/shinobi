@@ -41,6 +41,10 @@ pub enum DomainError {
     #[error("Commit introuvable: {id}")]
     CommitNotFound { id: String },
 
+    /// Authentification requise ou invalide (Phase 19A — Auth).
+    #[error("Non authentifié: {0}")]
+    Unauthorized(String),
+
     /// Accès refusé (multi-tenant — Phase 10A).
     #[error("Accès refusé: {0}")]
     Forbidden(String),

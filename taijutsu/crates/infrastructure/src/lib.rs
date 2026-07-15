@@ -11,6 +11,7 @@
 //! - `content`      — **Genjutsu** : IPFS/Kubo (stockage distribué)
 //! - `embeddings`   — **RAG** : Nomic/fastembed (embedding vectoriel)
 
+pub mod auth;
 pub mod cache;
 pub mod content;
 pub mod embeddings;

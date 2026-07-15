@@ -4256,3 +4256,496 @@ html * {
 [data-theme="glass"] .diff-layout-btn-active {
   background: oklch(0.15 0.02 260 / 80%);
 }
+
+/* ═══════════════════════════════════════════════════════════════
+   PHASE 19A — Auth & RBAC — Portes de Babylone
+   ═══════════════════════════════════════════════════════════════ */
+
+/* ── Auth Page (Login / Register) ──────────────────────────── */
+.auth-page {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  min-height: 70vh;
+}
+
+.auth-card {
+  width: 100%;
+  max-width: 420px;
+  padding: 2rem 2.25rem;
+  border-radius: 16px;
+  border: 1px solid var(--border);
+  background: var(--card);
+  box-shadow: 0 8px 32px oklch(0 0 0 / 15%), 0 1px 4px oklch(0 0 0 / 8%);
+}
+
+.auth-logo {
+  display: flex;
+  align-items: center;
+  gap: 0.75rem;
+  margin-bottom: 1.5rem;
+}
+
+.auth-logo-icon {
+  font-size: 2rem;
+  line-height: 1;
+}
+
+.auth-logo-text {
+  display: flex;
+  flex-direction: column;
+}
+
+.auth-logo-brand {
+  font-size: 1rem;
+  font-weight: 800;
+  letter-spacing: 0.15em;
+  color: var(--primary);
+}
+
+.auth-logo-sub {
+  font-size: 0.6rem;
+  font-weight: 500;
+  letter-spacing: 0.1em;
+  color: var(--muted-foreground);
+  text-transform: uppercase;
+}
+
+.auth-title {
+  font-size: 1.25rem;
+  font-weight: 700;
+  color: var(--foreground);
+  margin-bottom: 0.25rem;
+}
+
+.auth-subtitle {
+  font-size: 0.8rem;
+  color: var(--muted-foreground);
+  margin-bottom: 1.25rem;
+}
+
+.auth-error {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+  padding: 0.55rem 0.85rem;
+  border-radius: 8px;
+  background: oklch(0.55 0.2 25 / 12%);
+  border: 1px solid oklch(0.55 0.2 25 / 25%);
+  color: oklch(0.70 0.22 25);
+  font-size: 0.78rem;
+  margin-bottom: 1rem;
+  animation: fade-in-up 0.3s ease-out;
+}
+
+.auth-form {
+  display: flex;
+  flex-direction: column;
+  gap: 0.85rem;
+}
+
+.auth-field {
+  display: flex;
+  flex-direction: column;
+  gap: 0.3rem;
+  flex: 1;
+}
+
+.auth-field-row {
+  display: flex;
+  gap: 0.75rem;
+}
+
+.auth-label {
+  font-size: 0.72rem;
+  font-weight: 600;
+  color: var(--foreground);
+  letter-spacing: 0.02em;
+}
+
+.auth-input {
+  width: 100%;
+  padding: 0.55rem 0.85rem;
+  border-radius: 8px;
+  border: 1px solid var(--border);
+  background: var(--background);
+  color: var(--foreground);
+  font-size: 0.82rem;
+  font-family: var(--font-sans);
+  outline: none;
+  transition: border-color 0.2s ease, box-shadow 0.2s ease;
+}
+
+.auth-input:focus {
+  border-color: var(--primary);
+  box-shadow: 0 0 0 3px oklch(from var(--primary) l c h / 15%);
+}
+
+.auth-input:disabled {
+  opacity: 0.5;
+  cursor: not-allowed;
+}
+
+.auth-input::placeholder {
+  color: var(--muted-foreground);
+  opacity: 0.5;
+}
+
+.auth-submit {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 0.5rem;
+  width: 100%;
+  padding: 0.65rem 1rem;
+  margin-top: 0.25rem;
+  border-radius: 8px;
+  border: none;
+  background: var(--primary);
+  color: var(--primary-foreground);
+  font-size: 0.82rem;
+  font-weight: 600;
+  font-family: var(--font-sans);
+  cursor: pointer;
+  transition: opacity 0.2s ease, transform 0.15s ease;
+}
+
+.auth-submit:hover:not(:disabled) {
+  opacity: 0.9;
+  transform: translateY(-1px);
+}
+
+.auth-submit:active:not(:disabled) {
+  transform: translateY(0);
+}
+
+.auth-submit:disabled {
+  opacity: 0.6;
+  cursor: not-allowed;
+}
+
+.auth-spinner {
+  display: inline-block;
+  width: 14px;
+  height: 14px;
+  border: 2px solid oklch(1 0 0 / 30%);
+  border-top-color: oklch(1 0 0 / 90%);
+  border-radius: 50%;
+  animation: oracle-spinner 0.6s linear infinite;
+}
+
+.auth-footer {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 0.4rem;
+  margin-top: 1.25rem;
+  padding-top: 1rem;
+  border-top: 1px solid var(--border);
+  font-size: 0.75rem;
+  color: var(--muted-foreground);
+}
+
+.auth-link {
+  color: var(--primary);
+  font-weight: 600;
+  text-decoration: none;
+  transition: opacity 0.2s;
+}
+
+.auth-link:hover {
+  opacity: 0.8;
+  text-decoration: underline;
+}
+
+/* ── Header Auth Zone ──────────────────────────────────────── */
+.header-user-menu {
+  display: flex;
+  align-items: center;
+  gap: 0.35rem;
+}
+
+.header-user-badge {
+  display: flex;
+  align-items: center;
+  gap: 0.4rem;
+  padding: 0.2rem 0.6rem 0.2rem 0.25rem;
+  border-radius: 9999px;
+  background: var(--muted);
+  color: var(--foreground);
+  font-size: 0.72rem;
+  font-weight: 500;
+  text-decoration: none;
+  transition: background 0.2s ease, transform 0.15s ease;
+}
+
+.header-user-badge:hover {
+  background: var(--accent);
+  transform: scale(1.02);
+}
+
+.header-user-avatar {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 22px;
+  height: 22px;
+  border-radius: 50%;
+  background: linear-gradient(135deg, var(--primary), oklch(from var(--primary) calc(l - 0.1) c h));
+  color: var(--primary-foreground);
+  font-size: 0.65rem;
+  font-weight: 700;
+}
+
+.header-user-handle {
+  max-width: 100px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.header-logout-btn {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 26px;
+  height: 26px;
+  border-radius: 6px;
+  border: none;
+  background: transparent;
+  cursor: pointer;
+  font-size: 0.75rem;
+  transition: background 0.2s;
+}
+
+.header-logout-btn:hover {
+  background: oklch(0.6 0.2 25 / 15%);
+}
+
+.header-login-btn {
+  padding: 0.25rem 0.75rem;
+  border-radius: 6px;
+  background: var(--primary);
+  color: var(--primary-foreground);
+  font-size: 0.7rem;
+  font-weight: 600;
+  text-decoration: none;
+  transition: opacity 0.2s ease, transform 0.15s ease;
+}
+
+.header-login-btn:hover {
+  opacity: 0.9;
+  transform: scale(1.02);
+}
+
+/* ── Sidebar User Section ──────────────────────────────────── */
+.sidebar-user-item {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+  padding: 0.4rem 0.5rem;
+  border-radius: 8px;
+  text-decoration: none;
+  color: var(--sidebar-foreground);
+  transition: background 0.2s;
+}
+
+.sidebar-user-item:hover {
+  background: var(--sidebar-accent);
+}
+
+.sidebar-user-avatar {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 28px;
+  height: 28px;
+  border-radius: 50%;
+  background: linear-gradient(135deg, var(--primary), oklch(from var(--primary) calc(l - 0.15) c h));
+  color: var(--primary-foreground);
+  font-size: 0.7rem;
+  font-weight: 700;
+  flex-shrink: 0;
+}
+
+.sidebar-user-info {
+  display: flex;
+  flex-direction: column;
+  min-width: 0;
+}
+
+.sidebar-user-name {
+  font-size: 0.72rem;
+  font-weight: 600;
+  color: var(--sidebar-foreground);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.sidebar-user-handle {
+  font-size: 0.6rem;
+  color: var(--muted-foreground);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+/* ── PAT Management ────────────────────────────────────────── */
+.pat-create-section {
+  padding: 1rem 1.25rem;
+  border-radius: 12px;
+  border: 1px solid var(--border);
+  background: var(--card);
+}
+
+.pat-create-form {
+  display: flex;
+  flex-direction: column;
+  gap: 0.75rem;
+}
+
+.pat-create-form .auth-input {
+  width: 100%;
+}
+
+.pat-create-btn {
+  width: 100%;
+  white-space: nowrap;
+}
+
+.pat-reveal {
+  padding: 0.85rem 1rem;
+  border-radius: 10px;
+  border: 1px solid oklch(0.6 0.2 150 / 30%);
+  background: oklch(0.6 0.2 150 / 8%);
+  margin-bottom: 1rem;
+}
+
+.pat-reveal-header {
+  display: flex;
+  align-items: center;
+  gap: 0.4rem;
+  margin-bottom: 0.35rem;
+}
+
+.pat-token-display {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+  padding: 0.5rem 0.75rem;
+  border-radius: 8px;
+  background: var(--muted);
+  border: 1px solid var(--border);
+}
+
+.pat-token-code {
+  font-family: var(--font-mono);
+  font-size: 0.7rem;
+  word-break: break-all;
+  flex: 1;
+  color: var(--foreground);
+}
+
+.pat-copy-btn {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 28px;
+  height: 28px;
+  border-radius: 6px;
+  border: none;
+  background: var(--accent);
+  cursor: pointer;
+  font-size: 0.8rem;
+  transition: transform 0.15s ease;
+  flex-shrink: 0;
+}
+
+.pat-copy-btn:hover {
+  transform: scale(1.1);
+}
+
+.pat-item {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 0.6rem 0.85rem;
+  border-radius: 8px;
+  border: 1px solid var(--border);
+  background: var(--card);
+  transition: background 0.2s;
+}
+
+.pat-item:hover {
+  background: var(--accent);
+}
+
+.pat-item-info {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+}
+
+.pat-item-icon {
+  font-size: 0.85rem;
+}
+
+.pat-item-label {
+  font-size: 0.8rem;
+  font-weight: 500;
+  color: var(--foreground);
+}
+
+.pat-item-date {
+  font-size: 0.65rem;
+  color: var(--muted-foreground);
+}
+
+.pat-usage-guide {
+  padding: 1rem 1.25rem;
+  border-radius: 12px;
+  border: 1px solid var(--border);
+  background: var(--card);
+}
+
+.pat-code-block {
+  padding: 0.75rem 1rem;
+  border-radius: 8px;
+  background: var(--muted);
+  font-family: var(--font-mono);
+  font-size: 0.72rem;
+  line-height: 1.6;
+  overflow-x: auto;
+  color: var(--foreground);
+}
+
+/* ── Theme-specific auth enhancements ──────────────────────── */
+[data-theme="cyberpunk"] .auth-card {
+  border-color: oklch(0.72 0.25 310 / 25%);
+  box-shadow: 0 0 20px oklch(0.72 0.25 310 / 8%),
+              0 8px 32px oklch(0 0 0 / 25%),
+              inset 0 0 30px oklch(0.72 0.25 310 / 3%);
+}
+
+[data-theme="cyberpunk"] .auth-submit {
+  box-shadow: 0 0 12px oklch(0.72 0.25 310 / 25%);
+}
+
+[data-theme="cyberpunk"] .auth-input:focus {
+  border-color: oklch(0.72 0.25 310);
+  box-shadow: 0 0 0 3px oklch(0.72 0.25 310 / 15%);
+}
+
+[data-theme="glass"] .auth-card {
+  backdrop-filter: blur(24px) saturate(180%);
+  -webkit-backdrop-filter: blur(24px) saturate(180%);
+  background: oklch(0.15 0.02 260 / 65%);
+  border-color: oklch(0.5 0.03 260 / 20%);
+}
+
+[data-theme="scroll"] .auth-card {
+  background: oklch(0.97 0.01 80 / 95%);
+  border-color: oklch(0.55 0.05 60 / 30%);
+  box-shadow: 0 4px 20px oklch(0.4 0.05 60 / 10%);
+}

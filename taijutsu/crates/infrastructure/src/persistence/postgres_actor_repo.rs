@@ -11,7 +11,7 @@ use uuid::Uuid;
 
 use domain::entities::actor::{Actor, ActorType};
 use domain::errors::DomainError;
-use domain::ports::actor_repository::ActorRepository;
+use domain::ports::actor_repository::{ActorRepository, PatInfo};
 
 /// Adaptateur PostgreSQL pour la persistence des acteurs.
 #[derive(Debug, Clone)]
@@ -50,6 +50,9 @@ fn row_to_actor(row: sqlx::postgres::PgRow) -> Result<Actor, DomainError> {
         avatar_url: row
             .try_get("avatar_url")
             .map_err(|e| DomainError::Persistence(e.to_string()))?,
+        email: row
+            .try_get("email")
+            .map_err(|e| DomainError::Persistence(e.to_string()))?,
         bio: row
             .try_get("bio")
             .map_err(|e| DomainError::Persistence(e.to_string()))?,
@@ -65,8 +68,8 @@ impl ActorRepository for PostgresActorRepository {
     async fn save(&self, actor: &Actor) -> Result<(), DomainError> {
         sqlx::query(
             r#"
-            INSERT INTO actors (id, handle, display_name, actor_type, avatar_url, bio, created_at)
-            VALUES ($1, $2, $3, $4::actor_type, $5, $6, $7)
+            INSERT INTO actors (id, handle, display_name, actor_type, avatar_url, email, bio, created_at)
+            VALUES ($1, $2, $3, $4::actor_type, $5, $6, $7, $8)
             "#,
         )
         .bind(actor.id)
@@ -74,6 +77,7 @@ impl ActorRepository for PostgresActorRepository {
         .bind(&actor.display_name)
         .bind(actor.actor_type.as_sql_str())
         .bind(&actor.avatar_url)
+        .bind(&actor.email)
         .bind(&actor.bio)
         .bind(actor.created_at)
         .execute(&self.pool)
@@ -92,7 +96,7 @@ impl ActorRepository for PostgresActorRepository {
     #[instrument(skip(self))]
     async fn find_by_id(&self, id: &Uuid) -> Result<Option<Actor>, DomainError> {
         let row = sqlx::query(
-            "SELECT id, handle, display_name, actor_type::text, avatar_url, bio, created_at \
+            "SELECT id, handle, display_name, actor_type::text, avatar_url, email, bio, created_at \
              FROM actors WHERE id = $1",
         )
         .bind(id)
@@ -109,7 +113,7 @@ impl ActorRepository for PostgresActorRepository {
     #[instrument(skip(self))]
     async fn find_by_handle(&self, handle: &str) -> Result<Option<Actor>, DomainError> {
         let row = sqlx::query(
-            "SELECT id, handle, display_name, actor_type::text, avatar_url, bio, created_at \
+            "SELECT id, handle, display_name, actor_type::text, avatar_url, email, bio, created_at \
              FROM actors WHERE handle = $1",
         )
         .bind(handle)
@@ -121,5 +125,123 @@ impl ActorRepository for PostgresActorRepository {
             Some(r) => Ok(Some(row_to_actor(r)?)),
             None => Ok(None),
         }
+    }
+
+    #[instrument(skip(self))]
+    async fn find_by_email(&self, email: &str) -> Result<Option<Actor>, DomainError> {
+        let row = sqlx::query(
+            "SELECT a.id, a.handle, a.display_name, a.actor_type::text, a.avatar_url, a.email, a.bio, a.created_at \
+             FROM actors a WHERE a.email = $1",
+        )
+        .bind(email)
+        .fetch_optional(&self.pool)
+        .await
+        .map_err(|e| DomainError::Persistence(e.to_string()))?;
+
+        match row {
+            Some(r) => Ok(Some(row_to_actor(r)?)),
+            None => Ok(None),
+        }
+    }
+
+    // ── Credentials (Phase 19A) ─────────────────────────
+
+    #[instrument(skip(self, secret_hash))]
+    async fn save_credential(
+        &self,
+        actor_id: &Uuid,
+        cred_type: &str,
+        secret_hash: &str,
+        email: Option<&str>,
+        label: Option<&str>,
+    ) -> Result<(), DomainError> {
+        sqlx::query(
+            r#"
+            INSERT INTO credentials (actor_id, cred_type, secret_hash, email, label)
+            VALUES ($1, $2::credential_type, $3, $4, $5)
+            "#,
+        )
+        .bind(actor_id)
+        .bind(cred_type)
+        .bind(secret_hash)
+        .bind(email)
+        .bind(label)
+        .execute(&self.pool)
+        .await
+        .map_err(|e| {
+            if e.to_string().contains("duplicate key") {
+                DomainError::Duplicate("Credential already exists".to_string())
+            } else {
+                DomainError::Persistence(e.to_string())
+            }
+        })?;
+
+        Ok(())
+    }
+
+    #[instrument(skip(self))]
+    async fn find_credential_hash(
+        &self,
+        actor_id: &Uuid,
+        cred_type: &str,
+    ) -> Result<Option<String>, DomainError> {
+        let row = sqlx::query(
+            "SELECT secret_hash FROM credentials \
+             WHERE actor_id = $1 AND cred_type = $2::credential_type \
+             ORDER BY created_at DESC LIMIT 1",
+        )
+        .bind(actor_id)
+        .bind(cred_type)
+        .fetch_optional(&self.pool)
+        .await
+        .map_err(|e| DomainError::Persistence(e.to_string()))?;
+
+        Ok(row.map(|r| r.try_get::<String, _>("secret_hash").unwrap_or_default()))
+    }
+
+    #[instrument(skip(self))]
+    async fn find_all_credential_hashes(
+        &self,
+        actor_id: &Uuid,
+        cred_type: &str,
+    ) -> Result<Vec<String>, DomainError> {
+        let rows = sqlx::query(
+            "SELECT secret_hash FROM credentials \
+             WHERE actor_id = $1 AND cred_type = $2::credential_type",
+        )
+        .bind(actor_id)
+        .bind(cred_type)
+        .fetch_all(&self.pool)
+        .await
+        .map_err(|e| DomainError::Persistence(e.to_string()))?;
+
+        Ok(rows
+            .into_iter()
+            .filter_map(|r| r.try_get::<String, _>("secret_hash").ok())
+            .collect())
+    }
+
+    #[instrument(skip(self))]
+    async fn list_pats(&self, actor_id: &Uuid) -> Result<Vec<PatInfo>, DomainError> {
+        let rows = sqlx::query(
+            "SELECT id, label, created_at FROM credentials \
+             WHERE actor_id = $1 AND cred_type = 'api_key' \
+             ORDER BY created_at DESC",
+        )
+        .bind(actor_id)
+        .fetch_all(&self.pool)
+        .await
+        .map_err(|e| DomainError::Persistence(e.to_string()))?;
+
+        Ok(rows
+            .into_iter()
+            .filter_map(|r| {
+                Some(PatInfo {
+                    id: r.try_get("id").ok()?,
+                    label: r.try_get("label").ok()?,
+                    created_at: r.try_get("created_at").ok()?,
+                })
+            })
+            .collect())
     }
 }

@@ -87,6 +87,26 @@ pub struct SharedState {
 
     /// Repository des opérations pour le total_count (Phase 17).
     pub operation_repo: Arc<dyn domain::ports::repository::OperationRepository>,
+
+    // ── Phase 19A — Auth & RBAC ──────────────────────────────────
+
+    /// Service d'authentification (JWT + Argon2 + PAT).
+    pub auth_service: Arc<dyn domain::ports::auth_service::AuthService>,
+
+    /// Repository des acteurs (pour /me, PAT lookup, etc.).
+    pub actor_repo: Arc<dyn domain::ports::actor_repository::ActorRepository>,
+
+    /// Repository des dépôts (pour RBAC — is_collaborator, get_role).
+    pub repo_repo: Arc<dyn domain::ports::repo_repository::RepoRepository>,
+
+    /// Use case: inscription d'un acteur.
+    pub register_actor: Arc<application::use_cases::register_actor::RegisterActorUseCase>,
+
+    /// Use case: connexion d'un acteur.
+    pub login_actor: Arc<application::use_cases::login_actor::LoginActorUseCase>,
+
+    /// Use case: création de PAT.
+    pub create_pat: Arc<application::use_cases::create_pat::CreatePatUseCase>,
 }
 
 // ── Phase 12A — Git Bridge HTTP ──────────────────────────────────────

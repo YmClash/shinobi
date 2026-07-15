@@ -121,6 +121,9 @@ pub struct Actor {
     /// URL de l'avatar (optionnel).
     pub avatar_url: Option<String>,
 
+    /// Adresse email (optionnel — humains uniquement, login Phase 19A).
+    pub email: Option<String>,
+
     /// Biographie / description (optionnel).
     pub bio: Option<String>,
 
@@ -141,6 +144,7 @@ impl Actor {
             display_name: display_name.into(),
             actor_type,
             avatar_url: None,
+            email: None,
             bio: None,
             created_at: Utc::now(),
         }

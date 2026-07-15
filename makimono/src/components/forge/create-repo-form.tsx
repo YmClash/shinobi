@@ -10,6 +10,7 @@ import { Badge } from "@/components/ui/badge";
 interface CreateRepoFormProps {
   onCreated: () => void;
   forgeAction: (formData: FormData) => Promise<{ success: boolean; error?: string }>;
+  ownerHandle?: string;
 }
 
 /** Validates a slug: lowercase alphanumeric + hyphens, 3-64 chars */
@@ -28,7 +29,7 @@ function toSlug(s: string): string {
     .slice(0, 64);
 }
 
-export function CreateRepoForm({ onCreated, forgeAction }: CreateRepoFormProps) {
+export function CreateRepoForm({ onCreated, forgeAction, ownerHandle = "system" }: CreateRepoFormProps) {
   const [name, setName] = useState("");
   const [displayName, setDisplayName] = useState("");
   const [description, setDescription] = useState("");
@@ -131,7 +132,7 @@ export function CreateRepoForm({ onCreated, forgeAction }: CreateRepoFormProps) 
             Identifiant (slug)
             {name && (
               <span className={`text-[10px] font-mono ${slugValid ? "text-emerald-500" : "text-destructive"}`}>
-                system/{name}
+                {ownerHandle}/{name}
               </span>
             )}
           </label>

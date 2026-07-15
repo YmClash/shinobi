@@ -296,6 +296,15 @@ pub fn create_router(state: SharedState) -> Router {
         .route("/api/v1/sensei/chat", post(sensei_chat_handler))
         .route("/api/v1/sensei/models", get(sensei_models_handler))
         .route("/api/v1/sensei/warmup", post(sensei_warmup_handler))
+        // ── Phase 19A — Auth & RBAC ─────────────────────────────────
+        .route("/api/v1/auth/register", post(crate::rest::auth_routes::register_handler))
+        .route("/api/v1/auth/login", post(crate::rest::auth_routes::login_handler))
+        .route("/api/v1/auth/me", get(crate::rest::auth_routes::me_handler))
+        .route(
+            "/api/v1/auth/tokens",
+            post(crate::rest::auth_routes::create_pat_handler)
+                .get(crate::rest::auth_routes::list_pats_handler),
+        )
         // ── Métriques Prometheus ────────────────────
         .route(
             "/metrics",

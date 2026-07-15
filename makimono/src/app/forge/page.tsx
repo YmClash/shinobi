@@ -5,6 +5,7 @@ import { Skeleton } from "@/components/ui/skeleton";
 import { RepoCard } from "@/components/forge/repo-card";
 import { CreateRepoForm } from "@/components/forge/create-repo-form";
 import { useRepositories, emitRepoCreated } from "@/hooks/use-api";
+import { useAuth } from "@/hooks/use-auth";
 
 import { forgeRepository } from "./actions";
 
@@ -12,11 +13,11 @@ import { forgeRepository } from "./actions";
 // La Forge — Repository listing & creation page
 // ═══════════════════════════════════════════════════════════════
 
-const OWNER_HANDLE = "system"; // SYSTEM_ACTOR handle (migration 006)
-
 export default function ForgePage() {
   const [showForm, setShowForm] = useState(false);
-  const { data, loading, error, refetch } = useRepositories(OWNER_HANDLE);
+  const { user } = useAuth();
+  const ownerHandle = user?.handle ?? null;
+  const { data, loading, error, refetch } = useRepositories(ownerHandle);
 
   const handleCreated = useCallback(() => {
     setShowForm(false);
@@ -50,10 +51,9 @@ export default function ForgePage() {
             className={`
               inline-flex items-center gap-1.5 px-3 py-1.5 text-xs font-medium rounded-lg
               transition-all cursor-pointer
-              ${
-                showForm
-                  ? "bg-muted text-muted-foreground hover:bg-muted/80"
-                  : "bg-primary text-primary-foreground hover:bg-primary/90 hover:shadow-lg hover:shadow-primary/20 hover:scale-105 active:scale-95"
+              ${showForm
+                ? "bg-muted text-muted-foreground hover:bg-muted/80"
+                : "bg-primary text-primary-foreground hover:bg-primary/90 hover:shadow-lg hover:shadow-primary/20 hover:scale-105 active:scale-95"
               }
             `}
           >
@@ -70,7 +70,10 @@ export default function ForgePage() {
             <span>🔨</span>
             <span>Forger un Nouveau Dépôt</span>
           </h2>
-          <CreateRepoForm onCreated={handleCreated} forgeAction={forgeRepository} />
+          <CreateRepoForm onCreated={handleCreated} forgeAction={(formData: FormData) => {
+            if (user?.id) formData.set("owner_id", user.id);
+            return forgeRepository(formData);
+          }} ownerHandle={ownerHandle ?? "system"} />
         </div>
       )}
 
@@ -97,7 +100,7 @@ export default function ForgePage() {
             <RepoCard
               key={repo.id}
               repo={repo}
-              ownerHandle={OWNER_HANDLE}
+              ownerHandle={ownerHandle ?? "system"}
               className={`animate-fade-in-up stagger-${Math.min(i + 1, 5)}`}
             />
           ))}

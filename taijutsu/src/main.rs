@@ -37,6 +37,9 @@ use application::use_cases::resolve_repo::ResolveRepoUseCase;
 use application::use_cases::review_operation::ReviewOperationUseCase;
 use application::use_cases::search_chunks::SearchChunksUseCase;
 use application::use_cases::sensei_chat::SenseiChatUseCase;
+use application::use_cases::register_actor::RegisterActorUseCase;
+use application::use_cases::login_actor::LoginActorUseCase;
+use application::use_cases::create_pat::CreatePatUseCase;
 use infrastructure::cache::redis_cache::RedisCache;
 use infrastructure::content::ipfs_store::IpfsContentStore;
 use infrastructure::embeddings::nomic_service::NomicEmbedService;
@@ -51,6 +54,7 @@ use infrastructure::persistence::postgres_repo_repo::PostgresRepoRepository;
 use infrastructure::persistence::postgres_review_repo::PostgresReviewRepository;
 use infrastructure::vcs::jujutsu_engine::JujutsuEngine;
 use infrastructure::vcs::git_cgi::GitCgiBackend;
+use infrastructure::auth::jwt_auth_service::JwtAuthService;
 use domain::entities::actor::DEFAULT_REPO_ID;
 use domain::ports::vcs_engine::VcsEngine as _; // Trait import — rend init_workspace() visible
 use domain::ports::repository::OperationRepository as _; // Trait import — rend list_recent() visible (backfill)
@@ -281,10 +285,34 @@ async fn main() -> anyhow::Result<()> {
         repo_repo.clone(),
     ));
     let create_repository = Arc::new(CreateRepositoryUseCase::new(
-        actor_repo,
-        repo_repo,
+        actor_repo.clone(),
+        repo_repo.clone(),
         vcs.clone(),
     ));
+
+    // ── Phase 19A : Auth & RBAC ────────────────────────────────
+    let auth_service: Arc<dyn domain::ports::auth_service::AuthService> =
+        Arc::new(JwtAuthService::new(&config.jwt_secret, config.jwt_duration_secs));
+
+    let register_actor = Arc::new(RegisterActorUseCase::new(
+        actor_repo.clone(),
+        auth_service.clone(),
+        config.jwt_duration_secs,
+    ));
+    let login_actor = Arc::new(LoginActorUseCase::new(
+        actor_repo.clone(),
+        auth_service.clone(),
+        config.jwt_duration_secs,
+    ));
+    let create_pat = Arc::new(CreatePatUseCase::new(
+        actor_repo.clone(),
+        auth_service.clone(),
+    ));
+
+    info!(
+        jwt_duration_days = config.jwt_duration_secs / 86400,
+        "🔐 Auth Service initialisé (JWT HS256 + Argon2 + PAT SHA-256)"
+    );
 
     // ── Phase 6 : Explorateur de Code ─────────────────────────────
     let get_tree = Arc::new(GetTreeUseCase::new(
@@ -347,6 +375,13 @@ async fn main() -> anyhow::Result<()> {
         // Phase 17 — Diff Colorisé
         vcs_engine: vcs.clone(),
         operation_repo: repo.clone(),
+        // Phase 19A — Auth & RBAC
+        auth_service: auth_service.clone(),
+        actor_repo: actor_repo.clone(),
+        repo_repo: repo_repo.clone(),
+        register_actor,
+        login_actor,
+        create_pat,
     };
 
     // ── Git Bridge HTTP (Phase 12A) ────────────────────

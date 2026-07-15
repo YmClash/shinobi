@@ -74,6 +74,15 @@ pub struct Config {
     /// Modèle Ollama pour Sensei (conversationnel, spécialisé code).
     /// Défaut: "qwen2.5-coder:7b".
     pub sensei_ollama_model: String,
+
+    // ── Phase 19A — Auth & RBAC ───────────────────────────────────────
+
+    /// Secret JWT pour signer les tokens (HS256). ≥32 caractères recommandé.
+    /// Défaut: "shinobi-dev-secret-change-me-in-production!" (dev uniquement).
+    pub jwt_secret: String,
+
+    /// Durée de validité des JWT en secondes. Défaut: 604800 (7 jours).
+    pub jwt_duration_secs: i64,
 }
 
 impl Config {
@@ -134,6 +143,13 @@ impl Config {
                 .unwrap_or_else(|_| "http://localhost:11436".to_string()),
             sensei_ollama_model: env::var("SENSEI_OLLAMA_MODEL")
                 .unwrap_or_else(|_| "smollm2:1.7b".to_string()),
+            // ── Phase 19A — Auth ────────────────────────
+            jwt_secret: env::var("JWT_SECRET")
+                .unwrap_or_else(|_| "shinobi-dev-secret-change-me-in-production!".to_string()),
+            jwt_duration_secs: env::var("JWT_DURATION_SECS")
+                .ok()
+                .and_then(|d| d.parse().ok())
+                .unwrap_or(604_800), // 7 days
         }
     }
 }

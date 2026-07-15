@@ -58,6 +58,12 @@ tokio-stream = { workspace = true }
 # — Text Diff (Phase 17 — Commits & Diff Colorisé) —
 similar = { workspace = true }
 
+# — Auth (Phase 19A — Les Portes de Babylone) —
+argon2 = { workspace = true }
+jsonwebtoken = { workspace = true }
+rand = { workspace = true }
+sha2 = { workspace = true }
+hex = { workspace = true }
 [dev-dependencies]
 tempfile = { workspace = true }
 tokio = { workspace = true }

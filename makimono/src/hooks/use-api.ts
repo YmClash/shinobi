@@ -315,10 +315,10 @@ export function useScoreHistory(limit = 10) {
  * - Refetch sur visibilitychange (retour onglet)
  * - Refetch sur l'événement custom 'shinobi:repo-created'
  */
-export function useRepositories(handle: string) {
+export function useRepositories(handle: string | null) {
   const state = useApi<RepositoriesResponse>(
-    `repos:${handle}`,
-    () => listRepositories(handle),
+    handle ? `repos:${handle}` : "__repos_none__",
+    handle ? () => listRepositories(handle) : () => Promise.resolve({ owner: "", repositories: [], count: 0 }),
     [handle],
     CacheTTL.MEDIUM,
     30_000, // Auto-refresh 30s

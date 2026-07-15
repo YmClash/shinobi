@@ -186,4 +186,40 @@ impl RepoRepository for PostgresRepoRepository {
 
         Ok(())
     }
+
+    #[instrument(skip(self))]
+    async fn is_collaborator(
+        &self,
+        actor_id: &Uuid,
+        repo_id: &Uuid,
+    ) -> Result<bool, DomainError> {
+        let row = sqlx::query(
+            "SELECT EXISTS(SELECT 1 FROM collaborators WHERE actor_id = $1 AND repository_id = $2) AS is_collab",
+        )
+        .bind(actor_id)
+        .bind(repo_id)
+        .fetch_one(&self.pool)
+        .await
+        .map_err(|e| DomainError::Persistence(e.to_string()))?;
+
+        Ok(row.try_get::<bool, _>("is_collab").unwrap_or(false))
+    }
+
+    #[instrument(skip(self))]
+    async fn get_role(
+        &self,
+        actor_id: &Uuid,
+        repo_id: &Uuid,
+    ) -> Result<Option<String>, DomainError> {
+        let row = sqlx::query(
+            "SELECT role::text FROM collaborators WHERE actor_id = $1 AND repository_id = $2",
+        )
+        .bind(actor_id)
+        .bind(repo_id)
+        .fetch_optional(&self.pool)
+        .await
+        .map_err(|e| DomainError::Persistence(e.to_string()))?;
+
+        Ok(row.and_then(|r| r.try_get::<String, _>("role").ok()))
+    }
 }

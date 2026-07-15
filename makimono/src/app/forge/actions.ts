@@ -22,6 +22,7 @@ export async function forgeRepository(formData: FormData): Promise<ForgeRepoResu
     const displayName = formData.get("display_name") as string;
     const description = formData.get("description") as string;
     const visibility = formData.get("visibility") as string;
+    const ownerId = (formData.get("owner_id") as string) || DEFAULT_OWNER_ID;
 
     if (!name?.trim() || !displayName?.trim()) {
       return { success: false, error: "Le nom et le nom d'affichage sont requis." };
@@ -31,7 +32,7 @@ export async function forgeRepository(formData: FormData): Promise<ForgeRepoResu
       method: "POST",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({
-        owner_id: DEFAULT_OWNER_ID,
+        owner_id: ownerId,
         name: name.trim(),
         display_name: displayName.trim(),
         description: description?.trim() || null,

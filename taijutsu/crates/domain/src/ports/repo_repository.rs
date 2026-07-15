@@ -42,4 +42,19 @@ pub trait RepoRepository: Send + Sync {
         repo_id: &Uuid,
         role: &str,
     ) -> Result<(), DomainError>;
+
+    /// Vérifie si un acteur est collaborateur d'un dépôt (Phase 19A — RBAC).
+    async fn is_collaborator(
+        &self,
+        actor_id: &Uuid,
+        repo_id: &Uuid,
+    ) -> Result<bool, DomainError>;
+
+    /// Retourne le rôle d'un acteur dans un dépôt (Phase 19A — RBAC).
+    /// Retourne None si l'acteur n'est pas collaborateur.
+    async fn get_role(
+        &self,
+        actor_id: &Uuid,
+        repo_id: &Uuid,
+    ) -> Result<Option<String>, DomainError>;
 }

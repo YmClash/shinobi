@@ -24,4 +24,51 @@ pub trait ActorRepository: Send + Sync {
     /// Retrouve un acteur par son handle unique.
     /// Le handle est unique tous types confondus (namespace universel).
     async fn find_by_handle(&self, handle: &str) -> Result<Option<Actor>, DomainError>;
+
+    /// Retrouve un acteur par son email (login Phase 19A).
+    /// Cherche dans la table credentials (email) et retourne l'acteur associé.
+    async fn find_by_email(&self, email: &str) -> Result<Option<Actor>, DomainError>;
+
+    // ── Credentials (Phase 19A — Auth) ─────────────────────────
+
+    /// Stocke un credential pour un acteur.
+    /// Types: "password", "api_key", "oauth_token", "ssh_key".
+    async fn save_credential(
+        &self,
+        actor_id: &Uuid,
+        cred_type: &str,
+        secret_hash: &str,
+        email: Option<&str>,
+        label: Option<&str>,
+    ) -> Result<(), DomainError>;
+
+    /// Retrouve le hash du credential de type donné pour un acteur.
+    /// Retourne le `secret_hash` ou None si aucun credential de ce type.
+    async fn find_credential_hash(
+        &self,
+        actor_id: &Uuid,
+        cred_type: &str,
+    ) -> Result<Option<String>, DomainError>;
+
+    /// Retrouve tous les hashes de credentials de type donné pour un acteur.
+    /// Utilisé pour les PAT (un acteur peut avoir N api_keys).
+    async fn find_all_credential_hashes(
+        &self,
+        actor_id: &Uuid,
+        cred_type: &str,
+    ) -> Result<Vec<String>, DomainError>;
+
+    /// Liste les PAT d'un acteur (label + created_at, pas le hash).
+    async fn list_pats(
+        &self,
+        actor_id: &Uuid,
+    ) -> Result<Vec<PatInfo>, DomainError>;
+}
+
+/// Informations d'un PAT (sans le secret).
+#[derive(Debug, Clone, serde::Serialize)]
+pub struct PatInfo {
+    pub id: Uuid,
+    pub label: Option<String>,
+    pub created_at: chrono::DateTime<chrono::Utc>,
 }

@@ -77,6 +77,21 @@ mod tests {
                 .filter(|a| a.handle == handle)
                 .cloned())
         }
+        async fn find_by_email(&self, _email: &str) -> Result<Option<Actor>, DomainError> {
+            Ok(None)
+        }
+        async fn save_credential(&self, _actor_id: &Uuid, _cred_type: &str, _secret_hash: &str, _email: Option<&str>, _label: Option<&str>) -> Result<(), DomainError> {
+            Ok(())
+        }
+        async fn find_credential_hash(&self, _actor_id: &Uuid, _cred_type: &str) -> Result<Option<String>, DomainError> {
+            Ok(None)
+        }
+        async fn find_all_credential_hashes(&self, _actor_id: &Uuid, _cred_type: &str) -> Result<Vec<String>, DomainError> {
+            Ok(vec![])
+        }
+        async fn list_pats(&self, _actor_id: &Uuid) -> Result<Vec<domain::ports::actor_repository::PatInfo>, DomainError> {
+            Ok(vec![])
+        }
     }
 
     // ── Mock RepoRepository ──────────────────────────
@@ -118,6 +133,12 @@ mod tests {
         ) -> Result<(), DomainError> {
             Ok(())
         }
+        async fn is_collaborator(&self, _actor_id: &Uuid, _repo_id: &Uuid) -> Result<bool, DomainError> {
+            Ok(true)
+        }
+        async fn get_role(&self, _actor_id: &Uuid, _repo_id: &Uuid) -> Result<Option<String>, DomainError> {
+            Ok(Some("owner".to_string()))
+        }
     }
 
     // ── Helpers ──────────────────────────
@@ -128,6 +149,7 @@ mod tests {
             display_name: handle.to_string(),
             actor_type: ActorType::Human,
             avatar_url: None,
+            email: None,
             bio: None,
             created_at: chrono::Utc::now(),
         }

@@ -143,12 +143,12 @@ export default async function ExplorerPage({ params }: PageProps) {
 
   const latestCommit = lastOp
     ? {
-        hash: lastOp.content_id,
-        message: lastOp.description,
-        author: lastOp.author_id.slice(0, 8), // short UUID as author
-        date: formatDate(lastOp.created_at),
-        oracleScore,
-      }
+      hash: lastOp.content_id,
+      message: lastOp.description,
+      author: lastOp.author_id.slice(0, 8), // short UUID as author
+      date: formatDate(lastOp.created_at),
+      oracleScore,
+    }
     : undefined;
 
   // ── Breadcrumb ────────────────────────────────────────────────
@@ -169,7 +169,7 @@ export default async function ExplorerPage({ params }: PageProps) {
 
     if (isEmpty) {
       // URL HTTP Git pour les commandes de clone
-      const httpUrl = `http://localhost:8080/${owner}/${repo}.git`;
+      const httpUrl = `http://localhost:3000/${owner}/${repo}.git`;
 
       return (
         <div className="ex-page">
@@ -414,10 +414,9 @@ git push -u origin main`}</pre>
               <h3 className="ex-sidebar-title">Oracle Tensai</h3>
               <div className="ex-oracle-score-display">
                 <div className="ex-oracle-gauge">
-                  <span className={`ex-oracle-value ${
-                    oracleScore >= 80 ? "ex-oracle-good" :
-                    oracleScore >= 60 ? "ex-oracle-mid" : "ex-oracle-low"
-                  }`}>
+                  <span className={`ex-oracle-value ${oracleScore >= 80 ? "ex-oracle-good" :
+                      oracleScore >= 60 ? "ex-oracle-mid" : "ex-oracle-low"
+                    }`}>
                     {oracleScore}
                   </span>
                   <span className="ex-oracle-max">/100</span>
