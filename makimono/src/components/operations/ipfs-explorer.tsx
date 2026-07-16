@@ -33,10 +33,11 @@ function formatBytes(bytes: number): string {
 
 interface IpfsExplorerProps {
   operationId: string;
+  repoPrefix: string;
 }
 
-export function IpfsExplorer({ operationId }: IpfsExplorerProps) {
-  const { data, loading, error } = useIpfsContent(operationId);
+export function IpfsExplorer({ operationId, repoPrefix }: IpfsExplorerProps) {
+  const { data, loading, error } = useIpfsContent(repoPrefix, operationId);
   const [selectedFile, setSelectedFile] = useState<IpfsFile | null>(null);
 
   if (loading) {

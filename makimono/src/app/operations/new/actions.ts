@@ -49,7 +49,8 @@ export async function forgeOperation(formData: FormData): Promise<ForgeResult> {
     }
 
     // Call Taijutsu backend directly (server-side, no proxy needed)
-    const response = await fetch(`${TAIJUTSU_URL}/api/v1/operations`, {
+    // Phase 10D: Route fédérée (system/default = dépôt par défaut)
+    const response = await fetch(`${TAIJUTSU_URL}/api/v1/repos/system/default/operations`, {
       method: "POST",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({

@@ -152,8 +152,10 @@ Docs/
 
 # ── Workspace JJ ────────────────────────────
 taijutsu/workspace
+shinobi/.vscode
 
 # -- Embeddings model --
 taijutsu/.fastembed_cache
 makimono/AGENTS.md
 makimono/CLAUDE.md
+CODEX_BOARD_1.md

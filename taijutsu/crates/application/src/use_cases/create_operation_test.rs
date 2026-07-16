@@ -50,12 +50,13 @@ mod tests {
 
     #[async_trait]
     impl VcsEngine for MockVcsEngine {
-        async fn init_workspace(&self, _path: &str) -> Result<(), DomainError> {
+        async fn init_workspace(&self, _repo_id: &Uuid) -> Result<(), DomainError> {
             Ok(())
         }
 
         async fn create_operation(
             &self,
+            _repo_id: &Uuid,
             _description: &str,
             _parent_ids: &[String],
             _files: &[(String, Vec<u8>)],
@@ -67,11 +68,26 @@ mod tests {
             }
         }
 
-        async fn resolve_head(&self) -> Result<Option<ContentId>, DomainError> {
+        async fn resolve_head(&self, _repo_id: &Uuid) -> Result<Option<ContentId>, DomainError> {
             Ok(None)
         }
 
-        async fn diff_since(&self, _cid: &ContentId) -> Result<Vec<String>, DomainError> {
+        async fn diff_since(&self, _repo_id: &Uuid, _cid: &ContentId) -> Result<Vec<String>, DomainError> {
+            Ok(vec![])
+        }
+
+        async fn list_tree(&self, _repo_id: &Uuid, _revision: &str, _path: &str) -> Result<Vec<domain::ports::vcs_engine::TreeEntry>, DomainError> {
+            Ok(vec![])
+        }
+
+        async fn read_blob(&self, _repo_id: &Uuid, _revision: &str, _path: &str) -> Result<Vec<u8>, DomainError> {
+            Ok(vec![])
+        }
+
+        async fn list_refs(&self, _repo_id: &Uuid) -> Result<Vec<domain::ports::vcs_engine::RefInfo>, DomainError> {
+            Ok(vec![])
+        }
+        async fn diff_content(&self, _repo_id: &Uuid, _cid: &ContentId) -> Result<Vec<domain::ports::vcs_engine::FileDiff>, DomainError> {
             Ok(vec![])
         }
     }
@@ -101,12 +117,19 @@ mod tests {
             Ok(None)
         }
 
-        async fn list_recent(&self, _limit: usize) -> Result<Vec<Operation>, DomainError> {
+        async fn find_by_content_id(&self, _repo_id: &Uuid, _content_id: &str) -> Result<Option<Operation>, DomainError> {
+            Ok(None)
+        }
+
+        async fn list_recent(&self, _repo_id: &Uuid, _limit: usize) -> Result<Vec<Operation>, DomainError> {
             Ok(vec![])
         }
 
         async fn find_by_author(&self, _author_id: &Uuid) -> Result<Vec<Operation>, DomainError> {
             Ok(vec![])
+        }
+        async fn count_by_repo(&self, _repo_id: &Uuid) -> Result<i64, DomainError> {
+            Ok(0)
         }
     }
 
@@ -208,6 +231,7 @@ mod tests {
     fn test_command() -> CreateOperationCommand {
         CreateOperationCommand {
             author_id: Uuid::new_v4(),
+            repository_id: Uuid::new_v4(),
             description: "Test operation".to_string(),
             parent_ids: vec![],
             files: vec![],
@@ -217,6 +241,7 @@ mod tests {
     fn test_command_with_files() -> CreateOperationCommand {
         CreateOperationCommand {
             author_id: Uuid::new_v4(),
+            repository_id: Uuid::new_v4(),
             description: "Operation with files".to_string(),
             parent_ids: vec![],
             files: vec![

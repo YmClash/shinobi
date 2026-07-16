@@ -4,18 +4,25 @@
 //! Les use cases sont injectés via `SharedState` (Axum State extractor).
 
 use axum::extract::{Path, Query, State};
+use axum::response::sse::{Event, KeepAlive, Sse};
 use axum::{Json, Router, routing::get, routing::post};
 use chrono::{DateTime, Utc};
+use futures_util::StreamExt;
 use serde::{Deserialize, Serialize};
 use tracing::{info, warn};
 use uuid::Uuid;
 
 use application::use_cases::create_operation::CreateOperationCommand;
+use application::use_cases::create_repository::CreateRepositoryCommand;
 use application::use_cases::list_operations::ListFilter;
 use application::use_cases::search_chunks::ChunkSearchFilter;
+use application::use_cases::sensei_chat::{ChatMessage, SenseiChatRequest};
 use domain::entities::operation::Operation;
+use domain::entities::repository::Visibility;
+use domain::errors::DomainError;
 use domain::ports::chunk_repository::{SimilarChunk, StoredChunk};
 use domain::ports::review_repository::OperationReview;
+use domain::ports::vcs_engine::{EntryKind, RefKind};
 
 use crate::errors::AppError;
 use crate::state::SharedState;
@@ -34,6 +41,10 @@ pub struct HealthResponse {
 #[derive(Debug, Deserialize)]
 pub struct CreateOperationBody {
     pub author_id: Uuid,
+    /// Identifiant du dépôt cible (Phase 10B — multi-tenant).
+    /// Défaut: DEFAULT_REPO_ID pour la rétro-compatibilité MVP.
+    #[serde(default)]
+    pub repository_id: Option<Uuid>,
     pub description: String,
     #[serde(default)]
     pub parent_ids: Vec<Uuid>,
@@ -56,6 +67,9 @@ pub struct FileEntryBody {
 pub struct ListOperationsQuery {
     pub limit: Option<usize>,
     pub author_id: Option<Uuid>,
+    /// Identifiant du dépôt (Phase 10B — multi-tenant).
+    /// Défaut: DEFAULT_REPO_ID pour la rétro-compatibilité MVP.
+    pub repository_id: Option<Uuid>,
 }
 
 /// Paramètres de query pour GET /api/v1/operations/:id/chunks.
@@ -85,14 +99,20 @@ pub struct SemanticSearchBody {
     pub threshold: f32,
 }
 
-fn default_limit() -> usize { 10 }
-fn default_threshold() -> f32 { 0.5 }
+fn default_limit() -> usize {
+    10
+}
+fn default_threshold() -> f32 {
+    0.5
+}
 
 /// Réponse JSON pour une opération.
 #[derive(Debug, Serialize)]
 pub struct OperationJson {
     pub id: Uuid,
     pub author_id: Uuid,
+    /// Identifiant du dépôt multi-tenant (Phase 10B).
+    pub repository_id: Uuid,
     pub content_id: String,
     /// CID IPFS distribué — null si non synchronisé (Genjutsu).
     pub ipfs_content_id: Option<String>,
@@ -106,6 +126,7 @@ impl From<Operation> for OperationJson {
         Self {
             id: op.id,
             author_id: op.author_id,
+            repository_id: op.repository_id,
             content_id: op.content_id.into_inner(),
             ipfs_content_id: op.ipfs_content_id.map(|cid| cid.into_inner()),
             description: op.description,
@@ -203,6 +224,11 @@ impl From<OperationReview> for ReviewJson {
 ///
 /// Intègre automatiquement le middleware Prometheus pour les métriques HTTP.
 /// La route `/metrics` expose les métriques au format Prometheus scrape.
+///
+/// ## Routes Fédérées (Phase 10C)
+/// Les routes `/api/v1/repos/:owner/:repo/operations/...` résolvent le
+/// couple `(owner, repo)` en `repository_id` via `ResolveRepoUseCase`,
+/// puis délèguent aux use cases existants.
 pub fn create_router(state: SharedState) -> Router {
     // ── Prometheus Middleware ───────────────────────
     let (prometheus_layer, metric_handle) = axum_prometheus::PrometheusMetricLayer::pair();
@@ -211,33 +237,70 @@ pub fn create_router(state: SharedState) -> Router {
         // Health & status (sans état)
         .route("/health", get(health_check))
         .route("/api/v1/status", get(status))
-        // CRUD Operations
-        .route(
-            "/api/v1/operations",
-            post(create_operation_handler).get(list_operations_handler),
-        )
-        .route("/api/v1/operations/{id}", get(get_operation_handler))
-        // ── VCS Diff ───────────────────────────────
-        .route("/api/v1/operations/{id}/diff", get(get_operation_diff_handler))
-        // ── Oracle: Code Reviews IA ────────────────
-        .route("/api/v1/operations/{id}/reviews", get(get_reviews_handler))
-        // ── Oracle: Sparkline Scores (Phase 9.2) ──
-        .route("/api/v1/reviews/scores", get(get_score_history_handler))
-        // ── IPFS Content Explorer ──────────────────
-        .route("/api/v1/operations/{id}/ipfs", get(get_ipfs_content_handler))
-        // ── Tensai: Mémoire IA ─────────────────────
-        .route(
-            "/api/v1/operations/{id}/chunks",
-            get(get_chunks_handler),
-        )
+        // ━━━ Global Routes (cross-repo) ━━━
         .route("/api/v1/chunks/search", get(search_chunks_handler))
-        // ── Tensai: Recherche Sémantique RAG (Phase 7A) ──
         .route(
             "/api/v1/chunks/semantic-search",
             post(semantic_search_handler),
         )
+        .route("/api/v1/reviews/scores", get(get_score_history_handler))
+        // ━━━ Forge Sociale (Phase 10D — Big Bang) ━━━
+        .route("/api/v1/repos", post(create_repository_handler))
+        // ━━━ Actors → Repos (Préambule Makimono Phase 5) ━━━
+        .route(
+            "/api/v1/actors/{handle}/repos",
+            get(list_repositories_handler),
+        )
+        // ━━━ Repo Detail (Préambule Makimono Phase 5) ━━━
+        .route("/api/v1/repos/{owner}/{repo}", get(get_repository_handler))
+        // ━━━ Federated Routes (Phase 10C — /repos/:owner/:repo) ━━━
+        .route(
+            "/api/v1/repos/{owner}/{repo}/operations",
+            post(federated_create_operation).get(federated_list_operations),
+        )
+        .route(
+            "/api/v1/repos/{owner}/{repo}/operations/{id}",
+            get(federated_get_operation),
+        )
+        .route(
+            "/api/v1/repos/{owner}/{repo}/operations/{id}/diff",
+            get(federated_get_diff),
+        )
+        .route(
+            "/api/v1/repos/{owner}/{repo}/operations/{id}/reviews",
+            get(federated_get_reviews),
+        )
+        .route(
+            "/api/v1/repos/{owner}/{repo}/operations/{id}/ipfs",
+            get(federated_get_ipfs),
+        )
+        .route(
+            "/api/v1/repos/{owner}/{repo}/operations/{id}/chunks",
+            get(federated_get_chunks),
+        )
+        // ── Phase 17 — Diff Colorisé (line-by-line) ─────────────────
+        .route(
+            "/api/v1/repos/{owner}/{repo}/operations/{id}/diff-content",
+            get(federated_get_diff_content),
+        )
+        // ── Phase 6 — Explorateur de Code (lecture seule) ───────────────
+        .route(
+            "/api/v1/repos/{owner}/{repo}/tree/{revision}",
+            get(explorer_tree_handler),
+        )
+        .route(
+            "/api/v1/repos/{owner}/{repo}/refs",
+            get(explorer_refs_handler),
+        )
+        // ── Phase 15 — Sensei Chat IA (SSE streaming) ───────────────
+        .route("/api/v1/sensei/chat", post(sensei_chat_handler))
+        .route("/api/v1/sensei/models", get(sensei_models_handler))
+        .route("/api/v1/sensei/warmup", post(sensei_warmup_handler))
         // ── Métriques Prometheus ────────────────────
-        .route("/metrics", get(move || async move { metric_handle.render() }))
+        .route(
+            "/metrics",
+            get(move || async move { metric_handle.render() }),
+        )
         .with_state(state)
         // Le layer doit être appliqué APRÈS .with_state() pour couvrir toutes les routes
         .layer(prometheus_layer)
@@ -269,137 +332,7 @@ async fn status() -> Json<serde_json::Value> {
     }))
 }
 
-/// Créer une opération — `POST /api/v1/operations`
-async fn create_operation_handler(
-    State(state): State<SharedState>,
-    Json(body): Json<CreateOperationBody>,
-) -> Result<(axum::http::StatusCode, Json<OperationJson>), AppError> {
-    info!(
-        author_id = %body.author_id,
-        description = %body.description,
-        "REST: CreateOperation reçu"
-    );
-
-    // Décoder les fichiers base64 → bytes bruts.
-    let files: Vec<(String, Vec<u8>)> = body
-        .files
-        .iter()
-        .filter_map(|f| {
-            match decode_base64(&f.content_b64) {
-                Ok(bytes) => Some((f.path.clone(), bytes)),
-                Err(e) => {
-                    warn!(path = %f.path, error = %e, "⚠️ Décodage base64 échoué — fichier ignoré");
-                    None
-                }
-            }
-        })
-        .collect();
-
-    let cmd = CreateOperationCommand {
-        author_id: body.author_id,
-        description: body.description,
-        parent_ids: body.parent_ids,
-        files,
-    };
-
-    let result = state.create_operation.execute(cmd).await?;
-
-    Ok((
-        axum::http::StatusCode::CREATED,
-        Json(OperationJson::from(result.operation)),
-    ))
-}
-
-/// Retrouver une opération — `GET /api/v1/operations/{id}`
-async fn get_operation_handler(
-    State(state): State<SharedState>,
-    Path(id): Path<Uuid>,
-) -> Result<Json<OperationJson>, AppError> {
-    info!(%id, "REST: GetOperation reçu");
-
-    let operation = state.get_operation.execute(id).await?;
-
-    Ok(Json(OperationJson::from(operation)))
-}
-
-/// Lister les opérations — `GET /api/v1/operations?limit=N&author_id=UUID`
-async fn list_operations_handler(
-    State(state): State<SharedState>,
-    Query(params): Query<ListOperationsQuery>,
-) -> Result<Json<serde_json::Value>, AppError> {
-    info!(?params.limit, ?params.author_id, "REST: ListOperations reçu");
-
-    let filter = if let Some(author_id) = params.author_id {
-        ListFilter::ByAuthor { author_id }
-    } else {
-        ListFilter::Recent {
-            limit: params.limit.unwrap_or(50),
-        }
-    };
-
-    let operations = state.list_operations.execute(filter).await?;
-    let operations_json: Vec<OperationJson> =
-        operations.into_iter().map(OperationJson::from).collect();
-
-    Ok(Json(serde_json::json!({
-        "operations": operations_json,
-        "count": operations_json.len(),
-    })))
-}
-
-// ─── Handler Diff VCS ─────────────────────────────
-
-/// Récupérer les fichiers modifiés par une opération — `GET /api/v1/operations/{id}/diff`
-async fn get_operation_diff_handler(
-    State(state): State<SharedState>,
-    Path(id): Path<Uuid>,
-) -> Result<Json<serde_json::Value>, AppError> {
-    info!(%id, "REST: GetOperationDiff reçu");
-
-    let result = state.get_operation_diff.execute(id).await?;
-
-    Ok(Json(serde_json::json!({
-        "operation_id": result.operation_id,
-        "content_id": result.content_id,
-        "changed_files": result.changed_files,
-        "count": result.changed_files.len(),
-    })))
-}
-
-// ─── Handlers Tensai (Mémoire IA) ────────────────
-
-/// Récupérer les chunks d'une opération — `GET /api/v1/operations/{id}/chunks`
-///
-/// Paramètres optionnels :
-/// - `?file=src/main.rs` — filtre par fichier
-async fn get_chunks_handler(
-    State(state): State<SharedState>,
-    Path(operation_id): Path<Uuid>,
-    Query(params): Query<ChunksQuery>,
-) -> Result<Json<serde_json::Value>, AppError> {
-    info!(
-        %operation_id,
-        file = ?params.file,
-        "REST: GetChunks reçu (Tensai)"
-    );
-
-    let filter = match params.file {
-        Some(file_path) => ChunkSearchFilter::ByFile {
-            operation_id,
-            file_path,
-        },
-        None => ChunkSearchFilter::ByOperation { operation_id },
-    };
-
-    let result = state.search_chunks.execute(filter).await?;
-    let chunks_json: Vec<ChunkJson> = result.chunks.into_iter().map(ChunkJson::from).collect();
-
-    Ok(Json(serde_json::json!({
-        "operation_id": operation_id,
-        "chunks": chunks_json,
-        "count": result.count,
-    })))
-}
+// ─── Handlers Globaux (cross-repo) ────────────────
 
 /// Rechercher des symboles par nom — `GET /api/v1/chunks/search?name=User`
 async fn search_chunks_handler(
@@ -424,8 +357,6 @@ async fn search_chunks_handler(
         "count": result.count,
     })))
 }
-
-// ─── Handler Recherche Sémantique (Phase 7A) ─────────
 
 /// Recherche sémantique RAG — `POST /api/v1/chunks/semantic-search`
 ///
@@ -457,6 +388,40 @@ async fn semantic_search_handler(
         "query": body.query,
         "chunks": chunks_json,
         "count": result.count,
+    })))
+}
+
+// ─── Handler Score History (Phase 9.2) ───────────────
+
+/// Paramètres de query pour GET /api/v1/reviews/scores.
+#[derive(Debug, Deserialize)]
+pub struct ScoreHistoryQuery {
+    /// Nombre de scores à récupérer (défaut: 10).
+    #[serde(default = "default_score_limit")]
+    pub limit: usize,
+}
+
+fn default_score_limit() -> usize {
+    10
+}
+
+/// Récupérer l'historique des scores Oracle — `GET /api/v1/reviews/scores?limit=10`
+async fn get_score_history_handler(
+    State(state): State<SharedState>,
+    Query(params): Query<ScoreHistoryQuery>,
+) -> Result<Json<serde_json::Value>, AppError> {
+    info!(
+        limit = params.limit,
+        "REST: GetScoreHistory reçu (Sparkline)"
+    );
+
+    let result = state.get_score_history.execute(params.limit).await?;
+
+    Ok(Json(serde_json::json!({
+        "scores": result.scores,
+        "count": result.count,
+        "average": result.average,
+        "trend": result.trend,
     })))
 }
 
@@ -510,16 +475,273 @@ fn decode_base64(input: &str) -> Result<Vec<u8>, String> {
     Ok(result)
 }
 
-// ─── Handler IPFS Content Explorer ────────────────
+// ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+// ─── Phase 10C — Handlers Fédérés (/api/v1/repos/:owner/:repo)
+// ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+// Phase 10D — Forge Sociale (POST /api/v1/repos)
+// ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 
-/// Récupérer le contenu IPFS d'une opération — `GET /api/v1/operations/{id}/ipfs`
-async fn get_ipfs_content_handler(
+/// Corps de la requête POST /api/v1/repos.
+#[derive(Debug, Deserialize)]
+pub struct CreateRepoBody {
+    pub owner_id: Uuid,
+    pub name: String,
+    pub display_name: String,
+    #[serde(default)]
+    pub description: Option<String>,
+    /// "public" ou "private" (défaut: "public").
+    #[serde(default = "default_visibility")]
+    pub visibility: String,
+}
+
+fn default_visibility() -> String {
+    "public".to_string()
+}
+
+/// Réponse JSON pour un dépôt créé.
+#[derive(Debug, Serialize)]
+pub struct RepositoryJson {
+    pub id: Uuid,
+    pub owner_id: Uuid,
+    pub name: String,
+    pub display_name: String,
+    pub description: Option<String>,
+    pub visibility: String,
+    pub default_branch: String,
+    pub created_at: DateTime<Utc>,
+}
+
+impl From<domain::entities::repository::Repository> for RepositoryJson {
+    fn from(repo: domain::entities::repository::Repository) -> Self {
+        Self {
+            id: repo.id,
+            owner_id: repo.owner_id,
+            name: repo.name,
+            display_name: repo.display_name,
+            description: repo.description,
+            visibility: repo.visibility.as_sql_str().to_string(),
+            default_branch: repo.default_branch,
+            created_at: repo.created_at,
+        }
+    }
+}
+
+/// Créer un dépôt — `POST /api/v1/repos`
+async fn create_repository_handler(
     State(state): State<SharedState>,
-    Path(id): Path<Uuid>,
-) -> Result<Json<serde_json::Value>, AppError> {
-    info!(%id, "REST: GetIpfsContent reçu");
+    Json(body): Json<CreateRepoBody>,
+) -> Result<(axum::http::StatusCode, Json<RepositoryJson>), AppError> {
+    info!(
+        owner_id = %body.owner_id,
+        name = %body.name,
+        "REST: CreateRepository reçu (Forge Sociale)"
+    );
 
-    let result = state.get_ipfs_content.execute(id).await?;
+    let visibility = Visibility::from_sql_str(&body.visibility).unwrap_or(Visibility::Public);
+
+    let cmd = CreateRepositoryCommand {
+        owner_id: body.owner_id,
+        name: body.name,
+        display_name: body.display_name,
+        description: body.description,
+        visibility,
+    };
+
+    let repo = state.create_repository.execute(cmd).await?;
+
+    Ok((
+        axum::http::StatusCode::CREATED,
+        Json(RepositoryJson::from(repo)),
+    ))
+}
+
+/// Lister les dépôts d'un acteur — `GET /api/v1/actors/{handle}/repos`
+async fn list_repositories_handler(
+    State(state): State<SharedState>,
+    Path(handle): Path<String>,
+) -> Result<Json<serde_json::Value>, AppError> {
+    info!(handle = %handle, "REST: ListRepositories reçu");
+
+    let repos = state.list_repositories.execute(&handle).await?;
+    let repos_json: Vec<RepositoryJson> = repos.into_iter().map(RepositoryJson::from).collect();
+
+    Ok(Json(serde_json::json!({
+        "owner": handle,
+        "repositories": repos_json,
+        "count": repos_json.len(),
+    })))
+}
+
+/// Détail d'un dépôt — `GET /api/v1/repos/{owner}/{repo}`
+async fn get_repository_handler(
+    State(state): State<SharedState>,
+    Path((owner, repo)): Path<(String, String)>,
+) -> Result<Json<RepositoryJson>, AppError> {
+    info!(owner = %owner, repo = %repo, "REST: GetRepository reçu");
+
+    let repository = state.resolve_repo.execute(&owner, &repo).await?;
+
+    Ok(Json(RepositoryJson::from(repository)))
+}
+
+// ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+/// Paramètres de chemin fédérés : `(owner, repo)`.
+#[derive(Debug, Deserialize)]
+struct RepoPath {
+    owner: String,
+    repo: String,
+}
+
+/// Paramètres de chemin fédérés avec ID d'opération.
+#[derive(Debug, Deserialize)]
+struct RepoOperationPath {
+    owner: String,
+    repo: String,
+    id: Uuid,
+}
+
+/// Créer une opération — `POST /api/v1/repos/:owner/:repo/operations`
+async fn federated_create_operation(
+    State(state): State<SharedState>,
+    Path(path): Path<RepoPath>,
+    Json(body): Json<CreateOperationBody>,
+) -> Result<(axum::http::StatusCode, Json<OperationJson>), AppError> {
+    info!(
+        owner = %path.owner,
+        repo = %path.repo,
+        author_id = %body.author_id,
+        "REST Fédéré: CreateOperation"
+    );
+
+    let repository = state.resolve_repo.execute(&path.owner, &path.repo).await?;
+
+    let files: Vec<(String, Vec<u8>)> = body
+        .files
+        .iter()
+        .filter_map(|f| match decode_base64(&f.content_b64) {
+            Ok(bytes) => Some((f.path.clone(), bytes)),
+            Err(e) => {
+                warn!(path = %f.path, error = %e, "⚠️ Décodage base64 échoué — fichier ignoré");
+                None
+            }
+        })
+        .collect();
+
+    let cmd = CreateOperationCommand {
+        author_id: body.author_id,
+        repository_id: repository.id,
+        description: body.description,
+        parent_ids: body.parent_ids,
+        files,
+    };
+
+    let result = state.create_operation.execute(cmd).await?;
+    Ok((
+        axum::http::StatusCode::CREATED,
+        Json(OperationJson::from(result.operation)),
+    ))
+}
+
+/// Lister les opérations — `GET /api/v1/repos/:owner/:repo/operations`
+async fn federated_list_operations(
+    State(state): State<SharedState>,
+    Path(path): Path<RepoPath>,
+    Query(params): Query<ListOperationsQuery>,
+) -> Result<Json<serde_json::Value>, AppError> {
+    info!(
+        owner = %path.owner,
+        repo = %path.repo,
+        "REST Fédéré: ListOperations"
+    );
+
+    let repository = state.resolve_repo.execute(&path.owner, &path.repo).await?;
+
+    let filter = if let Some(author_id) = params.author_id {
+        ListFilter::ByAuthor { author_id }
+    } else {
+        ListFilter::Recent {
+            repo_id: repository.id,
+            limit: params.limit.unwrap_or(50),
+        }
+    };
+
+    let operations = state.list_operations.execute(filter).await?;
+
+    // Phase 17 : total_count absolu via COUNT(*) — indépendant du limit
+    let total_count = state.operation_repo.count_by_repo(&repository.id).await.unwrap_or(operations.len() as i64);
+
+    let operations_json: Vec<OperationJson> =
+        operations.into_iter().map(OperationJson::from).collect();
+
+    Ok(Json(serde_json::json!({
+        "operations": operations_json,
+        "count": operations_json.len(),
+        "total_count": total_count,
+    })))
+}
+
+/// Retrouver une opération — `GET /api/v1/repos/:owner/:repo/operations/:id`
+async fn federated_get_operation(
+    State(state): State<SharedState>,
+    Path(path): Path<RepoOperationPath>,
+) -> Result<Json<OperationJson>, AppError> {
+    info!(
+        owner = %path.owner,
+        repo = %path.repo,
+        id = %path.id,
+        "REST Fédéré: GetOperation"
+    );
+
+    // Valider que le repo existe (autorisation implicite)
+    let _repository = state.resolve_repo.execute(&path.owner, &path.repo).await?;
+
+    let operation = state.get_operation.execute(path.id).await?;
+    Ok(Json(OperationJson::from(operation)))
+}
+
+/// Récupérer le diff — `GET /api/v1/repos/:owner/:repo/operations/:id/diff`
+async fn federated_get_diff(
+    State(state): State<SharedState>,
+    Path(path): Path<RepoOperationPath>,
+) -> Result<Json<serde_json::Value>, AppError> {
+    let _repository = state.resolve_repo.execute(&path.owner, &path.repo).await?;
+
+    let result = state.get_operation_diff.execute(path.id).await?;
+
+    Ok(Json(serde_json::json!({
+        "operation_id": result.operation_id,
+        "content_id": result.content_id,
+        "changed_files": result.changed_files,
+        "count": result.changed_files.len(),
+    })))
+}
+
+/// Récupérer les reviews — `GET /api/v1/repos/:owner/:repo/operations/:id/reviews`
+async fn federated_get_reviews(
+    State(state): State<SharedState>,
+    Path(path): Path<RepoOperationPath>,
+) -> Result<Json<serde_json::Value>, AppError> {
+    let _repository = state.resolve_repo.execute(&path.owner, &path.repo).await?;
+
+    let result = state.get_reviews.execute(path.id).await?;
+    let reviews_json: Vec<ReviewJson> = result.reviews.into_iter().map(ReviewJson::from).collect();
+
+    Ok(Json(serde_json::json!({
+        "operation_id": path.id,
+        "reviews": reviews_json,
+        "count": result.count,
+    })))
+}
+
+/// Récupérer le contenu IPFS — `GET /api/v1/repos/:owner/:repo/operations/:id/ipfs`
+async fn federated_get_ipfs(
+    State(state): State<SharedState>,
+    Path(path): Path<RepoOperationPath>,
+) -> Result<Json<serde_json::Value>, AppError> {
+    let _repository = state.resolve_repo.execute(&path.owner, &path.repo).await?;
+
+    let result = state.get_ipfs_content.execute(path.id).await?;
 
     Ok(Json(serde_json::json!({
         "operation_id": result.operation_id,
@@ -530,54 +752,468 @@ async fn get_ipfs_content_handler(
     })))
 }
 
-// ─── Handler Oracle Reviews (Phase 9) ─────────────────
-
-/// Récupérer les code reviews d'une opération — `GET /api/v1/operations/{id}/reviews`
-async fn get_reviews_handler(
+/// Récupérer les chunks — `GET /api/v1/repos/:owner/:repo/operations/:id/chunks`
+async fn federated_get_chunks(
     State(state): State<SharedState>,
-    Path(id): Path<Uuid>,
+    Path(path): Path<RepoOperationPath>,
+    Query(params): Query<ChunksQuery>,
 ) -> Result<Json<serde_json::Value>, AppError> {
-    info!(%id, "REST: GetReviews reçu (Oracle)");
+    let _repository = state.resolve_repo.execute(&path.owner, &path.repo).await?;
 
-    let result = state.get_reviews.execute(id).await?;
-    let reviews_json: Vec<ReviewJson> = result
-        .reviews
-        .into_iter()
-        .map(ReviewJson::from)
+    let filter = match params.file {
+        Some(file_path) => ChunkSearchFilter::ByFile {
+            operation_id: path.id,
+            file_path,
+        },
+        None => ChunkSearchFilter::ByOperation {
+            operation_id: path.id,
+        },
+    };
+
+    let result = state.search_chunks.execute(filter).await?;
+    let chunks_json: Vec<ChunkJson> = result.chunks.into_iter().map(ChunkJson::from).collect();
+
+    Ok(Json(serde_json::json!({
+        "operation_id": path.id,
+        "chunks": chunks_json,
+        "count": result.count,
+    })))
+}
+
+// ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+// ─── Phase 17 — Diff Colorisé (line-by-line)
+// ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+/// Diff ligne par ligne — `GET /api/v1/repos/:owner/:repo/operations/:id/diff-content`
+///
+/// Retourne le diff structuré avec hunks, lignes add/remove/context,
+/// numéros de ligne et flag too_large pour la protection du DOM.
+async fn federated_get_diff_content(
+    State(state): State<SharedState>,
+    Path(path): Path<RepoOperationPath>,
+) -> Result<Json<serde_json::Value>, AppError> {
+    info!(
+        owner = %path.owner,
+        repo = %path.repo,
+        id = %path.id,
+        "REST Fédéré: GetDiffContent (Phase 17)"
+    );
+
+    let repository = state.resolve_repo.execute(&path.owner, &path.repo).await?;
+
+    // Retrouver l'opération pour obtenir le content_id
+    let operation = state.get_operation.execute(path.id).await?;
+
+    // Calculer le diff ligne par ligne via le VcsEngine
+    let content_id = domain::entities::content_id::ContentId::new(
+        operation.content_id.into_inner(),
+    );
+    let file_diffs = state
+        .vcs_engine
+        .diff_content(&repository.id, &content_id)
+        .await?;
+
+    // Calculer les stats globales
+    let total_additions: u32 = file_diffs.iter().map(|f| f.additions).sum();
+    let total_deletions: u32 = file_diffs.iter().map(|f| f.deletions).sum();
+    let files_changed = file_diffs.len();
+
+    Ok(Json(serde_json::json!({
+        "operation_id": path.id,
+        "files": file_diffs,
+        "stats": {
+            "files_changed": files_changed,
+            "additions": total_additions,
+            "deletions": total_deletions,
+        }
+    })))
+}
+
+// ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+// ─── Phase 6 — Explorateur de Code (lecture seule)
+// ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+/// Paramètres de chemin pour l'explorateur.
+#[derive(Debug, Deserialize)]
+struct RepoRevPath {
+    owner: String,
+    repo: String,
+    revision: String,
+}
+
+/// Query string pour les routes explorer : `?path=src/main.rs`
+#[derive(Debug, Deserialize)]
+struct ExplorerPathQuery {
+    /// Chemin relatif à explorer (défaut : racine "")
+    #[serde(default)]
+    path: String,
+}
+
+/// Encode des bytes en base64 (RFC 4648, sans padding strict requis).
+fn encode_base64(input: &[u8]) -> String {
+    const TABLE: &[u8; 64] = b"ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/";
+    let mut result = String::with_capacity((input.len() + 2) / 3 * 4);
+    for chunk in input.chunks(3) {
+        let b0 = chunk[0] as u32;
+        let b1 = if chunk.len() > 1 { chunk[1] as u32 } else { 0 };
+        let b2 = if chunk.len() > 2 { chunk[2] as u32 } else { 0 };
+        let n = (b0 << 16) | (b1 << 8) | b2;
+        result.push(TABLE[((n >> 18) & 63) as usize] as char);
+        result.push(TABLE[((n >> 12) & 63) as usize] as char);
+        if chunk.len() > 1 {
+            result.push(TABLE[((n >> 6) & 63) as usize] as char);
+        } else {
+            result.push('=');
+        }
+        if chunk.len() > 2 {
+            result.push(TABLE[(n & 63) as usize] as char);
+        } else {
+            result.push('=');
+        }
+    }
+    result
+}
+
+/// Explorateur unifié — `GET /api/v1/repos/{owner}/{repo}/tree/{revision}?path=`
+///
+/// Retourne une réponse JSON discriminante :
+/// - `kind: "directory"` → liste des entrées (dossiers + fichiers)
+/// - `kind: "file"` → contenu du fichier en base64 + langage Shiki
+///
+/// Un seul appel suffit au frontend pour décider du composant à afficher.
+async fn explorer_tree_handler(
+    State(state): State<SharedState>,
+    Path(path): Path<RepoRevPath>,
+    Query(params): Query<ExplorerPathQuery>,
+) -> Result<Json<serde_json::Value>, AppError> {
+    info!(
+        owner = %path.owner,
+        repo = %path.repo,
+        revision = %path.revision,
+        query_path = %params.path,
+        "Phase 6: explorer_tree"
+    );
+
+    let file_path = params.path.trim_matches('/').to_string();
+
+    // 1. Tenter le listing de répertoire
+    match state
+        .get_tree
+        .execute(&path.owner, &path.repo, &path.revision, &file_path)
+        .await
+    {
+        Ok(result) => {
+            let entries_json: Vec<serde_json::Value> = result
+                .entries
+                .iter()
+                .map(|e| {
+                    serde_json::json!({
+                        "name": e.name,
+                        "path": e.path,
+                        "kind": if e.kind == EntryKind::Directory { "directory" } else { "file" },
+                        "size": e.size,
+                    })
+                })
+                .collect();
+
+            return Ok(Json(serde_json::json!({
+                "kind": "directory",
+                "revision": result.revision,
+                "path": result.path,
+                "entries": entries_json,
+                "count": entries_json.len(),
+            })));
+        }
+        Err(DomainError::IsFile { .. }) => {
+            // 2. C'est un fichier — lire le contenu
+            let content = state
+                .get_blob
+                .execute(&path.owner, &path.repo, &path.revision, &file_path)
+                .await?;
+
+            let size = content.len() as u64;
+            let content_b64 = encode_base64(&content);
+            // Détecter si le contenu est du texte valide UTF-8
+            let is_text = std::str::from_utf8(&content).is_ok();
+            let language =
+                infrastructure::vcs::jujutsu_engine::JujutsuEngine::language_for_path(&file_path);
+
+            return Ok(Json(serde_json::json!({
+                "kind": "file",
+                "revision": path.revision,
+                "path": file_path,
+                "size": size,
+                "is_text": is_text,
+                "language": language,
+                "content_b64": content_b64,
+            })));
+        }
+        Err(e) => return Err(AppError::from(e)),
+    }
+}
+
+/// Références — `GET /api/v1/repos/{owner}/{repo}/refs`
+///
+/// Retourne les branches et tags séparés pour alimenter le BranchSelector.
+async fn explorer_refs_handler(
+    State(state): State<SharedState>,
+    Path((owner, repo)): Path<(String, String)>,
+) -> Result<Json<serde_json::Value>, AppError> {
+    info!(owner = %owner, repo = %repo, "Phase 6: explorer_refs");
+
+    let refs = state.list_refs.execute(&owner, &repo).await?;
+
+    let branches: Vec<serde_json::Value> = refs
+        .iter()
+        .filter(|r| r.kind == RefKind::Branch)
+        .map(|r| serde_json::json!({ "name": r.name, "target": r.target }))
+        .collect();
+
+    let tags: Vec<serde_json::Value> = refs
+        .iter()
+        .filter(|r| r.kind == RefKind::Tag)
+        .map(|r| serde_json::json!({ "name": r.name, "target": r.target }))
         .collect();
 
     Ok(Json(serde_json::json!({
-        "operation_id": id,
-        "reviews": reviews_json,
-        "count": result.count,
+        "branches": branches,
+        "tags": tags,
+        "total": refs.len(),
     })))
 }
 
-// ─── Handler Score History (Phase 9.2) ───────────────
+// ═══════════════════════════════════════════════════════════════════
+//  Phase 15 — Sensei (先生) : Chat IA Streaming (SSE)
+// ═══════════════════════════════════════════════════════════════════
 
-/// Paramètres de query pour GET /api/v1/reviews/scores.
+/// Corps de la requête `POST /api/v1/sensei/chat`.
 #[derive(Debug, Deserialize)]
-pub struct ScoreHistoryQuery {
-    /// Nombre de scores à récupérer (défaut: 10).
-    #[serde(default = "default_score_limit")]
-    pub limit: usize,
+struct SenseiChatBody {
+    /// Question de l'utilisateur.
+    query: String,
+    /// Chemin du fichier ouvert dans l'explorateur.
+    file_path: String,
+    /// Contenu du fichier (tronqué à ~3000 chars côté frontend).
+    file_content: Option<String>,
+    /// Langage du fichier (ex: "rust", "typescript").
+    language: Option<String>,
+    /// Owner du dépôt (ex: "system").
+    owner: String,
+    /// Nom du dépôt (ex: "hello-world").
+    repo: String,
+    /// Historique de la conversation (multi-tour).
+    #[serde(default)]
+    history: Vec<SenseiHistoryMessage>,
 }
 
-fn default_score_limit() -> usize { 10 }
+/// Message dans l'historique de conversation (sérialisation JSON).
+#[derive(Debug, Deserialize)]
+struct SenseiHistoryMessage {
+    role: String,
+    content: String,
+}
 
-/// Récupérer l'historique des scores Oracle — `GET /api/v1/reviews/scores?limit=10`
-async fn get_score_history_handler(
+/// Handler SSE pour l'agent Sensei.
+///
+/// `POST /api/v1/sensei/chat` → `text/event-stream`
+///
+/// ## Événements SSE émis
+///
+/// 1. `data: {"type":"context","sources":[...],"oracle_score":85,"oracle_summary":"..."}`
+/// 2. `data: {"type":"token","content":"Cette"}`
+/// 3. `data: {"type":"token","content":" fonction"}`
+/// 4. ... (un événement par token)
+/// 5. `data: {"type":"done","model":"qwen2.5-coder:7b","duration_ms":3200}`
+///
+/// ## Annulation
+/// Le client peut fermer la connexion à tout moment (bouton Stop).
+/// Le stream se termine proprement grâce au `mpsc::Sender::is_closed()`.
+async fn sensei_chat_handler(
     State(state): State<SharedState>,
-    Query(params): Query<ScoreHistoryQuery>,
+    Json(body): Json<SenseiChatBody>,
+) -> Result<Sse<impl futures_util::Stream<Item = Result<Event, std::convert::Infallible>>>, AppError>
+{
+    info!(
+        query = %body.query,
+        file_path = %body.file_path,
+        owner = %body.owner,
+        repo = %body.repo,
+        "Phase 15: sensei_chat SSE"
+    );
+
+    // Vérifier que Sensei est disponible.
+    let sensei = state.sensei_chat.as_ref().ok_or_else(|| {
+        AppError::from(DomainError::Internal(
+            "Sensei Agent non disponible — Ollama #2 est désactivé ou inaccessible".to_string(),
+        ))
+    })?;
+
+    // Convertir les messages de l'historique.
+    let history: Vec<ChatMessage> = body
+        .history
+        .into_iter()
+        .map(|m| ChatMessage {
+            role: m.role,
+            content: m.content,
+        })
+        .collect();
+
+    // Construire la requête Sensei.
+    let request = SenseiChatRequest {
+        query: body.query,
+        file_path: body.file_path,
+        file_content: body.file_content,
+        language: body.language,
+        owner: body.owner,
+        repo: body.repo,
+        history,
+    };
+
+    // Exécuter le pipeline Sensei (RAG + Oracle + LLM streaming).
+    let (context, rx) = sensei.execute_stream(request).await?;
+
+    // Convertir le Receiver en Stream SSE.
+    let context_event = Event::default().data(
+        serde_json::to_string(&serde_json::json!({
+            "type": "context",
+            "sources": context.sources,
+            "oracle_score": context.oracle_score,
+            "oracle_summary": context.oracle_summary,
+        }))
+        .unwrap_or_default(),
+    );
+
+    // ── Primer SSE : forcer l'envoi immédiat des headers ──────────
+    // Ce premier événement "status" oblige Axum à flusher les headers
+    // HTTP 200 + Content-Type: text/event-stream instantanément.
+    // Le proxy Next.js voit la connexion vivante et attend patiemment
+    // que le modèle LLM se charge (~30s cold start).
+    let primer_event = Event::default().data(
+        serde_json::to_string(&serde_json::json!({
+            "type": "status",
+            "message": "loading_model"
+        }))
+        .unwrap_or_default(),
+    );
+
+    // Stream : primer → context → tokens LLM.
+    let token_stream =
+        tokio_stream::wrappers::ReceiverStream::new(rx).map(|chunk| -> Result<Event, std::convert::Infallible> {
+            let data = serde_json::to_string(&chunk).unwrap_or_default();
+            Ok(Event::default().data(data))
+        });
+
+    // Prépendre le primer et le context au stream de tokens.
+    let primer_stream = futures_util::stream::once(async move {
+        Ok::<Event, std::convert::Infallible>(primer_event)
+    });
+    let context_stream = futures_util::stream::once(async move {
+        Ok::<Event, std::convert::Infallible>(context_event)
+    });
+
+    let full_stream = primer_stream.chain(context_stream).chain(token_stream);
+
+    Ok(Sse::new(full_stream).keep_alive(KeepAlive::default()))
+}
+
+// ── Sensei Models & Warmup ───────────────────────────────────────────
+
+/// Réponse de GET /api/v1/sensei/models.
+#[derive(Debug, Serialize)]
+struct SenseiModelsResponse {
+    models: Vec<SenseiModelInfo>,
+    active: String,
+}
+
+#[derive(Debug, Serialize, Deserialize)]
+struct SenseiModelInfo {
+    name: String,
+    size: u64,
+}
+
+/// GET /api/v1/sensei/models — Liste les modèles installés sur Ollama #2.
+async fn sensei_models_handler(
+    State(state): State<SharedState>,
+) -> Result<Json<SenseiModelsResponse>, AppError> {
+    let ollama_url = state.sensei_ollama_url.as_ref().ok_or_else(|| {
+        AppError::from(DomainError::Internal("Sensei non activé".to_string()))
+    })?;
+
+    let active = state.sensei_chat.as_ref()
+        .map(|s| s.model_name().to_string())
+        .unwrap_or_default();
+
+    // Appeler l'API Ollama /api/tags pour lister les modèles.
+    let resp = reqwest::get(format!("{ollama_url}/api/tags"))
+        .await
+        .map_err(|e| AppError::from(DomainError::Internal(format!("Ollama tags: {e}"))))?;
+
+    #[derive(Deserialize)]
+    struct OllamaTags { models: Vec<OllamaModel> }
+    #[derive(Deserialize)]
+    struct OllamaModel { name: String, size: u64 }
+
+    let tags: OllamaTags = resp.json().await
+        .map_err(|e| AppError::from(DomainError::Internal(format!("Ollama tags parse: {e}"))))?;
+
+    let models = tags.models.into_iter().map(|m| SenseiModelInfo {
+        name: m.name,
+        size: m.size,
+    }).collect();
+
+    Ok(Json(SenseiModelsResponse { models, active }))
+}
+
+/// Corps de POST /api/v1/sensei/warmup.
+#[derive(Debug, Deserialize)]
+struct SenseiWarmupBody {
+    model: String,
+}
+
+/// POST /api/v1/sensei/warmup — Pré-charge un modèle dans la RAM d'Ollama.
+///
+/// Le frontend appelle cette route quand l'utilisateur sélectionne un modèle
+/// dans le dropdown. Cela force Ollama à charger le modèle en arrière-plan,
+/// éliminant le cold-start (~30s) lors du premier message chat.
+async fn sensei_warmup_handler(
+    State(state): State<SharedState>,
+    Json(body): Json<SenseiWarmupBody>,
 ) -> Result<Json<serde_json::Value>, AppError> {
-    info!(limit = params.limit, "REST: GetScoreHistory reçu (Sparkline)");
+    let ollama_url = state.sensei_ollama_url.as_ref().ok_or_else(|| {
+        AppError::from(DomainError::Internal("Sensei non activé".to_string()))
+    })?;
 
-    let result = state.get_score_history.execute(params.limit).await?;
+    info!(model = %body.model, "🥷 Sensei — Warmup modèle demandé");
 
-    Ok(Json(serde_json::json!({
-        "scores": result.scores,
-        "count": result.count,
-        "average": result.average,
-        "trend": result.trend,
-    })))
+    let client = reqwest::Client::builder()
+        .timeout(std::time::Duration::from_secs(120))
+        .build()
+        .map_err(|e| AppError::from(DomainError::Internal(format!("HTTP client: {e}"))))?;
+
+    // Envoyer un prompt vide avec keep_alive pour forcer le chargement.
+    let resp = client
+        .post(format!("{ollama_url}/api/generate"))
+        .json(&serde_json::json!({
+            "model": body.model,
+            "prompt": "",
+            "keep_alive": "24h"
+        }))
+        .send()
+        .await
+        .map_err(|e| AppError::from(DomainError::Internal(format!("Warmup failed: {e}"))))?;
+
+    if resp.status().is_success() {
+        info!(model = %body.model, "🥷 Sensei — Modèle chargé en RAM ✅");
+        Ok(Json(serde_json::json!({
+            "status": "ok",
+            "model": body.model,
+            "message": "Modèle chargé en RAM"
+        })))
+    } else {
+        let status = resp.status();
+        let text = resp.text().await.unwrap_or_default();
+        Err(AppError::from(DomainError::Internal(
+            format!("Warmup error (HTTP {status}): {text}")
+        )))
+    }
 }

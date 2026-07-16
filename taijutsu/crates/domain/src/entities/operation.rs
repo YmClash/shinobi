@@ -27,6 +27,10 @@ pub struct Operation {
     /// Identifiant de l'auteur (humain ou agent IA).
     pub author_id: Uuid,
 
+    /// Identifiant du dépôt auquel appartient cette opération (Phase 10A).
+    /// Chaque opération est isolée dans un dépôt multi-tenant.
+    pub repository_id: Uuid,
+
     /// Empreinte du contenu adressé par CID jj-lib (hash du commit Jujutsu).
     pub content_id: ContentId,
 
@@ -52,6 +56,7 @@ impl Operation {
     /// ou si le contenu n'a pas été synchronisé.
     pub fn new(
         author_id: Uuid,
+        repository_id: Uuid,
         content_id: ContentId,
         ipfs_content_id: Option<ContentId>,
         description: impl Into<String>,
@@ -60,6 +65,7 @@ impl Operation {
         Self {
             id: Uuid::new_v4(),
             author_id,
+            repository_id,
             content_id,
             ipfs_content_id,
             description: description.into(),
@@ -94,6 +100,10 @@ mod tests {
         Uuid::parse_str("a1a2a3a4-b1b2-c1c2-d1d2-e1e2e3e4e5e6").unwrap()
     }
 
+    fn test_repo_id() -> Uuid {
+        Uuid::parse_str("b1b2b3b4-c1c2-d1d2-e1e2-f1f2f3f4f5f6").unwrap()
+    }
+
     fn test_parent_id() -> Uuid {
         Uuid::parse_str("f1f2f3f4-a1a2-b1b2-c1c2-d1d2d3d4d5d6").unwrap()
     }
@@ -102,6 +112,7 @@ mod tests {
     fn test_operation_new_generates_unique_id() {
         let op1 = Operation::new(
             test_author_id(),
+            test_repo_id(),
             ContentId::new("QmOp1"),
             None,
             "premier",
@@ -109,6 +120,7 @@ mod tests {
         );
         let op2 = Operation::new(
             test_author_id(),
+            test_repo_id(),
             ContentId::new("QmOp2"),
             None,
             "deuxième",
@@ -118,9 +130,24 @@ mod tests {
     }
 
     #[test]
+    fn test_operation_has_repository_id() {
+        let repo_id = test_repo_id();
+        let op = Operation::new(
+            test_author_id(),
+            repo_id,
+            ContentId::new("QmRepo"),
+            None,
+            "multi-tenant",
+            vec![],
+        );
+        assert_eq!(op.repository_id, repo_id);
+    }
+
+    #[test]
     fn test_operation_is_root_with_no_parents() {
         let op = Operation::new(
             test_author_id(),
+            test_repo_id(),
             ContentId::new("QmRoot"),
             None,
             "racine",
@@ -134,6 +161,7 @@ mod tests {
     fn test_operation_is_not_root_with_parent() {
         let op = Operation::new(
             test_author_id(),
+            test_repo_id(),
             ContentId::new("QmChild"),
             None,
             "enfant",
@@ -149,6 +177,7 @@ mod tests {
         let parent_b = Uuid::new_v4();
         let op = Operation::new(
             test_author_id(),
+            test_repo_id(),
             ContentId::new("QmMerge"),
             None,
             "merge commit",
@@ -162,6 +191,7 @@ mod tests {
     fn test_operation_without_ipfs_content() {
         let op = Operation::new(
             test_author_id(),
+            test_repo_id(),
             ContentId::new("QmJjOnly"),
             None,
             "sans IPFS",
@@ -175,6 +205,7 @@ mod tests {
     fn test_operation_with_ipfs_content() {
         let op = Operation::new(
             test_author_id(),
+            test_repo_id(),
             ContentId::new("QmJjCid"),
             Some(ContentId::new("QmIpfsCid")),
             "avec IPFS",
@@ -190,6 +221,7 @@ mod tests {
         let ipfs_cid = ContentId::new("bafybeigIPFSHash456");
         let op = Operation::new(
             test_author_id(),
+            test_repo_id(),
             jj_cid.clone(),
             Some(ipfs_cid.clone()),
             "dual CID",
@@ -207,6 +239,7 @@ mod tests {
     fn test_operation_stores_description() {
         let op = Operation::new(
             test_author_id(),
+            test_repo_id(),
             ContentId::new("QmDesc"),
             None,
             "Fix critical bug in auth module",
@@ -219,6 +252,7 @@ mod tests {
     fn test_operation_serde_roundtrip() {
         let op = Operation::new(
             test_author_id(),
+            test_repo_id(),
             ContentId::new("QmSerde"),
             Some(ContentId::new("QmIpfsSerde")),
             "test serde",

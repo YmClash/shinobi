@@ -3,15 +3,22 @@
 //! Contient les use cases injectés depuis le binaire principal.
 //! `Clone` est cheap : tous les champs sont `Arc`.
 
+use std::path::PathBuf;
 use std::sync::Arc;
 
 use application::use_cases::create_operation::CreateOperationUseCase;
+use application::use_cases::create_repository::CreateRepositoryUseCase;
+use application::use_cases::get_blob::GetBlobUseCase;
 use application::use_cases::get_operation::GetOperationUseCase;
 use application::use_cases::get_operation_diff::GetOperationDiffUseCase;
 use application::use_cases::get_ipfs_content::GetIpfsContentUseCase;
 use application::use_cases::get_reviews::GetReviewsUseCase;
 use application::use_cases::get_score_history::GetScoreHistoryUseCase;
+use application::use_cases::get_tree::GetTreeUseCase;
 use application::use_cases::list_operations::ListOperationsUseCase;
+use application::use_cases::list_refs::ListRefsUseCase;
+use application::use_cases::list_repositories::ListRepositoriesUseCase;
+use application::use_cases::resolve_repo::ResolveRepoUseCase;
 use application::use_cases::search_chunks::SearchChunksUseCase;
 
 /// État applicatif partagé entre les couches de présentation.
@@ -43,6 +50,77 @@ pub struct SharedState {
 
     /// Use case: historique des scores Oracle (Phase 9.2 — Sparkline).
     pub get_score_history: Arc<GetScoreHistoryUseCase>,
+
+    /// Use case: résolution sémantique des dépôts (Phase 10C — Routes fédérées).
+    pub resolve_repo: Arc<ResolveRepoUseCase>,
+
+    /// Use case: créer un nouveau dépôt (Phase 10D — Big Bang).
+    pub create_repository: Arc<CreateRepositoryUseCase>,
+
+    /// Use case: lister les dépôts d'un acteur (Phase 10D — Préambule Makimono 5).
+    pub list_repositories: Arc<ListRepositoriesUseCase>,
+
+    // ── Phase 6 — Explorateur de Code ─────────────────────────────────
+
+    /// Use case: lister l'arborescence d'un dépôt (Phase 6).
+    pub get_tree: Arc<GetTreeUseCase>,
+
+    /// Use case: lire le contenu d'un fichier (Phase 6).
+    pub get_blob: Arc<GetBlobUseCase>,
+
+    /// Use case: lister les branches et tags (Phase 6).
+    pub list_refs: Arc<ListRefsUseCase>,
+
+    // ── Phase 15 — Sensei (先生) ─────────────────────────────────
+
+    /// Use case: chat conversationnel IA avec streaming.
+    /// `None` si l'agent Sensei est désactivé (Ollama #2 non disponible).
+    pub sensei_chat: Option<Arc<application::use_cases::sensei_chat::SenseiChatUseCase>>,
+
+    /// URL du serveur Ollama Sensei pour les appels directs (models, warmup).
+    pub sensei_ollama_url: Option<String>,
+
+    // ── Phase 17 — Diff Colorisé ─────────────────────────────────
+
+    /// Moteur VCS abstrait pour le diff ligne par ligne (Phase 17).
+    pub vcs_engine: Arc<dyn domain::ports::vcs_engine::VcsEngine>,
+
+    /// Repository des opérations pour le total_count (Phase 17).
+    pub operation_repo: Arc<dyn domain::ports::repository::OperationRepository>,
 }
 
+// ── Phase 12A — Git Bridge HTTP ──────────────────────────────────────
 
+/// État dédié aux routes Git Smart HTTP Protocol (Phase 12A).
+///
+/// Séparé de `SharedState` car les routes Git utilisent des types
+/// concrets d'infrastructure (`JujutsuEngine`, `GitCgiBackend`) plutôt
+/// que des abstractions domain (traits). C'est une transgression
+/// architecturale délibérée — le protocole Git est intrinsèquement
+/// couplé à l'infrastructure.
+#[derive(Clone)]
+pub struct GitHttpState {
+    /// Résolution sémantique `(owner, repo)` → `Repository`.
+    pub resolve_repo: Arc<ResolveRepoUseCase>,
+
+    /// Moteur VCS concret (type `JujutsuEngine`, pas `dyn VcsEngine`).
+    /// Nécessaire pour `reload_repo()` et `git_repo_path()`.
+    pub vcs_engine: Arc<infrastructure::vcs::jujutsu_engine::JujutsuEngine>,
+
+    /// Backend CGI Git (`git http-backend`).
+    pub git_cgi: Arc<infrastructure::vcs::git_cgi::GitCgiBackend>,
+
+    /// Publication Kafka (étincelle post-push) — optionnel.
+    pub event_publisher: Option<Arc<dyn domain::ports::event_publisher::EventPublisher>>,
+
+    /// Persistence des opérations (combler le vide PostgreSQL).
+    pub operation_repo: Arc<dyn domain::ports::repository::OperationRepository>,
+
+    /// ContentStore IPFS (Genjutsu) — optionnel pour graceful degradation.
+    /// Utilise par le Sync Hook pour stocker les fichiers pushes sur IPFS
+    /// via `store_dag()` (Phase 12A-Fix).
+    pub content_store: Option<Arc<dyn domain::ports::content_store::ContentStore>>,
+
+    /// Racine des workspaces VCS (pour construire les chemins).
+    pub workspace_root: PathBuf,
+}

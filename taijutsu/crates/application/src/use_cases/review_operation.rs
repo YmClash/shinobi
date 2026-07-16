@@ -106,19 +106,20 @@ impl ReviewOperationUseCase {
 
         // 2. Récupérer le diff VCS (optionnel pour les opérations racine).
         let content_id = ContentId::new(operation.content_id.clone().into_inner());
+        let repo_id = operation.repository_id;
         let changed_files = if !operation.parent_ids.is_empty() {
             let parent_op = self.repository.find_by_id(&operation.parent_ids[0]).await?;
             match parent_op {
                 Some(parent) => {
                     let parent_cid = ContentId::new(parent.content_id.into_inner());
-                    self.vcs.diff_since(&parent_cid).await.unwrap_or_default()
+                    self.vcs.diff_since(&repo_id, &parent_cid).await.unwrap_or_default()
                 }
-                None => self.vcs.diff_since(&content_id).await.unwrap_or_default(),
+                None => self.vcs.diff_since(&repo_id, &content_id).await.unwrap_or_default(),
             }
         } else {
             // Opération racine (pas de parent) — on tente quand même un diff.
             // Si le diff est vide, on procédera avec le contenu IPFS seul.
-            self.vcs.diff_since(&content_id).await.unwrap_or_default()
+            self.vcs.diff_since(&repo_id, &content_id).await.unwrap_or_default()
         };
 
         // Pour les opérations racine sans diff, on continue si IPFS est disponible.

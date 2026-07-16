@@ -66,19 +66,19 @@ services:
     image: ipfs/kubo:latest
     container_name: shinobi-ipfs
     ports:
-      - "4001:4001"              # Swarm P2P
-      - "127.0.0.1:5001:5001"   # RPC API (localhost only — sécurité)
-      - "127.0.0.1:8080:8080"   # Gateway
+      - "4001:4001" # Swarm P2P
+      - "127.0.0.1:5001:5001" # RPC API (localhost only — sécurité)
+      - "127.0.0.1:8080:8080" # Gateway
     volumes:
       - ipfsdata:/data/ipfs
     healthcheck:
-      test: ["CMD-SHELL", "ipfs id || exit 1"]
+      test: [ "CMD-SHELL", "ipfs id || exit 1" ]
       interval: 10s
       timeout: 10s
       retries: 5
       start_period: 15s
 
-  # ── Oracle: Ollama (LLM local) ──────────────
+  # ── Oracle: Ollama (LLM local — code review) ──────────────
   ollama:
     image: ollama/ollama:latest
     container_name: shinobi-ollama
@@ -87,7 +87,27 @@ services:
     volumes:
       - ollama_data:/root/.ollama
     healthcheck:
-      test: ["CMD-SHELL", "curl -sf http://localhost:11434/api/tags || exit 1"]
+      test: [ "CMD-SHELL", "curl -sf http://localhost:11434/api/tags || exit 1" ]
+      interval: 10s
+      timeout: 10s
+      retries: 5
+      start_period: 30s
+
+  # ── Sensei: Ollama #2 (LLM conversationnel — Phase 15) ────
+  # Instance séparée de l'Oracle pour garantir une latence UI < 500ms.
+  # Modèle : smollm2:1.7b (~1.8 GB, optimal dev local)
+  # KEEP_ALIVE=24h : garde le modèle en RAM pour éviter le cold start (~30s)
+  ollama-sensei:
+    image: ollama/ollama:latest
+    container_name: shinobi-ollama-sensei
+    ports:
+      - "11436:11434"
+    environment:
+      - OLLAMA_KEEP_ALIVE=24h
+    volumes:
+      - ollama_sensei_data:/root/.ollama
+    healthcheck:
+      test: [ "CMD-SHELL", "curl -sf http://localhost:11434/api/tags || exit 1" ]
       interval: 10s
       timeout: 10s
       retries: 5
@@ -98,3 +118,4 @@ volumes:
   kafkadata:
   ipfsdata:
   ollama_data:
+  ollama_sensei_data:

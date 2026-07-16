@@ -329,6 +329,7 @@ mod tests {
     fn op_with_ipfs(ipfs_cid: &str) -> Operation {
         Operation::new(
             test_author_id(),
+            Uuid::new_v4(),
             ContentId::new("QmJjTest"),
             Some(ContentId::new(ipfs_cid)),
             "Test analyse",
@@ -339,6 +340,7 @@ mod tests {
     fn op_without_ipfs() -> Operation {
         Operation::new(
             test_author_id(),
+            Uuid::new_v4(),
             ContentId::new("QmJjOnly"),
             None,
             "Sans IPFS",

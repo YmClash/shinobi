@@ -2,20 +2,22 @@
 # SHINOBI — Docker Compose Production
 # ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 #
-# Stack complet : 7 services + 2 observabilité
+# Stack complet : 8 services + 2 observabilité
 #
-# Architecture réseau (Zero Trust) :
-#   - Taijutsu : aucun port exposé (interne uniquement)
-#   - Makimono : seul point d'accès public (:3001)
+# Architecture réseau :
+#   - Taijutsu : REST API (:3000) + Git Smart HTTP (:3000)
+#   - Makimono : Frontend Next.js (:3001)
 #   - Dojutsu  : dashboard observabilité (:3002)
 #
 # Usage :
-#   docker compose -f docker-compose.prod.yml build
+#   docker compose -f docker-compose.prod.yml build --no-cache taijutsu
 #   docker compose -f docker-compose.prod.yml up -d
 #   docker compose -f docker-compose.prod.yml down
 #
 # Accès :
 #   Frontend  → http://localhost:3001
+#   Git Clone → git clone http://localhost:3000/system/default.git
+#   Git Push  → git push http://localhost:3000/system/default.git
 #   Grafana   → http://localhost:3002 (admin/shinobi)
 #   Prometheus → interne uniquement (prometheus:9090)
 
@@ -26,14 +28,17 @@ services:
   # ═══════════════════════════════════════════════
 
   # ── Taijutsu : Backend Rust ───────────────────
-  # Zero Trust : aucun port exposé sur l'hôte.
-  # Accessible uniquement via le réseau interne shinobi.
+  # Port 3000 exposé pour :
+  #   - API REST (/api/v1/...)
+  #   - Git Smart HTTP (/{owner}/{repo}.git/...) — Phase 12A
   taijutsu:
     build:
       context: ./taijutsu
       dockerfile: Dockerfile
     container_name: shinobi-taijutsu
-    # PAS de ports: exposés — Zero Trust Network
+    # Port 3000 exposé pour Git HTTP (git clone/push)
+    ports:
+      - "3000:3000"
     environment:
       # Fūinjutsu: PostgreSQL (nom DNS Docker)
       DATABASE_URL: postgres://shinobi:shinobi@postgres:5432/shinobi_dev
@@ -61,8 +66,12 @@ services:
       OLLAMA_MODEL: granite3-dense:2b
       ORACLE_CONSUMER_ENABLED: "true"
       ORACLE_CONSUMER_GROUP: shinobi-oracle-reviewer
+      # Sensei: Ollama #2 (LLM conversationnel — Phase 15)
+      SENSEI_ENABLED: "true"
+      SENSEI_OLLAMA_URL: http://ollama-sensei:11434
+      SENSEI_OLLAMA_MODEL: smollm2:1.7b
       # Observabilité
-      RUST_LOG: info,taijutsu=debug,domain=debug,application=debug
+      RUST_LOG: info,taijutsu=debug,domain=debug,application=debug,infrastructure=debug
     volumes:
       - vcs_workspace:/app/workspace
     depends_on:
@@ -75,6 +84,8 @@ services:
       ipfs:
         condition: service_healthy
       ollama:
+        condition: service_healthy
+      ollama-sensei:
         condition: service_healthy
     networks:
       - shinobi
@@ -169,9 +180,16 @@ services:
     restart: unless-stopped
 
   # ── Genjutsu: IPFS (Kubo) ────────────────────
+  # Note: Kubo 0.42+ drop vers l'utilisateur 'ipfs' (UID 1000).
+  # Le volume doit avoir les bonnes permissions (chown 1000:100).
+  # Fix one-shot si "permission denied" :
+  #   docker run --rm -v shinobi-ipfsdata:/data/ipfs alpine \
+  #     sh -c "chown -R 1000:100 /data/ipfs && rm -f /data/ipfs/repo.lock"
   ipfs:
     image: ipfs/kubo:latest
     container_name: shinobi-ipfs
+    environment:
+      - IPFS_PROFILE=server
     volumes:
       - ipfsdata:/data/ipfs
     healthcheck:
@@ -179,19 +197,39 @@ services:
       interval: 10s
       timeout: 10s
       retries: 5
-      start_period: 15s
+      start_period: 30s
     networks:
       - shinobi
     restart: unless-stopped
 
-  # ── Oracle: Ollama (LLM local) ───────────────
+  # ── Oracle: Ollama (LLM local — code review) ─
   ollama:
     image: ollama/ollama:latest
     container_name: shinobi-ollama
     volumes:
       - ollama_data:/root/.ollama
     healthcheck:
-      test: ["CMD", "ollama", "list"]
+      test: [ "CMD", "ollama", "list" ]
+      interval: 10s
+      timeout: 10s
+      retries: 5
+      start_period: 60s
+    networks:
+      - shinobi
+    restart: unless-stopped
+
+  # ── Sensei: Ollama #2 (LLM conversationnel — Phase 15) ─
+  # Instance séparée de l'Oracle pour garantir une latence UI < 500ms.
+  # Modèle : smollm2:1.7b · KEEP_ALIVE=24h évite le cold start (~30s)
+  ollama-sensei:
+    image: ollama/ollama:latest
+    container_name: shinobi-ollama-sensei
+    environment:
+      - OLLAMA_KEEP_ALIVE=24h
+    volumes:
+      - ollama_sensei_data:/root/.ollama
+    healthcheck:
+      test: [ "CMD", "ollama", "list" ]
       interval: 10s
       timeout: 10s
       retries: 5
@@ -264,6 +302,8 @@ volumes:
     name: shinobi-ipfsdata
   ollama_data:
     name: shinobi-ollama
+  ollama_sensei_data:
+    name: shinobi-ollama-sensei
   vcs_workspace:
     name: shinobi-vcs-workspace
   prometheus_data:

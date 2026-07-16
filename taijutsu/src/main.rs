@@ -22,14 +22,21 @@ use tracing_subscriber::{EnvFilter, layer::SubscriberExt, util::SubscriberInitEx
 
 use application::use_cases::analyze_operation::AnalyzeOperationUseCase;
 use application::use_cases::create_operation::CreateOperationUseCase;
+use application::use_cases::create_repository::CreateRepositoryUseCase;
+use application::use_cases::get_blob::GetBlobUseCase;
 use application::use_cases::get_operation::GetOperationUseCase;
 use application::use_cases::get_operation_diff::GetOperationDiffUseCase;
 use application::use_cases::get_ipfs_content::GetIpfsContentUseCase;
 use application::use_cases::get_reviews::GetReviewsUseCase;
 use application::use_cases::get_score_history::GetScoreHistoryUseCase;
+use application::use_cases::get_tree::GetTreeUseCase;
 use application::use_cases::list_operations::ListOperationsUseCase;
+use application::use_cases::list_refs::ListRefsUseCase;
+use application::use_cases::list_repositories::ListRepositoriesUseCase;
+use application::use_cases::resolve_repo::ResolveRepoUseCase;
 use application::use_cases::review_operation::ReviewOperationUseCase;
 use application::use_cases::search_chunks::SearchChunksUseCase;
+use application::use_cases::sensei_chat::SenseiChatUseCase;
 use infrastructure::cache::redis_cache::RedisCache;
 use infrastructure::content::ipfs_store::IpfsContentStore;
 use infrastructure::embeddings::nomic_service::NomicEmbedService;
@@ -38,15 +45,20 @@ use infrastructure::events::kafka_producer::KafkaEventPublisher;
 use infrastructure::events::oracle_consumer::OracleKafkaConsumer;
 use infrastructure::llm::ollama_service::OllamaService;
 use infrastructure::persistence::postgres_chunk_repo::PostgresChunkRepository;
+use infrastructure::persistence::postgres_actor_repo::PostgresActorRepository;
 use infrastructure::persistence::postgres_repo::PostgresOperationRepository;
+use infrastructure::persistence::postgres_repo_repo::PostgresRepoRepository;
 use infrastructure::persistence::postgres_review_repo::PostgresReviewRepository;
 use infrastructure::vcs::jujutsu_engine::JujutsuEngine;
+use infrastructure::vcs::git_cgi::GitCgiBackend;
+use domain::entities::actor::DEFAULT_REPO_ID;
 use domain::ports::vcs_engine::VcsEngine as _; // Trait import — rend init_workspace() visible
 use domain::ports::repository::OperationRepository as _; // Trait import — rend list_recent() visible (backfill)
 use presentation::grpc::services::proto::shinobi_service_server::ShinobiServiceServer;
 use presentation::grpc::services::ShinobiServiceImpl;
 use presentation::rest::routes::create_router;
-use presentation::state::SharedState;
+use presentation::rest::git_http::create_git_router;
+use presentation::state::{SharedState, GitHttpState};
 use tensai::multi_chunker::MultiChunker;
 
 use config::Config;
@@ -78,6 +90,9 @@ async fn main() -> anyhow::Result<()> {
         ollama_url = %config.ollama_url,
         ollama_model = %config.ollama_model,
         oracle_enabled = config.oracle_consumer_enabled,
+        sensei_enabled = config.sensei_enabled,
+        sensei_ollama_url = %config.sensei_ollama_url,
+        sensei_ollama_model = %config.sensei_ollama_model,
         "Configuration chargée"
     );
 
@@ -105,12 +120,13 @@ async fn main() -> anyhow::Result<()> {
     info!("✅ Redis connecté");
 
     // VCS Engine (Anti-Corruption Layer) — auto-init au démarrage
-    // Phase Makimono : évoluer vers un registre dynamique multi-workspace (multi-tenant).
+    // Phase 10B : init avec DEFAULT_REPO_ID (UUID fantôme pour rétro-compat MVP).
     let vcs_engine = JujutsuEngine::new(&config.vcs_workspace_root);
-    vcs_engine.init_workspace("default").await?;
+    vcs_engine.init_workspace(&DEFAULT_REPO_ID).await?;
     info!(
         workspace = %config.vcs_workspace_root,
-        "✅ VCS Engine initialisé (jj-lib ACL — workspace 'default')"
+        repo_id = %DEFAULT_REPO_ID,
+        "✅ VCS Engine initialisé (jj-lib ACL — DEFAULT_REPO_ID)"
     );
 
     // Nen: Kafka Event Publisher (optionnel — graceful degradation)
@@ -155,7 +171,7 @@ async fn main() -> anyhow::Result<()> {
     let chunk_repo: Arc<dyn domain::ports::chunk_repository::ChunkRepository> =
         Arc::new(PostgresChunkRepository::new(pg_pool.clone()));
     let review_repo: Arc<dyn domain::ports::review_repository::ReviewRepository> =
-        Arc::new(PostgresReviewRepository::new(pg_pool));
+        Arc::new(PostgresReviewRepository::new(pg_pool.clone()));
     let vcs = Arc::new(vcs_engine);
 
     info!("✅ ChunkRepository PostgreSQL initialisé (Mémoire IA)");
@@ -247,6 +263,70 @@ async fn main() -> anyhow::Result<()> {
         review_repo.clone(),
     ));
 
+    // ── Phase 10C: Résolution sémantique des dépôts ────
+    let actor_repo: Arc<PostgresActorRepository> = Arc::new(
+        PostgresActorRepository::new(pg_pool.clone()),
+    );
+    let repo_repo: Arc<PostgresRepoRepository> = Arc::new(
+        PostgresRepoRepository::new(pg_pool.clone()),
+    );
+    let resolve_repo = Arc::new(ResolveRepoUseCase::new(
+        actor_repo.clone(),
+        repo_repo.clone(),
+    ));
+
+    // ── Phase 10D: Création de dépôts (Big Bang) ────
+    let list_repositories = Arc::new(ListRepositoriesUseCase::new(
+        actor_repo.clone(),
+        repo_repo.clone(),
+    ));
+    let create_repository = Arc::new(CreateRepositoryUseCase::new(
+        actor_repo,
+        repo_repo,
+        vcs.clone(),
+    ));
+
+    // ── Phase 6 : Explorateur de Code ─────────────────────────────
+    let get_tree = Arc::new(GetTreeUseCase::new(
+        vcs.clone(),
+        resolve_repo.clone(),
+    ));
+    let get_blob = Arc::new(GetBlobUseCase::new(
+        vcs.clone(),
+        resolve_repo.clone(),
+    ));
+    let list_refs_uc = Arc::new(ListRefsUseCase::new(
+        vcs.clone(),
+        resolve_repo.clone(),
+    ));
+
+    // ── Phase 15 : Agent Sensei (先生) — LLM conversationnel ─────────
+    let sensei_chat: Option<Arc<SenseiChatUseCase>> = if config.sensei_enabled {
+        match OllamaService::new(&config.sensei_ollama_url, &config.sensei_ollama_model) {
+            Ok(sensei_llm) => {
+                let use_case = Arc::new(SenseiChatUseCase::new(
+                    search_chunks.clone(),
+                    review_repo.clone(),
+                    Arc::new(sensei_llm),
+                    repo.clone(),
+                ));
+                info!(
+                    url = %config.sensei_ollama_url,
+                    model = %config.sensei_ollama_model,
+                    "🥷 Sensei Agent — Initialisé (Ollama #2)"
+                );
+                Some(use_case)
+            }
+            Err(e) => {
+                warn!("⚠️ Sensei Agent désactivé — Ollama #2 non disponible: {e}");
+                None
+            }
+        }
+    } else {
+        info!("ℹ️ Sensei Agent désactivé par configuration (SENSEI_ENABLED=false)");
+        None
+    };
+
     let shared_state = SharedState {
         create_operation,
         get_operation,
@@ -256,11 +336,48 @@ async fn main() -> anyhow::Result<()> {
         get_ipfs_content,
         get_reviews,
         get_score_history,
+        resolve_repo: resolve_repo.clone(),
+        create_repository,
+        list_repositories,
+        get_tree,
+        get_blob,
+        list_refs: list_refs_uc,
+        sensei_chat,
+        sensei_ollama_url: if config.sensei_enabled { Some(config.sensei_ollama_url.clone()) } else { None },
+        // Phase 17 — Diff Colorisé
+        vcs_engine: vcs.clone(),
+        operation_repo: repo.clone(),
     };
 
-    // ── Serveur Axum (REST) ────────────────────────
+    // ── Git Bridge HTTP (Phase 12A) ────────────────────
+    let git_cgi = match GitCgiBackend::new() {
+        Ok(cgi) => {
+            info!("\u{2705} Git Bridge HTTP actif (git http-backend)");
+            Some(Arc::new(cgi))
+        }
+        Err(e) => {
+            warn!("\u{26a0}\u{fe0f} Git Bridge HTTP desactive — git non trouve: {e}");
+            None
+        }
+    };
+
+    // ── Serveur Axum (REST + Git HTTP) ────────────────
     let rest_addr = SocketAddr::from(([0, 0, 0, 0], config.rest_port));
-    let rest_router = create_router(shared_state.clone());
+    let rest_router = if let Some(git_cgi) = git_cgi {
+        let git_state = GitHttpState {
+            resolve_repo: resolve_repo.clone(),
+            vcs_engine: vcs.clone(),
+            git_cgi,
+            event_publisher: event_publisher.clone(),
+            operation_repo: repo.clone(),
+            content_store: content_store.clone(),
+            workspace_root: std::path::PathBuf::from(&config.vcs_workspace_root),
+        };
+        create_router(shared_state.clone())
+            .merge(create_git_router(git_state))
+    } else {
+        create_router(shared_state.clone())
+    };
     let rest_listener = TcpListener::bind(rest_addr).await?;
 
     info!(
@@ -529,8 +646,8 @@ async fn run_backfill(
         }
     };
 
-    // Charger toutes les opérations existantes.
-    let operations = repo.list_recent(10_000).await?;
+    // Charger toutes les opérations existantes du dépôt par défaut.
+    let operations = repo.list_recent(&DEFAULT_REPO_ID, 10_000).await?;
     let total = operations.len();
 
     info!(total_operations = total, "Opérations chargées");

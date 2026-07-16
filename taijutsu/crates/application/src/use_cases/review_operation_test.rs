@@ -33,11 +33,17 @@ impl OperationRepository for MockOperationRepo {
     async fn find_by_id(&self, _id: &Uuid) -> Result<Option<Operation>, DomainError> {
         Ok(self.operation.clone())
     }
-    async fn list_recent(&self, _limit: usize) -> Result<Vec<Operation>, DomainError> {
+    async fn find_by_content_id(&self, _repo_id: &Uuid, _content_id: &str) -> Result<Option<Operation>, DomainError> {
+        Ok(None)
+    }
+    async fn list_recent(&self, _repo_id: &Uuid, _limit: usize) -> Result<Vec<Operation>, DomainError> {
         Ok(vec![])
     }
     async fn find_by_author(&self, _author_id: &Uuid) -> Result<Vec<Operation>, DomainError> {
         Ok(vec![])
+    }
+    async fn count_by_repo(&self, _repo_id: &Uuid) -> Result<i64, DomainError> {
+        Ok(0)
     }
 }
 
@@ -47,22 +53,35 @@ struct MockVcsEngine {
 
 #[async_trait]
 impl VcsEngine for MockVcsEngine {
-    async fn init_workspace(&self, _name: &str) -> Result<(), DomainError> {
+    async fn init_workspace(&self, _repo_id: &Uuid) -> Result<(), DomainError> {
         Ok(())
     }
     async fn create_operation(
         &self,
+        _repo_id: &Uuid,
         _desc: &str,
         _parent_ids: &[String],
         _files: &[(String, Vec<u8>)],
     ) -> Result<ContentId, DomainError> {
         Ok(ContentId::new("mock".to_string()))
     }
-    async fn resolve_head(&self) -> Result<Option<ContentId>, DomainError> {
+    async fn resolve_head(&self, _repo_id: &Uuid) -> Result<Option<ContentId>, DomainError> {
         Ok(None)
     }
-    async fn diff_since(&self, _cid: &ContentId) -> Result<Vec<String>, DomainError> {
+    async fn diff_since(&self, _repo_id: &Uuid, _cid: &ContentId) -> Result<Vec<String>, DomainError> {
         Ok(self.changed_files.clone())
+    }
+    async fn list_tree(&self, _repo_id: &Uuid, _revision: &str, _path: &str) -> Result<Vec<domain::ports::vcs_engine::TreeEntry>, DomainError> {
+        Ok(vec![])
+    }
+    async fn read_blob(&self, _repo_id: &Uuid, _revision: &str, _path: &str) -> Result<Vec<u8>, DomainError> {
+        Ok(vec![])
+    }
+    async fn list_refs(&self, _repo_id: &Uuid) -> Result<Vec<domain::ports::vcs_engine::RefInfo>, DomainError> {
+        Ok(vec![])
+    }
+    async fn diff_content(&self, _repo_id: &Uuid, _cid: &ContentId) -> Result<Vec<domain::ports::vcs_engine::FileDiff>, DomainError> {
+        Ok(vec![])
     }
 }
 
@@ -78,6 +97,24 @@ impl LlmService for MockLlmService {
             model: "mock-model".to_string(),
             duration_ms: 100,
         })
+    }
+    async fn generate_stream(
+        &self,
+        _prompt: &str,
+        _system: &str,
+    ) -> Result<tokio::sync::mpsc::Receiver<domain::ports::llm_service::LlmStreamChunk>, DomainError> {
+        let (tx, rx) = tokio::sync::mpsc::channel(1);
+        let response = self.response.clone();
+        tokio::spawn(async move {
+            let _ = tx.send(domain::ports::llm_service::LlmStreamChunk::Token {
+                content: response,
+            }).await;
+            let _ = tx.send(domain::ports::llm_service::LlmStreamChunk::Done {
+                model: "mock-model".to_string(),
+                duration_ms: 100,
+            }).await;
+        });
+        Ok(rx)
     }
     fn model_name(&self) -> &str {
         "mock-model"
@@ -160,6 +197,7 @@ fn make_operation(with_ipfs: bool, with_parent: bool) -> Operation {
         vec![]
     };
     Operation::new(
+        Uuid::new_v4(),
         Uuid::new_v4(),
         ContentId::new("test-cid".to_string()),
         ipfs_cid,

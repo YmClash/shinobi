@@ -50,10 +50,10 @@ pub struct Config {
     /// Nombre de dimensions d'embedding (Matryoshka). Défaut: 256.
     pub embedding_dimensions: usize,
 
-    /// URL du serveur Ollama Docker (LLM local). Défaut: "http://localhost:11435".
+    /// URL du serveur Ollama Docker (LLM local — Oracle). Défaut: "http://localhost:11435".
     pub ollama_url: String,
 
-    /// Modèle Ollama à utiliser. Défaut: "granite3.1-dense:2b".
+    /// Modèle Ollama à utiliser (Oracle). Défaut: "granite3.1-dense:2b".
     pub ollama_model: String,
 
     /// Activer/désactiver le consumer Oracle. Défaut: true.
@@ -61,6 +61,19 @@ pub struct Config {
 
     /// Consumer group Kafka pour l'agent Oracle. Défaut: "shinobi-oracle-reviewer".
     pub oracle_consumer_group: String,
+
+    // ── Phase 15 — Sensei (先生) ──────────────────────────────────────
+
+    /// Activer/désactiver l'agent Sensei (chat conversationnel). Défaut: true.
+    pub sensei_enabled: bool,
+
+    /// URL du serveur Ollama #2 pour Sensei (instance séparée de l'Oracle).
+    /// Défaut: "http://localhost:11436".
+    pub sensei_ollama_url: String,
+
+    /// Modèle Ollama pour Sensei (conversationnel, spécialisé code).
+    /// Défaut: "qwen2.5-coder:7b".
+    pub sensei_ollama_model: String,
 }
 
 impl Config {
@@ -113,6 +126,14 @@ impl Config {
                 .unwrap_or(true),
             oracle_consumer_group: env::var("ORACLE_CONSUMER_GROUP")
                 .unwrap_or_else(|_| "shinobi-oracle-reviewer".to_string()),
+            // ── Phase 15 — Sensei ────────────────────────
+            sensei_enabled: env::var("SENSEI_ENABLED")
+                .map(|v| v != "false" && v != "0")
+                .unwrap_or(true),
+            sensei_ollama_url: env::var("SENSEI_OLLAMA_URL")
+                .unwrap_or_else(|_| "http://localhost:11436".to_string()),
+            sensei_ollama_model: env::var("SENSEI_OLLAMA_MODEL")
+                .unwrap_or_else(|_| "smollm2:1.7b".to_string()),
         }
     }
 }

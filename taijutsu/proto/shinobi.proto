@@ -53,6 +53,9 @@ message CreateOperationRequest {
     string description = 2;
     // Identifiants des opérations parentes (merge possible).
     repeated string parent_ids = 3;
+    // Phase 10C: identifiant du dépôt cible (UUID).
+    // Si vide, utilise DEFAULT_REPO_ID pour rétro-compatibilité.
+    string repository_id = 4;
 }
 
 message GetOperationRequest {
@@ -64,6 +67,8 @@ message ListOperationsRequest {
     int32 limit = 1;
     // Filtre optionnel par auteur (UUID). Vide = pas de filtre.
     string author_id = 2;
+    // Phase 10C: filtre par dépôt (UUID). Vide = DEFAULT_REPO_ID.
+    string repository_id = 3;
 }
 
 // ── Réponses Operation ─────────────────────────
@@ -77,6 +82,8 @@ message OperationResponse {
     int64  created_at  = 6;
     // CID IPFS distribué (Genjutsu) — vide si non synchronisé.
     optional string ipfs_content_id = 7;
+    // Phase 10C: identifiant du dépôt multi-tenant.
+    string repository_id = 8;
 }
 
 message ListOperationsResponse {

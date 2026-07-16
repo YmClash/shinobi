@@ -20,6 +20,7 @@ pollster  = { workspace = true }
 
 # — Synchronisation haute performance —
 parking_lot = { workspace = true }
+dashmap = { workspace = true }
 
 # — Async streams (diff_since) —
 futures = { workspace = true }
@@ -50,6 +51,12 @@ reqwest = { workspace = true }
 # — RAG Vectoriel (Phase 7A) —
 fastembed = { workspace = true }
 pgvector = { workspace = true }
+
+# — Streaming LLM (Phase 15 — Sensei) —
+tokio-stream = { workspace = true }
+
+# — Text Diff (Phase 17 — Commits & Diff Colorisé) —
+similar = { workspace = true }
 
 [dev-dependencies]
 tempfile = { workspace = true }

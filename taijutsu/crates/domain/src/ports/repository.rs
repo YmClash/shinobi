@@ -20,9 +20,28 @@ pub trait OperationRepository: Send + Sync {
     /// Retrouve une opération par son identifiant.
     async fn find_by_id(&self, id: &Uuid) -> Result<Option<Operation>, DomainError>;
 
-    /// Liste les opérations les plus récentes, ordonnées par date décroissante.
-    async fn list_recent(&self, limit: usize) -> Result<Vec<Operation>, DomainError>;
+    /// Retrouve une opération par son content_id VCS (SHA-1 Git / CommitId jj).
+    ///
+    /// Filtrée par `repo_id` pour l'isolation multi-tenant.
+    /// Utilisé par le Sync Hook pour résoudre les parents Git → UUID Operation
+    /// (Phase 12A-Fix2 — La Lignée Sanguine).
+    async fn find_by_content_id(
+        &self,
+        repo_id: &Uuid,
+        content_id: &str,
+    ) -> Result<Option<Operation>, DomainError>;
+
+    /// Liste les opérations les plus récentes d'un dépôt, ordonnées par date décroissante.
+    /// Phase 10A : filtrée par `repository_id` pour l'isolation multi-tenant.
+    async fn list_recent(&self, repo_id: &Uuid, limit: usize) -> Result<Vec<Operation>, DomainError>;
 
     /// Retrouve toutes les opérations d'un auteur donné.
     async fn find_by_author(&self, author_id: &Uuid) -> Result<Vec<Operation>, DomainError>;
+
+    /// Compte le nombre total d'opérations d'un dépôt (Phase 17 — total_count).
+    ///
+    /// Retourne le COUNT(*) absolu sans pagination — O(1) sur l'index PostgreSQL.
+    /// Utilisé pour afficher "142 Commits" sur la page explorateur sans charger
+    /// toutes les opérations en mémoire.
+    async fn count_by_repo(&self, repo_id: &Uuid) -> Result<i64, DomainError>;
 }

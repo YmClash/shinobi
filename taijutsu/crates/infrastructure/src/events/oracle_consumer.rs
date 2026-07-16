@@ -34,10 +34,12 @@ pub struct OracleKafkaConsumer {
 }
 
 /// Payload léger du topic analysis-complete.
-/// On n'a besoin que de l'operation_id.
+/// On n'a besoin que de l'operation_id (+ repository_id pour Phase 10A).
 #[derive(serde::Deserialize)]
 struct AnalysisSummaryPayload {
     operation_id: Uuid,
+    #[allow(dead_code)] // Phase 10A — sera consommé quand Oracle devient repo-aware
+    repository_id: Option<Uuid>,
 }
 
 impl OracleKafkaConsumer {

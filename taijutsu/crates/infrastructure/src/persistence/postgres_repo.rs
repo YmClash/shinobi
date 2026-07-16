@@ -51,6 +51,9 @@ fn row_to_operation(row: sqlx::postgres::PgRow) -> Result<Operation, DomainError
         author_id: row
             .try_get("author_id")
             .map_err(|e| DomainError::Persistence(e.to_string()))?,
+        repository_id: row
+            .try_get("repository_id")
+            .map_err(|e| DomainError::Persistence(e.to_string()))?,
         content_id: ContentId::new(
             row.try_get::<String, _>("content_id")
                 .map_err(|e| DomainError::Persistence(e.to_string()))?,
@@ -75,12 +78,13 @@ impl OperationRepository for PostgresOperationRepository {
 
         sqlx::query(
             r#"
-            INSERT INTO operations (id, author_id, content_id, ipfs_cid, description, parent_ids, created_at)
-            VALUES ($1, $2, $3, $4, $5, $6, $7)
+            INSERT INTO operations (id, author_id, repository_id, content_id, ipfs_cid, description, parent_ids, created_at)
+            VALUES ($1, $2, $3, $4, $5, $6, $7, $8)
             "#,
         )
         .bind(operation.id)
         .bind(operation.author_id)
+        .bind(operation.repository_id)
         .bind(operation.content_id.as_str())
         .bind(operation.ipfs_content_id.as_ref().map(|cid| cid.as_str()))
         .bind(&operation.description)
@@ -96,7 +100,7 @@ impl OperationRepository for PostgresOperationRepository {
     #[instrument(skip(self))]
     async fn find_by_id(&self, id: &Uuid) -> Result<Option<Operation>, DomainError> {
         let row = sqlx::query(
-            "SELECT id, author_id, content_id, ipfs_cid, description, parent_ids, created_at \
+            "SELECT id, author_id, repository_id, content_id, ipfs_cid, description, parent_ids, created_at \
              FROM operations WHERE id = $1",
         )
         .bind(id)
@@ -111,11 +115,34 @@ impl OperationRepository for PostgresOperationRepository {
     }
 
     #[instrument(skip(self))]
-    async fn list_recent(&self, limit: usize) -> Result<Vec<Operation>, DomainError> {
-        let rows = sqlx::query(
-            "SELECT id, author_id, content_id, ipfs_cid, description, parent_ids, created_at \
-             FROM operations ORDER BY created_at DESC LIMIT $1",
+    async fn find_by_content_id(
+        &self,
+        repo_id: &Uuid,
+        content_id: &str,
+    ) -> Result<Option<Operation>, DomainError> {
+        let row = sqlx::query(
+            "SELECT id, author_id, repository_id, content_id, ipfs_cid, description, parent_ids, created_at \
+             FROM operations WHERE repository_id = $1 AND content_id = $2",
         )
+        .bind(repo_id)
+        .bind(content_id)
+        .fetch_optional(&self.pool)
+        .await
+        .map_err(|e| DomainError::Persistence(e.to_string()))?;
+
+        match row {
+            Some(r) => Ok(Some(row_to_operation(r)?)),
+            None => Ok(None),
+        }
+    }
+
+    #[instrument(skip(self))]
+    async fn list_recent(&self, repo_id: &Uuid, limit: usize) -> Result<Vec<Operation>, DomainError> {
+        let rows = sqlx::query(
+            "SELECT id, author_id, repository_id, content_id, ipfs_cid, description, parent_ids, created_at \
+             FROM operations WHERE repository_id = $1 ORDER BY created_at DESC LIMIT $2",
+        )
+        .bind(repo_id)
         .bind(limit as i64)
         .fetch_all(&self.pool)
         .await
@@ -127,7 +154,7 @@ impl OperationRepository for PostgresOperationRepository {
     #[instrument(skip(self))]
     async fn find_by_author(&self, author_id: &Uuid) -> Result<Vec<Operation>, DomainError> {
         let rows = sqlx::query(
-            "SELECT id, author_id, content_id, ipfs_cid, description, parent_ids, created_at \
+            "SELECT id, author_id, repository_id, content_id, ipfs_cid, description, parent_ids, created_at \
              FROM operations WHERE author_id = $1 ORDER BY created_at DESC",
         )
         .bind(author_id)
@@ -137,4 +164,19 @@ impl OperationRepository for PostgresOperationRepository {
 
         rows.into_iter().map(row_to_operation).collect()
     }
+
+    #[instrument(skip(self))]
+    async fn count_by_repo(&self, repo_id: &Uuid) -> Result<i64, DomainError> {
+        let row = sqlx::query(
+            "SELECT COUNT(*) as count FROM operations WHERE repository_id = $1",
+        )
+        .bind(repo_id)
+        .fetch_one(&self.pool)
+        .await
+        .map_err(|e| DomainError::Persistence(e.to_string()))?;
+
+        row.try_get::<i64, _>("count")
+            .map_err(|e| DomainError::Persistence(e.to_string()))
+    }
 }
+

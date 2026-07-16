@@ -41,7 +41,21 @@ pub enum DomainError {
     #[error("Commit introuvable: {id}")]
     CommitNotFound { id: String },
 
+    /// Accès refusé (multi-tenant — Phase 10A).
+    #[error("Accès refusé: {0}")]
+    Forbidden(String),
+
+    /// Entrée en doublon (ex: handle déjà pris, nom de repo existant).
+    #[error("Doublon détecté: {0}")]
+    Duplicate(String),
+
     /// Erreur interne inattendue.
     #[error("Erreur interne: {0}")]
     Internal(String),
+
+    /// Le chemin pointe vers un fichier, pas un répertoire.
+    /// Retourné par `list_tree` quand le path est un fichier —
+    /// signal au handler de basculer vers `read_blob`.
+    #[error("Le chemin est un fichier, pas un répertoire: {path}")]
+    IsFile { path: String },
 }
