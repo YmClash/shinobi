@@ -79,6 +79,14 @@ pub trait ActorRepository: Send + Sync {
     /// Lie un compte GitHub à un acteur existant (Phase 20).
     async fn update_github_id(&self, actor_id: &Uuid, github_id: i64) -> Result<(), DomainError>;
 
+    /// Stocke le token OAuth GitHub en clair (Phase 20B — Le Clonage Massif).
+    /// Mis à jour à chaque login OAuth pour rester frais.
+    async fn update_github_token(&self, actor_id: &Uuid, token: &str) -> Result<(), DomainError>;
+
+    /// Récupère le token OAuth GitHub d'un acteur (Phase 20B).
+    /// Retourne `None` si l'acteur n'a pas lié son compte GitHub.
+    async fn get_github_token(&self, actor_id: &Uuid) -> Result<Option<String>, DomainError>;
+
     /// Liste les PAT d'un acteur (label + created_at, pas le hash).
     async fn list_pats(
         &self,

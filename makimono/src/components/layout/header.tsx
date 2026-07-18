@@ -51,9 +51,17 @@ export function Header() {
                   className="header-user-badge"
                   title="Gérer les tokens"
                 >
-                  <span className="header-user-avatar">
-                    {user.handle.charAt(0).toUpperCase()}
-                  </span>
+                  {user.avatar_url ? (
+                    <img
+                      src={user.avatar_url}
+                      alt={user.handle}
+                      className="header-user-avatar-img"
+                    />
+                  ) : (
+                    <span className="header-user-avatar">
+                      {user.handle.charAt(0).toUpperCase()}
+                    </span>
+                  )}
                   <span className="header-user-handle">{user.handle}</span>
                 </Link>
                 <button

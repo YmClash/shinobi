@@ -174,9 +174,17 @@ export function Sidebar() {
               href="/settings/tokens"
               className={`sidebar-user-item ${collapsed ? "justify-center" : ""}`}
             >
-              <span className="sidebar-user-avatar">
-                {user.handle.charAt(0).toUpperCase()}
-              </span>
+              {user.avatar_url ? (
+                <img
+                  src={user.avatar_url}
+                  alt={user.handle}
+                  className="sidebar-user-avatar-img"
+                />
+              ) : (
+                <span className="sidebar-user-avatar">
+                  {user.handle.charAt(0).toUpperCase()}
+                </span>
+              )}
               {!collapsed && (
                 <div className="sidebar-user-info">
                   <span className="sidebar-user-name">{user.display_name}</span>

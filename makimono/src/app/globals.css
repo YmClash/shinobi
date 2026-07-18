@@ -4526,6 +4526,26 @@ html * {
   font-weight: 700;
 }
 
+.header-user-avatar-img {
+  width: 22px;
+  height: 22px;
+  border-radius: 50%;
+  object-fit: cover;
+  border: 1.5px solid var(--border);
+  flex-shrink: 0;
+}
+
+/* ── Sidebar user avatar (image) ─────── */
+
+.sidebar-user-avatar-img {
+  width: 28px;
+  height: 28px;
+  border-radius: 50%;
+  object-fit: cover;
+  border: 1.5px solid var(--border);
+  flex-shrink: 0;
+}
+
 .header-user-handle {
   max-width: 100px;
   overflow: hidden;

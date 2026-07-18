@@ -130,6 +130,11 @@ pub struct Actor {
     /// Identifiant GitHub (OAuth Phase 20). Immuable, unique.
     pub github_id: Option<i64>,
 
+    /// Token OAuth GitHub en clair (Phase 20B — Le Clonage Massif).
+    /// Mis à jour à chaque login OAuth. Permet les appels API GitHub
+    /// authentifiés (lister les repos de l'utilisateur, etc.).
+    pub github_token: Option<String>,
+
     /// Date de création du compte.
     pub created_at: DateTime<Utc>,
 }
@@ -150,6 +155,7 @@ impl Actor {
             email: None,
             bio: None,
             github_id: None,
+            github_token: None,
             created_at: Utc::now(),
         }
     }
