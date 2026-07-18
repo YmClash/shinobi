@@ -163,3 +163,77 @@ pub async fn list_pats_handler(
         "count": pats.len(),
     })))
 }
+
+// ── GitHub OAuth (Phase 20) ──────────────────────────────────────────
+
+/// GET /api/v1/auth/github — Génère l'URL d'autorisation GitHub.
+pub async fn github_auth_url_handler(
+    State(state): State<SharedState>,
+) -> Result<impl IntoResponse, AppError> {
+    let oauth = state.oauth_github.as_ref().ok_or_else(|| {
+        AppError::from(domain::errors::DomainError::BusinessRule(
+            "GitHub OAuth n'est pas configuré sur ce serveur".to_string(),
+        ))
+    })?;
+
+    let redirect_uri = format!(
+        "{}/auth/github/callback",
+        state.frontend_url.as_deref().unwrap_or("http://localhost:3001")
+    );
+
+    let (url, _state_token) = oauth.generate_auth_url(&redirect_uri).await?;
+
+    Ok(Json(serde_json::json!({
+        "url": url,
+    })))
+}
+
+/// POST /api/v1/auth/github/callback — Échange le code OAuth → JWT SHINOBI.
+#[derive(Debug, Deserialize)]
+pub struct GitHubCallbackRequest {
+    pub code: String,
+    pub state: String,
+}
+
+pub async fn github_callback_handler(
+    State(state): State<SharedState>,
+    Json(body): Json<GitHubCallbackRequest>,
+) -> Result<impl IntoResponse, AppError> {
+    let oauth = state.oauth_github.as_ref().ok_or_else(|| {
+        AppError::from(domain::errors::DomainError::BusinessRule(
+            "GitHub OAuth n'est pas configuré sur ce serveur".to_string(),
+        ))
+    })?;
+
+    use application::use_cases::oauth_github::OAuthGitHubCommand;
+
+    let result = oauth
+        .execute(OAuthGitHubCommand {
+            code: body.code,
+            state: body.state,
+        })
+        .await?;
+
+    let status = if result.is_new_account {
+        StatusCode::CREATED
+    } else {
+        StatusCode::OK
+    };
+
+    Ok((
+        status,
+        Json(serde_json::json!({
+            "token": result.token,
+            "actor": {
+                "id": result.actor.id,
+                "handle": result.actor.handle,
+                "display_name": result.actor.display_name,
+                "actor_type": result.actor.actor_type.as_sql_str(),
+                "email": result.actor.email,
+                "avatar_url": result.actor.avatar_url,
+                "created_at": result.actor.created_at,
+            },
+            "is_new_account": result.is_new_account,
+        })),
+    ))
+}

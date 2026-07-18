@@ -127,6 +127,9 @@ pub struct Actor {
     /// Biographie / description (optionnel).
     pub bio: Option<String>,
 
+    /// Identifiant GitHub (OAuth Phase 20). Immuable, unique.
+    pub github_id: Option<i64>,
+
     /// Date de création du compte.
     pub created_at: DateTime<Utc>,
 }
@@ -146,6 +149,7 @@ impl Actor {
             avatar_url: None,
             email: None,
             bio: None,
+            github_id: None,
             created_at: Utc::now(),
         }
     }

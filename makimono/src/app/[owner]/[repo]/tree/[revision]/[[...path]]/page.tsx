@@ -347,9 +347,11 @@ git push -u origin main`}</pre>
         </div>
 
         <div className="ex-controls-right">
-          <div className="ex-stat">
+          <div className="ex-stat" style={{ cursor: 'pointer' }}>
             <GitBranch size={13} />
-            <span>{refs.branches.length} Bookmarks</span>
+            <a href={`/${owner}/${repo}/bookmarks`} style={{ textDecoration: 'none', color: 'inherit' }}>
+              {refs.branches.length} Bookmarks
+            </a>
           </div>
           <div className="ex-stat" style={{ cursor: 'pointer' }}>
             <History size={13} />

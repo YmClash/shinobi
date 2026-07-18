@@ -40,6 +40,7 @@ use application::use_cases::sensei_chat::SenseiChatUseCase;
 use application::use_cases::register_actor::RegisterActorUseCase;
 use application::use_cases::login_actor::LoginActorUseCase;
 use application::use_cases::create_pat::CreatePatUseCase;
+use application::use_cases::import_github_repo::ImportGitHubRepoUseCase;
 use infrastructure::cache::redis_cache::RedisCache;
 use infrastructure::content::ipfs_store::IpfsContentStore;
 use infrastructure::embeddings::nomic_service::NomicEmbedService;
@@ -55,6 +56,7 @@ use infrastructure::persistence::postgres_review_repo::PostgresReviewRepository;
 use infrastructure::vcs::jujutsu_engine::JujutsuEngine;
 use infrastructure::vcs::git_cgi::GitCgiBackend;
 use infrastructure::auth::jwt_auth_service::JwtAuthService;
+use infrastructure::github::github_client::GitHubClient;
 use domain::entities::actor::DEFAULT_REPO_ID;
 use domain::ports::vcs_engine::VcsEngine as _; // Trait import — rend init_workspace() visible
 use domain::ports::repository::OperationRepository as _; // Trait import — rend list_recent() visible (backfill)
@@ -120,7 +122,7 @@ async fn main() -> anyhow::Result<()> {
     info!("✅ Migrations SQL appliquées");
 
     // Fūinjutsu: Redis
-    let _redis_cache = RedisCache::connect(&config.redis_url).await?;
+    let redis_cache = RedisCache::connect(&config.redis_url).await?;
     info!("✅ Redis connecté");
 
     // VCS Engine (Anti-Corruption Layer) — auto-init au démarrage
@@ -355,6 +357,47 @@ async fn main() -> anyhow::Result<()> {
         None
     };
 
+    // ── Phase 19B : GitHub Import (Le Pont des Mondes) ────────
+    let github_service: Arc<dyn domain::ports::github_service::GitHubService> =
+        Arc::new(GitHubClient::new());
+
+    let vcs_concrete = Arc::new(JujutsuEngine::new(&config.vcs_workspace_root));
+
+    let import_github_repo = Arc::new(ImportGitHubRepoUseCase::new(
+        github_service.clone(),
+        actor_repo.clone(),
+        repo_repo.clone(),
+        vcs_concrete.clone(),
+        repo.clone(),
+        content_store.clone(),
+        event_publisher.clone(),
+    ));
+
+    info!("\u{1f30d} GitHub Import Service initialisé (Phase 19B — Le Pont des Mondes)");
+
+    // ── Phase 20 : GitHub OAuth (Les Portes d'Ōtsutsuki) ──────────
+    let oauth_github: Option<Arc<application::use_cases::oauth_github::OAuthGitHubUseCase>> =
+        match (&config.github_client_id, &config.github_client_secret) {
+            (Some(client_id), Some(client_secret)) => {
+                let use_case = Arc::new(
+                    application::use_cases::oauth_github::OAuthGitHubUseCase::new(
+                        actor_repo.clone(),
+                        auth_service.clone(),
+                        redis_cache.clone(),
+                        client_id.clone(),
+                        client_secret.clone(),
+                        config.jwt_duration_secs,
+                    ),
+                );
+                info!("🔑 GitHub OAuth initialisé (Phase 20 — Les Portes d'Ōtsutsuki)");
+                Some(use_case)
+            }
+            _ => {
+                info!("ℹ️ GitHub OAuth désactivé — GITHUB_CLIENT_ID/SECRET non configurés");
+                None
+            }
+        };
+
     let shared_state = SharedState {
         create_operation,
         get_operation,
@@ -382,6 +425,12 @@ async fn main() -> anyhow::Result<()> {
         register_actor,
         login_actor,
         create_pat,
+        // Phase 19B — GitHub Import
+        import_github_repo,
+        github_service: github_service.clone(),
+        // Phase 20 — GitHub OAuth
+        oauth_github,
+        frontend_url: std::env::var("FRONTEND_URL").ok(),
     };
 
     // ── Git Bridge HTTP (Phase 12A) ────────────────────

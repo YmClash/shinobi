@@ -86,6 +86,16 @@ pub struct Repository {
 
     /// Date de création du dépôt.
     pub created_at: DateTime<Utc>,
+
+    // ── Phase 19B — GitHub Import ─────────────────────────────────
+
+    /// URL Git source pour les repos importés (ex: "https://github.com/user/repo.git").
+    /// `None` = repo natif SHINOBI.
+    pub mirror_source_url: Option<String>,
+
+    /// Timestamp du dernier import miroir réussi.
+    /// `None` = jamais synchronisé ou repo natif.
+    pub mirror_synced_at: Option<DateTime<Utc>>,
 }
 
 impl Repository {
@@ -104,6 +114,8 @@ impl Repository {
             visibility: Visibility::Public,
             default_branch: "main".to_string(),
             created_at: Utc::now(),
+            mirror_source_url: None,
+            mirror_synced_at: None,
         }
     }
 
@@ -115,6 +127,11 @@ impl Repository {
     /// Vérifie si le dépôt est privé.
     pub fn is_private(&self) -> bool {
         self.visibility == Visibility::Private
+    }
+
+    /// Vérifie si le dépôt est un miroir importé depuis GitHub (Phase 19B).
+    pub fn is_mirror(&self) -> bool {
+        self.mirror_source_url.is_some()
     }
 }
 

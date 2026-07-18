@@ -59,6 +59,12 @@ fn row_to_repository(row: sqlx::postgres::PgRow) -> Result<Repository, DomainErr
         created_at: row
             .try_get::<DateTime<Utc>, _>("created_at")
             .map_err(|e| DomainError::Persistence(e.to_string()))?,
+        mirror_source_url: row
+            .try_get("mirror_source_url")
+            .map_err(|e| DomainError::Persistence(e.to_string()))?,
+        mirror_synced_at: row
+            .try_get::<Option<DateTime<Utc>>, _>("mirror_synced_at")
+            .map_err(|e| DomainError::Persistence(e.to_string()))?,
     })
 }
 
@@ -68,8 +74,8 @@ impl RepoRepository for PostgresRepoRepository {
     async fn save(&self, repo: &Repository) -> Result<(), DomainError> {
         sqlx::query(
             r#"
-            INSERT INTO repositories (id, owner_id, name, display_name, description, visibility, default_branch, created_at)
-            VALUES ($1, $2, $3, $4, $5, $6::visibility, $7, $8)
+            INSERT INTO repositories (id, owner_id, name, display_name, description, visibility, default_branch, created_at, mirror_source_url, mirror_synced_at)
+            VALUES ($1, $2, $3, $4, $5, $6::visibility, $7, $8, $9, $10)
             "#,
         )
         .bind(repo.id)
@@ -80,6 +86,8 @@ impl RepoRepository for PostgresRepoRepository {
         .bind(repo.visibility.as_sql_str())
         .bind(&repo.default_branch)
         .bind(repo.created_at)
+        .bind(&repo.mirror_source_url)
+        .bind(repo.mirror_synced_at)
         .execute(&self.pool)
         .await
         .map_err(|e| {
@@ -99,7 +107,7 @@ impl RepoRepository for PostgresRepoRepository {
     #[instrument(skip(self))]
     async fn find_by_id(&self, id: &Uuid) -> Result<Option<Repository>, DomainError> {
         let row = sqlx::query(
-            "SELECT id, owner_id, name, display_name, description, visibility::text, default_branch, created_at \
+            "SELECT id, owner_id, name, display_name, description, visibility::text, default_branch, created_at, mirror_source_url, mirror_synced_at \
              FROM repositories WHERE id = $1",
         )
         .bind(id)
@@ -120,7 +128,7 @@ impl RepoRepository for PostgresRepoRepository {
         name: &str,
     ) -> Result<Option<Repository>, DomainError> {
         let row = sqlx::query(
-            "SELECT id, owner_id, name, display_name, description, visibility::text, default_branch, created_at \
+            "SELECT id, owner_id, name, display_name, description, visibility::text, default_branch, created_at, mirror_source_url, mirror_synced_at \
              FROM repositories WHERE owner_id = $1 AND name = $2",
         )
         .bind(owner_id)
@@ -138,7 +146,7 @@ impl RepoRepository for PostgresRepoRepository {
     #[instrument(skip(self))]
     async fn list_by_owner(&self, owner_id: &Uuid) -> Result<Vec<Repository>, DomainError> {
         let rows = sqlx::query(
-            "SELECT id, owner_id, name, display_name, description, visibility::text, default_branch, created_at \
+            "SELECT id, owner_id, name, display_name, description, visibility::text, default_branch, created_at, mirror_source_url, mirror_synced_at \
              FROM repositories WHERE owner_id = $1 ORDER BY created_at DESC",
         )
         .bind(owner_id)
@@ -152,7 +160,7 @@ impl RepoRepository for PostgresRepoRepository {
     #[instrument(skip(self))]
     async fn list_public(&self, limit: usize) -> Result<Vec<Repository>, DomainError> {
         let rows = sqlx::query(
-            "SELECT id, owner_id, name, display_name, description, visibility::text, default_branch, created_at \
+            "SELECT id, owner_id, name, display_name, description, visibility::text, default_branch, created_at, mirror_source_url, mirror_synced_at \
              FROM repositories WHERE visibility = 'public' ORDER BY created_at DESC LIMIT $1",
         )
         .bind(limit as i64)
@@ -221,5 +229,18 @@ impl RepoRepository for PostgresRepoRepository {
         .map_err(|e| DomainError::Persistence(e.to_string()))?;
 
         Ok(row.and_then(|r| r.try_get::<String, _>("role").ok()))
+    }
+
+    #[instrument(skip(self))]
+    async fn update_mirror_synced_at(&self, repo_id: &Uuid) -> Result<(), DomainError> {
+        sqlx::query(
+            "UPDATE repositories SET mirror_synced_at = NOW() WHERE id = $1",
+        )
+        .bind(repo_id)
+        .execute(&self.pool)
+        .await
+        .map_err(|e| DomainError::Persistence(e.to_string()))?;
+
+        Ok(())
     }
 }

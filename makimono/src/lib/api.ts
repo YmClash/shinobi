@@ -197,6 +197,10 @@ export interface Repository {
   visibility: string;
   default_branch: string;
   created_at: string;
+  /** URL Git source pour les repos importés depuis GitHub (Phase 19B). */
+  mirror_source_url?: string | null;
+  /** Timestamp du dernier import miroir (Phase 19B). */
+  mirror_synced_at?: string | null;
 }
 
 export interface RepositoriesResponse {

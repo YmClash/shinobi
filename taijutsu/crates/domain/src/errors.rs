@@ -57,6 +57,10 @@ pub enum DomainError {
     #[error("Erreur interne: {0}")]
     Internal(String),
 
+    /// Erreur d'un service externe (ex: GitHub API rate limit — Phase 19B).
+    #[error("Service externe: {0}")]
+    External(String),
+
     /// Le chemin pointe vers un fichier, pas un répertoire.
     /// Retourné par `list_tree` quand le path est un fichier —
     /// signal au handler de basculer vers `read_blob`.

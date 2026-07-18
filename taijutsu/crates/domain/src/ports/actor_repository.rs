@@ -73,6 +73,12 @@ pub trait ActorRepository: Send + Sync {
         cred_type: &str,
     ) -> Result<Option<Actor>, DomainError>;
 
+    /// Retrouve un acteur par son identifiant GitHub OAuth (Phase 20).
+    async fn find_by_github_id(&self, github_id: i64) -> Result<Option<Actor>, DomainError>;
+
+    /// Lie un compte GitHub à un acteur existant (Phase 20).
+    async fn update_github_id(&self, actor_id: &Uuid, github_id: i64) -> Result<(), DomainError>;
+
     /// Liste les PAT d'un acteur (label + created_at, pas le hash).
     async fn list_pats(
         &self,

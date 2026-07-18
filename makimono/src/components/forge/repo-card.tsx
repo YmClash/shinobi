@@ -29,6 +29,7 @@ interface RepoCardProps {
 
 export function RepoCard({ repo, ownerHandle, className = "" }: RepoCardProps) {
   const isPublic = repo.visibility === "public";
+  const isMirror = Boolean(repo.mirror_source_url);
 
   return (
     <Link href={`/${ownerHandle}/${repo.name}`}>
@@ -46,7 +47,7 @@ export function RepoCard({ repo, ownerHandle, className = "" }: RepoCardProps) {
         {/* Accent bar */}
         <div className="forge-card-accent" />
 
-        {/* Header: name + visibility */}
+        {/* Header: name + badges */}
         <div className="flex items-start justify-between gap-2 mb-2">
           <div className="min-w-0 flex-1">
             <h3 className="text-sm font-semibold text-foreground truncate group-hover:text-primary transition-colors">
@@ -57,16 +58,26 @@ export function RepoCard({ repo, ownerHandle, className = "" }: RepoCardProps) {
             </p>
           </div>
 
-          <Badge
-            variant="outline"
-            className={`text-[10px] px-1.5 py-0 shrink-0 ${
-              isPublic
-                ? "border-emerald-500/30 text-emerald-500/80 bg-emerald-500/5"
-                : "border-amber-500/30 text-amber-500/80 bg-amber-500/5"
-            }`}
-          >
-            {isPublic ? "🌍 Public" : "🔒 Private"}
-          </Badge>
+          <div className="flex items-center gap-1.5 shrink-0">
+            {isMirror && (
+              <Badge
+                variant="outline"
+                className="text-[10px] px-1.5 py-0 border-[hsl(210,80%,50%)]/30 text-[hsl(210,80%,50%)]/80 bg-[hsl(210,80%,50%)]/5"
+              >
+                🌉 Mirror
+              </Badge>
+            )}
+            <Badge
+              variant="outline"
+              className={`text-[10px] px-1.5 py-0 ${
+                isPublic
+                  ? "border-emerald-500/30 text-emerald-500/80 bg-emerald-500/5"
+                  : "border-amber-500/30 text-amber-500/80 bg-amber-500/5"
+              }`}
+            >
+              {isPublic ? "🌍 Public" : "🔒 Private"}
+            </Badge>
+          </div>
         </div>
 
         {/* Description */}

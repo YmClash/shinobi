@@ -4,6 +4,7 @@ import { useState, useCallback } from "react";
 import { Skeleton } from "@/components/ui/skeleton";
 import { RepoCard } from "@/components/forge/repo-card";
 import { CreateRepoForm } from "@/components/forge/create-repo-form";
+import { ImportGitHubForm } from "@/components/forge/import-github-form";
 import { useRepositories, emitRepoCreated } from "@/hooks/use-api";
 import { useAuth } from "@/hooks/use-auth";
 
@@ -11,20 +12,28 @@ import { forgeRepository } from "./actions";
 
 // ═══════════════════════════════════════════════════════════════
 // La Forge — Repository listing & creation page
+// Phase 19B — Added GitHub Import tab
 // ═══════════════════════════════════════════════════════════════
 
+type ForgeTab = "create" | "import";
+
 export default function ForgePage() {
-  const [showForm, setShowForm] = useState(false);
+  const [showPanel, setShowPanel] = useState(false);
+  const [activeTab, setActiveTab] = useState<ForgeTab>("create");
   const { user } = useAuth();
   const ownerHandle = user?.handle ?? null;
   const { data, loading, error, refetch } = useRepositories(ownerHandle);
 
   const handleCreated = useCallback(() => {
-    setShowForm(false);
+    setShowPanel(false);
     refetch();           // Mise à jour locale (forge page)
     emitRepoCreated();  // Notifie la sidebar et tout autre listener
   }, [refetch]);
 
+  const handleImported = useCallback(() => {
+    refetch();
+    emitRepoCreated();
+  }, [refetch]);
 
   const repos = data?.repositories ?? [];
 
@@ -40,40 +49,67 @@ export default function ForgePage() {
             Forgez et gérez vos dépôts de versioning
           </p>
         </div>
-        <div className="flex items-center gap-3">
+        <div className="flex items-center gap-2">
           {!loading && (
             <span className="text-xs text-muted-foreground">
               {repos.length} dépôt{repos.length > 1 ? "s" : ""}
             </span>
           )}
           <button
-            onClick={() => setShowForm(!showForm)}
+            onClick={() => { setShowPanel(!showPanel); setActiveTab("create"); }}
             className={`
               inline-flex items-center gap-1.5 px-3 py-1.5 text-xs font-medium rounded-lg
               transition-all cursor-pointer
-              ${showForm
+              ${showPanel
                 ? "bg-muted text-muted-foreground hover:bg-muted/80"
                 : "bg-primary text-primary-foreground hover:bg-primary/90 hover:shadow-lg hover:shadow-primary/20 hover:scale-105 active:scale-95"
               }
             `}
           >
-            <span>{showForm ? "✕" : "✦"}</span>
-            <span>{showForm ? "Annuler" : "Nouveau Dépôt"}</span>
+            <span>{showPanel ? "✕" : "✦"}</span>
+            <span>{showPanel ? "Fermer" : "Nouveau"}</span>
           </button>
         </div>
       </div>
 
-      {/* ── Create Form (slide-down) ─────────────── */}
-      {showForm && (
+      {/* ── Creation Panel (slide-down with tabs) ─── */}
+      {showPanel && (
         <div className="animate-fade-in-up rounded-xl border border-border/50 bg-card p-5">
-          <h2 className="text-sm font-semibold mb-4 flex items-center gap-2">
-            <span>🔨</span>
-            <span>Forger un Nouveau Dépôt</span>
-          </h2>
-          <CreateRepoForm onCreated={handleCreated} forgeAction={(formData: FormData) => {
-            if (user?.id) formData.set("owner_id", user.id);
-            return forgeRepository(formData);
-          }} ownerHandle={ownerHandle ?? "system"} />
+          {/* Tab Switcher */}
+          <div className="flex gap-1 mb-5 p-0.5 rounded-lg bg-muted/50 w-fit">
+            <button
+              onClick={() => setActiveTab("create")}
+              className={`px-3 py-1.5 text-xs font-medium rounded-md transition-all cursor-pointer ${
+                activeTab === "create"
+                  ? "bg-card text-foreground shadow-sm"
+                  : "text-muted-foreground hover:text-foreground"
+              }`}
+            >
+              🔨 Nouveau Dépôt
+            </button>
+            <button
+              onClick={() => setActiveTab("import")}
+              className={`px-3 py-1.5 text-xs font-medium rounded-md transition-all cursor-pointer ${
+                activeTab === "import"
+                  ? "bg-card text-foreground shadow-sm"
+                  : "text-muted-foreground hover:text-foreground"
+              }`}
+            >
+              🌉 Import GitHub
+            </button>
+          </div>
+
+          {/* Tab Content */}
+          {activeTab === "create" && (
+            <CreateRepoForm onCreated={handleCreated} forgeAction={(formData: FormData) => {
+              if (user?.id) formData.set("owner_id", user.id);
+              return forgeRepository(formData);
+            }} ownerHandle={ownerHandle ?? "system"} />
+          )}
+
+          {activeTab === "import" && (
+            <ImportGitHubForm onImported={handleImported} />
+          )}
         </div>
       )}
 
@@ -113,10 +149,11 @@ export default function ForgePage() {
           <span className="text-6xl mb-4 opacity-30">🏗️</span>
           <p className="text-sm font-medium">Aucun dépôt forgé</p>
           <p className="text-xs mt-2 opacity-60">
-            Cliquez sur &quot;Nouveau Dépôt&quot; pour créer votre premier dépôt
+            Cliquez sur &quot;Nouveau&quot; pour créer ou importer un dépôt
           </p>
         </div>
       )}
     </div>
   );
 }
+

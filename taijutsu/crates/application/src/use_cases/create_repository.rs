@@ -212,6 +212,12 @@ mod tests {
         async fn find_actor_by_credential_hash(&self, _hash: &str, _cred_type: &str) -> Result<Option<Actor>, DomainError> {
             Ok(None)
         }
+        async fn find_by_github_id(&self, _github_id: i64) -> Result<Option<Actor>, DomainError> {
+            Ok(None)
+        }
+        async fn update_github_id(&self, _actor_id: &Uuid, _github_id: i64) -> Result<(), DomainError> {
+            Ok(())
+        }
         async fn list_pats(&self, _actor_id: &Uuid) -> Result<Vec<domain::ports::actor_repository::PatInfo>, DomainError> {
             Ok(vec![])
         }
@@ -281,6 +287,9 @@ mod tests {
         }
         async fn get_role(&self, _actor_id: &Uuid, _repo_id: &Uuid) -> Result<Option<String>, DomainError> {
             Ok(Some("owner".to_string()))
+        }
+        async fn update_mirror_synced_at(&self, _repo_id: &Uuid) -> Result<(), DomainError> {
+            Ok(())
         }
     }
 

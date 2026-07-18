@@ -30,6 +30,9 @@ impl IntoResponse for AppError {
                 // Ne devrait pas arriver : le handler gère IsFile avant d'appeler From<DomainError>
                 (StatusCode::UNPROCESSABLE_ENTITY, self.0.to_string())
             }
+            DomainError::External(_) => {
+                (StatusCode::BAD_GATEWAY, self.0.to_string())
+            }
             DomainError::Persistence(_)
             | DomainError::VcsError(_)
             | DomainError::StorageError(_)
@@ -72,6 +75,7 @@ pub fn domain_error_to_status(err: DomainError) -> tonic::Status {
         DomainError::Forbidden(_) => tonic::Status::permission_denied(err.to_string()),
         DomainError::Duplicate(_) => tonic::Status::already_exists(err.to_string()),
         DomainError::IsFile { .. } => tonic::Status::invalid_argument(err.to_string()),
+        DomainError::External(_) => tonic::Status::unavailable(err.to_string()),
         DomainError::Persistence(_)
         | DomainError::VcsError(_)
         | DomainError::StorageError(_)

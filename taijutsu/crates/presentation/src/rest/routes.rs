@@ -14,6 +14,7 @@ use uuid::Uuid;
 
 use application::use_cases::create_operation::CreateOperationCommand;
 use application::use_cases::create_repository::CreateRepositoryCommand;
+use application::use_cases::import_github_repo::ImportGitHubRepoCommand;
 use application::use_cases::list_operations::ListFilter;
 use application::use_cases::search_chunks::ChunkSearchFilter;
 use application::use_cases::sensei_chat::{ChatMessage, SenseiChatRequest};
@@ -300,11 +301,16 @@ pub fn create_router(state: SharedState) -> Router {
         .route("/api/v1/auth/register", post(crate::rest::auth_routes::register_handler))
         .route("/api/v1/auth/login", post(crate::rest::auth_routes::login_handler))
         .route("/api/v1/auth/me", get(crate::rest::auth_routes::me_handler))
-        .route(
-            "/api/v1/auth/tokens",
+        .route("/api/v1/auth/tokens",
             post(crate::rest::auth_routes::create_pat_handler)
                 .get(crate::rest::auth_routes::list_pats_handler),
         )
+        // ── Phase 19B — GitHub Import ─────────────────────────────
+        .route("/api/v1/repos/import-github", post(import_github_handler))
+        .route("/api/v1/github/preview", get(github_preview_handler))
+        // ── Phase 20 — GitHub OAuth ──────────────────────────────
+        .route("/api/v1/auth/github", get(crate::rest::auth_routes::github_auth_url_handler))
+        .route("/api/v1/auth/github/callback", post(crate::rest::auth_routes::github_callback_handler))
         // ── Métriques Prometheus ────────────────────
         .route(
             "/metrics",
@@ -518,6 +524,12 @@ pub struct RepositoryJson {
     pub visibility: String,
     pub default_branch: String,
     pub created_at: DateTime<Utc>,
+    /// URL Git source (non-null = importé depuis GitHub). Phase 19B.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub mirror_source_url: Option<String>,
+    /// Timestamp du dernier import miroir. Phase 19B.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub mirror_synced_at: Option<DateTime<Utc>>,
 }
 
 impl From<domain::entities::repository::Repository> for RepositoryJson {
@@ -531,6 +543,8 @@ impl From<domain::entities::repository::Repository> for RepositoryJson {
             visibility: repo.visibility.as_sql_str().to_string(),
             default_branch: repo.default_branch,
             created_at: repo.created_at,
+            mirror_source_url: repo.mirror_source_url,
+            mirror_synced_at: repo.mirror_synced_at,
         }
     }
 }
@@ -1225,4 +1239,110 @@ async fn sensei_warmup_handler(
             format!("Warmup error (HTTP {status}): {text}")
         )))
     }
+}
+
+// ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+// ── Phase 19B — GitHub Import (Le Pont des Mondes)
+// ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+/// Corps de la requête POST /api/v1/repos/import-github.
+#[derive(Debug, Deserialize)]
+pub struct ImportGitHubBody {
+    /// URL du dépôt GitHub (ex: "https://github.com/tokio-rs/tokio").
+    pub github_url: String,
+    /// Override du nom de repo dans SHINOBI (défaut: nom GitHub).
+    #[serde(default)]
+    pub name_override: Option<String>,
+}
+
+/// Paramètres de query pour GET /api/v1/github/preview.
+#[derive(Debug, Deserialize)]
+pub struct GitHubPreviewQuery {
+    /// URL du dépôt GitHub à prévisualiser.
+    pub url: String,
+}
+
+/// Importer un dépôt GitHub — `POST /api/v1/repos/import-github`
+///
+/// Authentifié : nécessite un JWT valide (AuthUser).
+/// Le owner_id est extrait automatiquement du token.
+async fn import_github_handler(
+    auth: crate::rest::auth_middleware::AuthUser,
+    State(state): State<SharedState>,
+    Json(body): Json<ImportGitHubBody>,
+) -> Result<(axum::http::StatusCode, Json<RepositoryJson>), AppError> {
+    info!(
+        actor_id = %auth.0.actor_id(),
+        github_url = %body.github_url,
+        "REST: ImportGitHub reçu (Phase 19B — Le Pont des Mondes)"
+    );
+
+    let cmd = ImportGitHubRepoCommand {
+        owner_id: auth.0.actor_id(),
+        github_url: body.github_url,
+        name_override: body.name_override,
+    };
+
+    let repo = state.import_github_repo.execute(cmd).await?;
+
+    info!(
+        repo_id = %repo.id,
+        repo_name = %repo.name,
+        "REST: Import GitHub terminé avec succès 🌉"
+    );
+
+    Ok((
+        axum::http::StatusCode::CREATED,
+        Json(RepositoryJson::from(repo)),
+    ))
+}
+
+/// Prévisualiser un dépôt GitHub — `GET /api/v1/github/preview?url=...`
+///
+/// Authentifié : protège le rate limit GitHub (60 req/h par IP).
+async fn github_preview_handler(
+    _auth: crate::rest::auth_middleware::AuthUser,
+    State(state): State<SharedState>,
+    Query(params): Query<GitHubPreviewQuery>,
+) -> Result<Json<serde_json::Value>, AppError> {
+    info!(
+        url = %params.url,
+        "REST: GitHubPreview reçu (Phase 19B)"
+    );
+
+    // Parser l'URL pour extraire owner/repo
+    let cleaned = params.url.trim().trim_end_matches('/').trim_end_matches(".git");
+    let path = if cleaned.contains("github.com") {
+        cleaned.split("github.com").last().unwrap_or("").trim_start_matches('/')
+    } else {
+        cleaned
+    };
+    let parts: Vec<&str> = path.split('/').filter(|s| !s.is_empty()).collect();
+
+    if parts.len() < 2 {
+        return Err(AppError::from(DomainError::BusinessRule(format!(
+            "URL GitHub invalide: '{}'. Format attendu: https://github.com/owner/repo",
+            params.url
+        ))));
+    }
+
+    let (owner, repo) = (parts[0], parts[1]);
+
+    let info = state
+        .github_service
+        .fetch_repo_info(owner, repo)
+        .await?;
+
+    Ok(Json(serde_json::json!({
+        "full_name": info.full_name,
+        "name": info.name,
+        "description": info.description,
+        "clone_url": info.clone_url,
+        "default_branch": info.default_branch,
+        "stars": info.stars,
+        "forks": info.forks,
+        "language": info.language,
+        "license": info.license,
+        "is_private": info.is_private,
+    })))
 }

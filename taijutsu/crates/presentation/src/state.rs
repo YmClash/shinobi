@@ -15,6 +15,7 @@ use application::use_cases::get_operation_diff::GetOperationDiffUseCase;
 use application::use_cases::get_reviews::GetReviewsUseCase;
 use application::use_cases::get_score_history::GetScoreHistoryUseCase;
 use application::use_cases::get_tree::GetTreeUseCase;
+use application::use_cases::import_github_repo::ImportGitHubRepoUseCase;
 use application::use_cases::list_operations::ListOperationsUseCase;
 use application::use_cases::list_refs::ListRefsUseCase;
 use application::use_cases::list_repositories::ListRepositoriesUseCase;
@@ -103,6 +104,21 @@ pub struct SharedState {
 
     /// Use case: création de PAT.
     pub create_pat: Arc<application::use_cases::create_pat::CreatePatUseCase>,
+
+    // ── Phase 19B — GitHub Import ──────────────────────────────────
+    /// Use case: import d'un dépôt GitHub dans la Forge.
+    pub import_github_repo: Arc<ImportGitHubRepoUseCase>,
+
+    /// Service GitHub (API v3 + fetch injecté).
+    pub github_service: Arc<dyn domain::ports::github_service::GitHubService>,
+
+    // ── Phase 20 — GitHub OAuth ──────────────────────────────────
+    /// Use case: authentification via GitHub OAuth.
+    /// `None` si les variables GITHUB_CLIENT_ID/SECRET ne sont pas configurées.
+    pub oauth_github: Option<Arc<application::use_cases::oauth_github::OAuthGitHubUseCase>>,
+
+    /// URL du frontend (pour construire la redirect_uri OAuth).
+    pub frontend_url: Option<String>,
 }
 
 // ── Phase 12A — Git Bridge HTTP ──────────────────────────────────────

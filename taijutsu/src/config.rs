@@ -83,6 +83,15 @@ pub struct Config {
 
     /// Durée de validité des JWT en secondes. Défaut: 604800 (7 jours).
     pub jwt_duration_secs: i64,
+
+    // ── Phase 20 — GitHub OAuth ────────────────────────────────────
+
+    /// GitHub OAuth Application Client ID (optionnel).
+    /// Si absent, les routes OAuth sont désactivées (graceful degradation).
+    pub github_client_id: Option<String>,
+
+    /// GitHub OAuth Application Client Secret (optionnel).
+    pub github_client_secret: Option<String>,
 }
 
 impl Config {
@@ -150,6 +159,9 @@ impl Config {
                 .ok()
                 .and_then(|d| d.parse().ok())
                 .unwrap_or(604_800), // 7 days
+            // ── Phase 20 — GitHub OAuth ────────────────────
+            github_client_id: env::var("GITHUB_CLIENT_ID").ok(),
+            github_client_secret: env::var("GITHUB_CLIENT_SECRET").ok(),
         }
     }
 }

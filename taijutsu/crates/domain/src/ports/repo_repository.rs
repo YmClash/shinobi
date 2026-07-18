@@ -57,4 +57,7 @@ pub trait RepoRepository: Send + Sync {
         actor_id: &Uuid,
         repo_id: &Uuid,
     ) -> Result<Option<String>, DomainError>;
+
+    /// Met à jour le timestamp `mirror_synced_at` à NOW() (Phase 19B — GitHub Import).
+    async fn update_mirror_synced_at(&self, repo_id: &Uuid) -> Result<(), DomainError>;
 }

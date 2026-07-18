@@ -174,3 +174,36 @@ export async function listPats(): Promise<PatListResponse> {
   }
   return res.json();
 }
+
+// ── GitHub OAuth (Phase 20) ─────────────────────────────────
+
+export interface GitHubOAuthResponse extends AuthResponse {
+  is_new_account: boolean;
+}
+
+/** GET /api/v1/auth/github — Récupère l'URL d'autorisation GitHub (avec state anti-CSRF). */
+export async function getGitHubAuthUrl(): Promise<string> {
+  const res = await fetch(`${base()}/api/v1/auth/github`);
+  if (!res.ok) {
+    throw new Error("GitHub OAuth non disponible");
+  }
+  const data = await res.json();
+  return data.url;
+}
+
+/** POST /api/v1/auth/github/callback — Échange le code OAuth contre un JWT SHINOBI. */
+export async function exchangeGitHubCode(
+  code: string,
+  state: string
+): Promise<GitHubOAuthResponse> {
+  const res = await fetch(`${base()}/api/v1/auth/github/callback`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ code, state }),
+  });
+  if (!res.ok) {
+    const err = await res.json().catch(() => ({}));
+    throw new Error(err?.error?.message ?? `Erreur GitHub OAuth ${res.status}`);
+  }
+  return res.json();
+}

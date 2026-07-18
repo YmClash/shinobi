@@ -4778,3 +4778,319 @@ html * {
   border-color: oklch(0.55 0.05 60 / 30%);
   box-shadow: 0 4px 20px oklch(0.4 0.05 60 / 10%);
 }
+
+/* ═══════════════════════════════════════════════════════════════
+   Phase 19B — GitHub Import Spinner
+   ═══════════════════════════════════════════════════════════════ */
+
+.import-github-spinner {
+  width: 24px;
+  height: 24px;
+  border: 2px solid oklch(0.5 0.02 260 / 30%);
+  border-top-color: hsl(210, 80%, 50%);
+  border-radius: 50%;
+  animation: import-spin 0.7s linear infinite;
+}
+
+@keyframes import-spin {
+  to { transform: rotate(360deg); }
+}
+
+.import-github-form {
+  min-height: 120px;
+}
+
+/* ═══════════════════════════════════════════════════════════════
+   Bookmarks Page (Phase 19B+)
+   ═══════════════════════════════════════════════════════════════ */
+
+.bk-page {
+  max-width: 56rem;
+  margin: 0 auto;
+  padding: 1.5rem 1rem;
+}
+
+/* ── Header ──────────────────────────────── */
+
+.bk-header {
+  margin-bottom: 1.75rem;
+}
+
+.bk-back-link {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.25rem;
+  font-size: 0.75rem;
+  color: var(--muted-foreground);
+  text-decoration: none;
+  transition: color 0.2s;
+  margin-bottom: 0.5rem;
+}
+
+.bk-back-link:hover {
+  color: var(--primary);
+}
+
+.bk-title {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+  font-size: 1.125rem;
+  font-weight: 700;
+  letter-spacing: 0.02em;
+  color: var(--foreground);
+  margin: 0;
+}
+
+.bk-title-icon {
+  font-size: 1.25rem;
+}
+
+.bk-subtitle {
+  font-size: 0.75rem;
+  color: var(--muted-foreground);
+  margin-top: 0.25rem;
+}
+
+/* ── Sections ────────────────────────────── */
+
+.bk-section {
+  margin-bottom: 2rem;
+}
+
+.bk-section-title {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+  font-size: 0.8rem;
+  font-weight: 600;
+  color: var(--foreground);
+  padding-bottom: 0.5rem;
+  margin-bottom: 0;
+  border-bottom: 1px solid var(--border);
+}
+
+.bk-count {
+  font-size: 0.65rem;
+  font-weight: 600;
+  padding: 0.1rem 0.45rem;
+  border-radius: 9999px;
+  background: var(--muted);
+  color: var(--muted-foreground);
+  margin-left: 0.25rem;
+}
+
+/* ── Row List ────────────────────────────── */
+
+.bk-list {
+  border-left: 1px solid var(--border);
+  border-right: 1px solid var(--border);
+  border-radius: 0 0 0.5rem 0.5rem;
+  overflow: hidden;
+}
+
+.bk-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 0.625rem 0.875rem;
+  border-bottom: 1px solid var(--border);
+  transition: background 0.15s;
+}
+
+.bk-row:last-child {
+  border-bottom: none;
+}
+
+.bk-row:hover {
+  background: oklch(0.5 0.02 260 / 6%);
+}
+
+.bk-row-left {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+  min-width: 0;
+  flex: 1;
+}
+
+.bk-row-icon {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  flex-shrink: 0;
+}
+
+.bk-row-icon-branch {
+  color: oklch(0.65 0.15 145);
+}
+
+.bk-row-icon-tag {
+  color: oklch(0.65 0.15 60);
+}
+
+.bk-row-name {
+  font-size: 0.8rem;
+  font-weight: 500;
+  font-family: var(--font-mono, "Fira Code", monospace);
+  color: var(--foreground);
+  text-decoration: none;
+  transition: color 0.15s;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.bk-row-name:hover {
+  color: var(--primary);
+}
+
+.bk-default-badge {
+  font-size: 0.6rem;
+  font-weight: 600;
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+  padding: 0.1rem 0.4rem;
+  border-radius: 4px;
+  background: oklch(0.65 0.15 145 / 12%);
+  color: oklch(0.65 0.15 145);
+  border: 1px solid oklch(0.65 0.15 145 / 20%);
+  flex-shrink: 0;
+}
+
+.bk-row-right {
+  display: flex;
+  align-items: center;
+  gap: 0.75rem;
+  flex-shrink: 0;
+}
+
+.bk-row-hash {
+  font-size: 0.7rem;
+  font-family: var(--font-mono, "Fira Code", monospace);
+  color: var(--muted-foreground);
+  background: var(--muted);
+  padding: 0.15rem 0.4rem;
+  border-radius: 4px;
+}
+
+.bk-row-browse {
+  font-size: 0.7rem;
+  color: var(--primary);
+  text-decoration: none;
+  opacity: 0;
+  transition: opacity 0.15s;
+  white-space: nowrap;
+}
+
+.bk-row:hover .bk-row-browse {
+  opacity: 1;
+}
+
+.bk-row-browse:hover {
+  text-decoration: underline;
+}
+
+.bk-empty {
+  text-align: center;
+  padding: 2rem;
+  font-size: 0.8rem;
+  color: var(--muted-foreground);
+  border: 1px solid var(--border);
+  border-top: none;
+  border-radius: 0 0 0.5rem 0.5rem;
+}
+
+/* ── Theme Overrides ─────────────────────── */
+
+[data-theme="shinobi"] .bk-row:hover {
+  background: oklch(0.18 0.02 260 / 80%);
+}
+
+[data-theme="scroll"] .bk-row:hover {
+  background: oklch(0.95 0.01 80 / 80%);
+}
+
+[data-theme="scroll"] .bk-row-hash {
+  background: oklch(0.9 0.01 80);
+}
+
+/* ═══════════════════════════════════════════════════════════════
+   Phase 20 — GitHub OAuth Button & Divider
+   ═══════════════════════════════════════════════════════════════ */
+
+/* ── GitHub OAuth Button ─────────────────── */
+
+.auth-github-btn {
+  width: 100%;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 0.625rem;
+  padding: 0.7rem 1.25rem;
+  border: 1px solid var(--border);
+  border-radius: 0.5rem;
+  background: oklch(0.15 0.005 260);
+  color: oklch(0.92 0.01 260);
+  font-size: 0.875rem;
+  font-weight: 600;
+  font-family: var(--font-body);
+  cursor: pointer;
+  transition: all 0.2s ease;
+  letter-spacing: 0.01em;
+}
+
+.auth-github-btn:hover:not(:disabled) {
+  background: oklch(0.22 0.01 260);
+  border-color: oklch(0.4 0.02 260);
+  transform: translateY(-1px);
+  box-shadow: 0 4px 12px oklch(0 0 0 / 30%);
+}
+
+.auth-github-btn:active:not(:disabled) {
+  transform: translateY(0);
+}
+
+.auth-github-btn:disabled {
+  opacity: 0.6;
+  cursor: not-allowed;
+}
+
+.auth-github-btn svg {
+  flex-shrink: 0;
+}
+
+/* ── Auth Divider ("ou") ─────────────────── */
+
+.auth-divider {
+  display: flex;
+  align-items: center;
+  gap: 0.75rem;
+  margin: 1rem 0;
+  color: var(--muted-foreground);
+  font-size: 0.75rem;
+  text-transform: uppercase;
+  letter-spacing: 0.08em;
+  font-weight: 500;
+}
+
+.auth-divider::before,
+.auth-divider::after {
+  content: "";
+  flex: 1;
+  height: 1px;
+  background: var(--border);
+}
+
+/* ── Theme Overrides ─────────────────────── */
+
+[data-theme="scroll"] .auth-github-btn {
+  background: oklch(0.18 0.005 260);
+  color: oklch(0.95 0.01 80);
+  border-color: oklch(0.35 0.01 80);
+}
+
+[data-theme="scroll"] .auth-github-btn:hover:not(:disabled) {
+  background: oklch(0.25 0.01 260);
+  border-color: oklch(0.45 0.01 80);
+}
