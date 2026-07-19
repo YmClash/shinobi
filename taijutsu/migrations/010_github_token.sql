@@ -8,6 +8,6 @@
 -- Le token est mis à jour à chaque login OAuth.
 --
 
--- ── GitHub Token sur Actors ───────────────────────────────────
+-- ── GitHub Token sur Actors ─────────────────────────────────────
 -- Optionnel : seuls les acteurs ayant lié leur compte GitHub en ont un.
 ALTER TABLE actors ADD COLUMN IF NOT EXISTS github_token TEXT;

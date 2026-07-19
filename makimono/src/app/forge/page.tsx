@@ -5,6 +5,7 @@ import { Skeleton } from "@/components/ui/skeleton";
 import { RepoCard } from "@/components/forge/repo-card";
 import { CreateRepoForm } from "@/components/forge/create-repo-form";
 import { ImportGitHubForm } from "@/components/forge/import-github-form";
+import { GitHubReposList } from "@/components/forge/github-repos-list";
 import { useRepositories, emitRepoCreated } from "@/hooks/use-api";
 import { useAuth } from "@/hooks/use-auth";
 
@@ -12,16 +13,18 @@ import { forgeRepository } from "./actions";
 
 // ═══════════════════════════════════════════════════════════════
 // La Forge — Repository listing & creation page
-// Phase 19B — Added GitHub Import tab
+// Phase 19B — GitHub Import tab
+// Phase 20B — GitHub Repos Bulk Import tab (Le Clonage Massif)
 // ═══════════════════════════════════════════════════════════════
 
-type ForgeTab = "create" | "import";
+type ForgeTab = "create" | "import" | "github";
 
 export default function ForgePage() {
   const [showPanel, setShowPanel] = useState(false);
   const [activeTab, setActiveTab] = useState<ForgeTab>("create");
   const { user } = useAuth();
   const ownerHandle = user?.handle ?? null;
+  const hasGitHub = !!user?.github_id;
   const { data, loading, error, refetch } = useRepositories(ownerHandle);
 
   const handleCreated = useCallback(() => {
@@ -97,6 +100,18 @@ export default function ForgePage() {
             >
               🌉 Import GitHub
             </button>
+            {hasGitHub && (
+              <button
+                onClick={() => setActiveTab("github")}
+                className={`px-3 py-1.5 text-xs font-medium rounded-md transition-all cursor-pointer ${
+                  activeTab === "github"
+                    ? "bg-card text-foreground shadow-sm"
+                    : "text-muted-foreground hover:text-foreground"
+                }`}
+              >
+                🐙 Mes Repos GitHub
+              </button>
+            )}
           </div>
 
           {/* Tab Content */}
@@ -109,6 +124,10 @@ export default function ForgePage() {
 
           {activeTab === "import" && (
             <ImportGitHubForm onImported={handleImported} />
+          )}
+
+          {activeTab === "github" && hasGitHub && (
+            <GitHubReposList onImported={handleImported} />
           )}
         </div>
       )}
@@ -156,4 +175,3 @@ export default function ForgePage() {
     </div>
   );
 }
-

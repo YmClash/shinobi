@@ -6,7 +6,7 @@
 // stocke le JWT et redirige vers la Forge.
 // ═══════════════════════════════════════════════════════════════
 
-import { useEffect, useState } from "react";
+import { useEffect, useState, useRef } from "react";
 import { useRouter, useSearchParams } from "next/navigation";
 import { Suspense } from "react";
 import {
@@ -19,15 +19,24 @@ function GitHubCallbackInner() {
   const router = useRouter();
   const params = useSearchParams();
   const [error, setError] = useState<string | null>(null);
+  const [status, setStatus] = useState<"loading" | "success" | "error">("loading");
+  // Guard against double-invocation (React Strict Mode)
+  const exchangedRef = useRef(false);
 
   useEffect(() => {
+    // Prevent double exchange (StrictMode re-mount)
+    if (exchangedRef.current) return;
+
     const code = params.get("code");
     const state = params.get("state");
 
     if (!code || !state) {
       setError("Paramètres OAuth manquants. Réessayez depuis la page de connexion.");
+      setStatus("error");
       return;
     }
+
+    exchangedRef.current = true;
 
     exchangeGitHubCode(code, state)
       .then((result) => {
@@ -38,15 +47,18 @@ function GitHubCallbackInner() {
         // Émettre l'événement auth pour synchroniser le sidebar
         window.dispatchEvent(new Event("auth-change"));
 
-        // Rediriger vers la Forge
-        router.push("/");
+        setStatus("success");
+
+        // Rediriger vers la Forge après un bref délai
+        setTimeout(() => router.push("/"), 500);
       })
       .catch((err) => {
-        setError(
+        const msg =
           err instanceof Error
             ? err.message
-            : "Erreur lors de l'authentification GitHub"
-        );
+            : "Erreur lors de l'authentification GitHub";
+        setError(msg);
+        setStatus("error");
       });
   }, [params, router]);
 
@@ -61,20 +73,44 @@ function GitHubCallbackInner() {
           </div>
         </div>
 
-        {error ? (
+        {status === "error" && (
           <>
             <h1 className="auth-title">Erreur OAuth</h1>
             <div className="auth-error">
               <span>⚠️</span>
               <span>{error}</span>
             </div>
-            <div className="auth-footer" style={{ marginTop: "1rem" }}>
+            <div className="auth-footer" style={{ marginTop: "1.5rem", display: "flex", flexDirection: "column", gap: "0.75rem", alignItems: "center" }}>
               <a href="/login" className="auth-link">
                 ← Retour à la connexion
               </a>
+              <button
+                onClick={() => {
+                  // Retry: get a new OAuth URL and redirect
+                  window.location.href = "/login";
+                }}
+                className="auth-link"
+                style={{ cursor: "pointer", background: "none", border: "none", font: "inherit" }}
+              >
+                🔄 Réessayer
+              </button>
             </div>
           </>
-        ) : (
+        )}
+
+        {status === "success" && (
+          <>
+            <h1 className="auth-title">Connexion réussie ✅</h1>
+            <p className="auth-subtitle">
+              Redirection vers la Forge en cours...
+            </p>
+            <div style={{ display: "flex", justifyContent: "center", padding: "1.5rem" }}>
+              <span className="auth-spinner" />
+            </div>
+          </>
+        )}
+
+        {status === "loading" && (
           <>
             <h1 className="auth-title">Connexion via GitHub...</h1>
             <p className="auth-subtitle">

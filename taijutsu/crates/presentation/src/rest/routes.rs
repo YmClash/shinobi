@@ -311,6 +311,9 @@ pub fn create_router(state: SharedState) -> Router {
         // ── Phase 20 — GitHub OAuth ──────────────────────────────
         .route("/api/v1/auth/github", get(crate::rest::auth_routes::github_auth_url_handler))
         .route("/api/v1/auth/github/callback", post(crate::rest::auth_routes::github_callback_handler))
+        // ── Phase 20B — Le Clonage Massif ────────────────────────
+        .route("/api/v1/github/my-repos", get(list_github_repos_handler))
+        .route("/api/v1/github/bulk-import", post(bulk_import_github_handler))
         // ── Métriques Prometheus ────────────────────
         .route(
             "/metrics",
@@ -1344,5 +1347,70 @@ async fn github_preview_handler(
         "language": info.language,
         "license": info.license,
         "is_private": info.is_private,
+    })))
+}
+
+// ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+// ── Phase 20B — Le Clonage Massif (GitHub Bulk Import)
+// ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+/// Lister les repos GitHub de l'utilisateur — `GET /api/v1/github/my-repos`
+///
+/// Authentifié : utilise le github_token stocké de l'acteur connecté.
+/// Retourne la liste de repos avec un flag `already_imported`.
+async fn list_github_repos_handler(
+    auth: crate::rest::auth_middleware::AuthUser,
+    State(state): State<SharedState>,
+) -> Result<Json<serde_json::Value>, AppError> {
+    let actor_id = auth.0.actor_id();
+    info!(
+        actor_id = %actor_id,
+        "REST: ListGitHubRepos (Phase 20B — Le Clonage Massif)"
+    );
+
+    let repos = state.list_github_repos.execute(&actor_id).await?;
+
+    Ok(Json(serde_json::json!({
+        "repos": repos,
+        "count": repos.len(),
+    })))
+}
+
+/// Corps de la requête POST /api/v1/github/bulk-import.
+#[derive(Debug, Deserialize)]
+struct BulkImportGitHubBody {
+    /// Liste d'URLs GitHub à importer.
+    repo_urls: Vec<String>,
+}
+
+/// Import massif de repos GitHub — `POST /api/v1/github/bulk-import`
+///
+/// Authentifié : le owner_id est extrait du JWT.
+/// Importe les repos séquentiellement avec status par repo.
+async fn bulk_import_github_handler(
+    auth: crate::rest::auth_middleware::AuthUser,
+    State(state): State<SharedState>,
+    Json(body): Json<BulkImportGitHubBody>,
+) -> Result<Json<serde_json::Value>, AppError> {
+    let actor_id = auth.0.actor_id();
+    info!(
+        actor_id = %actor_id,
+        count = body.repo_urls.len(),
+        "REST: BulkImportGitHub (Phase 20B — Le Clonage Massif)"
+    );
+
+    let cmd = application::use_cases::bulk_import_github::BulkImportCommand {
+        owner_id: actor_id,
+        repo_urls: body.repo_urls,
+    };
+
+    let result = state.bulk_import_github.execute(cmd).await?;
+
+    Ok(Json(serde_json::json!({
+        "results": result.results,
+        "imported": result.imported,
+        "skipped": result.skipped,
+        "failed": result.failed,
+        "total": result.results.len(),
     })))
 }

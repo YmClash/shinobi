@@ -98,6 +98,12 @@ mod tests {
         async fn update_github_id(&self, _actor_id: &Uuid, _github_id: i64) -> Result<(), DomainError> {
             Ok(())
         }
+        async fn update_github_token(&self, _actor_id: &Uuid, _token: &str) -> Result<(), DomainError> {
+            Ok(())
+        }
+        async fn get_github_token(&self, _actor_id: &Uuid) -> Result<Option<String>, DomainError> {
+            Ok(None)
+        }
         async fn list_pats(&self, _actor_id: &Uuid) -> Result<Vec<domain::ports::actor_repository::PatInfo>, DomainError> {
             Ok(vec![])
         }
@@ -164,6 +170,7 @@ mod tests {
             email: None,
             bio: None,
             github_id: None,
+            github_token: None,
             created_at: chrono::Utc::now(),
         }
     }

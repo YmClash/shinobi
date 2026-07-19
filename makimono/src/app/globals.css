@@ -5114,3 +5114,371 @@ html * {
   background: oklch(0.25 0.01 260);
   border-color: oklch(0.45 0.01 80);
 }
+/* ═══════════════════════════════════════════════════════════════════
+   Phase 20B — Le Clonage Massif (GitHub Bulk Import)
+   ═══════════════════════════════════════════════════════════════════ */
+
+/* ── Loading spinner ──────────────────────────────────── */
+.gh-loading {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 3rem 0;
+}
+
+.gh-spinner {
+  width: 20px;
+  height: 20px;
+  border: 2px solid hsl(210, 80%, 50%, 0.2);
+  border-top-color: hsl(210, 80%, 50%);
+  border-radius: 50%;
+  animation: gh-spin 0.6s linear infinite;
+}
+
+@keyframes gh-spin {
+  to { transform: rotate(360deg); }
+}
+
+/* ── Repos container ──────────────────────────────────── */
+.gh-repos-container {
+  position: relative;
+}
+
+.gh-repos-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 0 0 0.75rem;
+  border-bottom: 1px solid oklch(0.25 0.01 260);
+  margin-bottom: 0.75rem;
+}
+
+/* ── Repos grid ───────────────────────────────────────── */
+.gh-repos-grid {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  max-height: 420px;
+  overflow-y: auto;
+  padding-right: 4px;
+}
+
+.gh-repos-grid::-webkit-scrollbar {
+  width: 4px;
+}
+.gh-repos-grid::-webkit-scrollbar-thumb {
+  background: oklch(0.3 0.01 260);
+  border-radius: 2px;
+}
+
+/* ── Repo card ────────────────────────────────────────── */
+.gh-repo-card {
+  display: flex;
+  align-items: flex-start;
+  gap: 0.75rem;
+  padding: 0.65rem 0.75rem;
+  border-radius: 8px;
+  border: 1px solid transparent;
+  background: oklch(0.14 0.005 260);
+  text-align: left;
+  transition: all 0.15s ease;
+  cursor: pointer;
+  width: 100%;
+}
+
+.gh-repo-card:hover:not(:disabled) {
+  background: oklch(0.16 0.008 260);
+  border-color: oklch(0.3 0.02 260);
+}
+
+.gh-repo-card:disabled {
+  cursor: default;
+  opacity: 0.5;
+}
+
+.gh-repo-selected {
+  background: oklch(0.16 0.02 210) !important;
+  border-color: hsl(210, 80%, 50%, 0.4) !important;
+}
+
+.gh-repo-imported {
+  opacity: 0.45;
+}
+
+/* ── Checkbox ─────────────────────────────────────────── */
+.gh-repo-check {
+  width: 18px;
+  height: 18px;
+  min-width: 18px;
+  border-radius: 4px;
+  border: 1.5px solid oklch(0.4 0.01 260);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  font-size: 10px;
+  font-weight: 700;
+  color: transparent;
+  transition: all 0.15s ease;
+  margin-top: 2px;
+}
+
+.gh-repo-check-on {
+  background: hsl(210, 80%, 50%);
+  border-color: hsl(210, 80%, 50%);
+  color: white;
+}
+
+.gh-repo-check-off {
+  background: oklch(0.3 0.01 145);
+  border-color: oklch(0.4 0.02 145);
+  color: oklch(0.8 0.05 145);
+}
+
+/* ── Repo info ────────────────────────────────────────── */
+.gh-repo-info {
+  flex: 1;
+  min-width: 0;
+}
+
+.gh-repo-name {
+  font-size: 12px;
+  font-weight: 600;
+  color: oklch(0.9 0.01 260);
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.gh-repo-badge {
+  font-size: 9px;
+  font-weight: 500;
+  padding: 1px 6px;
+  border-radius: 6px;
+  background: oklch(0.25 0.04 145);
+  color: oklch(0.7 0.1 145);
+  letter-spacing: 0.02em;
+}
+
+.gh-repo-desc {
+  font-size: 10px;
+  color: oklch(0.55 0.01 260);
+  margin-top: 2px;
+  line-height: 1.4;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.gh-repo-meta {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  margin-top: 4px;
+  font-size: 10px;
+  color: oklch(0.45 0.01 260);
+}
+
+.gh-repo-lang {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+}
+
+.gh-repo-dot {
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+}
+
+/* ── Import bar (sticky bottom) ───────────────────────── */
+.gh-import-bar {
+  position: sticky;
+  bottom: 0;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 0.75rem 1rem;
+  margin-top: 0.75rem;
+  background: oklch(0.12 0.01 260);
+  border: 1px solid oklch(0.25 0.02 210);
+  border-radius: 10px;
+  backdrop-filter: blur(8px);
+}
+
+.gh-import-btn {
+  padding: 0.5rem 1rem;
+  font-size: 11px;
+  font-weight: 600;
+  border-radius: 8px;
+  background: linear-gradient(135deg, hsl(210, 80%, 50%), hsl(260, 70%, 55%));
+  color: white;
+  border: none;
+  cursor: pointer;
+  transition: all 0.2s ease;
+  letter-spacing: 0.02em;
+}
+
+.gh-import-btn:hover {
+  transform: translateY(-1px);
+  box-shadow: 0 4px 16px hsl(210, 80%, 50%, 0.3);
+}
+
+/* ── Importing phase ──────────────────────────────────── */
+.gh-importing {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  padding: 3rem 1rem;
+}
+
+.gh-progress-bar {
+  width: 100%;
+  max-width: 280px;
+  height: 4px;
+  background: oklch(0.2 0.01 260);
+  border-radius: 2px;
+  overflow: hidden;
+}
+
+.gh-progress-fill {
+  height: 100%;
+  background: linear-gradient(90deg, hsl(210, 80%, 50%), hsl(260, 70%, 55%));
+  border-radius: 2px;
+  transition: width 0.5s ease;
+}
+
+/* ── Done phase ───────────────────────────────────────── */
+.gh-done {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  padding: 2rem 1rem;
+}
+
+.gh-done-stats {
+  display: flex;
+  gap: 12px;
+  margin-top: 1rem;
+}
+
+.gh-stat {
+  font-size: 11px;
+  padding: 4px 10px;
+  border-radius: 6px;
+  font-weight: 500;
+}
+
+.gh-stat-ok {
+  background: oklch(0.2 0.04 145);
+  color: oklch(0.7 0.1 145);
+}
+
+.gh-stat-skip {
+  background: oklch(0.2 0.04 60);
+  color: oklch(0.7 0.1 60);
+}
+
+.gh-stat-err {
+  background: oklch(0.2 0.04 25);
+  color: oklch(0.7 0.1 25);
+}
+
+.gh-done-details {
+  width: 100%;
+  max-width: 400px;
+  margin-top: 1rem;
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  max-height: 200px;
+  overflow-y: auto;
+}
+
+.gh-done-item {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 6px 10px;
+  border-radius: 6px;
+  font-size: 11px;
+}
+
+.gh-done-item-imported {
+  background: oklch(0.14 0.02 145);
+}
+
+.gh-done-item-skipped {
+  background: oklch(0.14 0.02 60);
+}
+
+.gh-done-item-error {
+  background: oklch(0.14 0.02 25);
+}
+
+.gh-done-icon {
+  font-size: 12px;
+}
+
+.gh-done-name {
+  font-weight: 500;
+  color: oklch(0.8 0.01 260);
+}
+
+.gh-done-msg {
+  font-size: 9px;
+  color: oklch(0.5 0.01 260);
+  margin-left: auto;
+}
+
+/* ── Scroll theme ─────────────────────────────────────── */
+[data-theme="scroll"] .gh-repo-card {
+  background: oklch(0.92 0.005 260);
+  border-color: oklch(0.85 0.01 260);
+}
+
+[data-theme="scroll"] .gh-repo-card:hover:not(:disabled) {
+  background: oklch(0.88 0.008 260);
+}
+
+[data-theme="scroll"] .gh-repo-selected {
+  background: oklch(0.9 0.02 210) !important;
+  border-color: hsl(210, 80%, 50%, 0.3) !important;
+}
+
+[data-theme="scroll"] .gh-repo-name {
+  color: oklch(0.2 0.01 260);
+}
+
+[data-theme="scroll"] .gh-repo-desc {
+  color: oklch(0.4 0.01 260);
+}
+
+[data-theme="scroll"] .gh-repo-meta {
+  color: oklch(0.5 0.01 260);
+}
+
+[data-theme="scroll"] .gh-repos-header {
+  border-color: oklch(0.85 0.01 260);
+}
+
+[data-theme="scroll"] .gh-import-bar {
+  background: oklch(0.95 0.005 260);
+  border-color: oklch(0.8 0.02 210);
+}
+
+[data-theme="scroll"] .gh-repo-check {
+  border-color: oklch(0.7 0.01 260);
+}
+
+[data-theme="scroll"] .gh-repos-grid::-webkit-scrollbar-thumb {
+  background: oklch(0.75 0.01 260);
+}
+
+[data-theme="scroll"] .gh-done-name {
+  color: oklch(0.2 0.01 260);
+}
+
+[data-theme="scroll"] .gh-done-msg {
+  color: oklch(0.5 0.01 260);
+}

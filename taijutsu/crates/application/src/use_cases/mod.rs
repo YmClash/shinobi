@@ -1,4 +1,5 @@
 pub mod analyze_operation;
+pub mod bulk_import_github;
 pub mod create_operation;
 pub mod create_pat;
 pub mod create_repository;
@@ -10,6 +11,7 @@ pub mod get_reviews;
 pub mod get_score_history;
 pub mod get_tree;
 pub mod import_github_repo;
+pub mod list_github_repos;
 pub mod list_operations;
 pub mod list_refs;
 pub mod list_repositories;

@@ -398,6 +398,24 @@ async fn main() -> anyhow::Result<()> {
             }
         };
 
+    // ── Phase 20B : Le Clonage Massif (GitHub Bulk Import) ──────────
+    let list_github_repos = Arc::new(
+        application::use_cases::list_github_repos::ListGitHubReposUseCase::new(
+            actor_repo.clone(),
+            github_service.clone(),
+            repo_repo.clone(),
+        ),
+    );
+
+    let bulk_import_github = Arc::new(
+        application::use_cases::bulk_import_github::BulkImportGitHubUseCase::new(
+            import_github_repo.clone(),
+            repo_repo.clone(),
+        ),
+    );
+
+    info!("🐙 GitHub Bulk Import initialisé (Phase 20B — Le Clonage Massif)");
+
     let shared_state = SharedState {
         create_operation,
         get_operation,
@@ -431,6 +449,9 @@ async fn main() -> anyhow::Result<()> {
         // Phase 20 — GitHub OAuth
         oauth_github,
         frontend_url: std::env::var("FRONTEND_URL").ok(),
+        // Phase 20B — Le Clonage Massif
+        list_github_repos,
+        bulk_import_github,
     };
 
     // ── Git Bridge HTTP (Phase 12A) ────────────────────

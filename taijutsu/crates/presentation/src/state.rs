@@ -119,6 +119,13 @@ pub struct SharedState {
 
     /// URL du frontend (pour construire la redirect_uri OAuth).
     pub frontend_url: Option<String>,
+
+    // ── Phase 20B — Le Clonage Massif ────────────────────────────
+    /// Use case: lister les repos GitHub de l'utilisateur connecté.
+    pub list_github_repos: Arc<application::use_cases::list_github_repos::ListGitHubReposUseCase>,
+
+    /// Use case: import massif de repos GitHub.
+    pub bulk_import_github: Arc<application::use_cases::bulk_import_github::BulkImportGitHubUseCase>,
 }
 
 // ── Phase 12A — Git Bridge HTTP ──────────────────────────────────────

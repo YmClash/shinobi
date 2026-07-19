@@ -66,4 +66,18 @@ pub trait GitHubService: Send + Sync {
         clone_url: &str,
         bare_repo_path: &Path,
     ) -> Result<(), DomainError>;
+
+    /// Liste les dépôts GitHub de l'utilisateur authentifié (Phase 20B).
+    ///
+    /// Utilise le token OAuth pour appeler `GET /user/repos`.
+    /// Limité aux dépôts publics en V1 (scope `public_repo`).
+    ///
+    /// ## Arguments
+    /// - `access_token` : token OAuth GitHub de l'utilisateur
+    /// - `per_page` : nombre de repos par page (max 100)
+    async fn list_user_repos(
+        &self,
+        access_token: &str,
+        per_page: u32,
+    ) -> Result<Vec<GitHubRepoInfo>, DomainError>;
 }

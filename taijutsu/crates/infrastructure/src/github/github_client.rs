@@ -199,4 +199,82 @@ impl GitHubService for GitHubClient {
 
         Ok(())
     }
+
+    #[instrument(skip(self, access_token), fields(per_page = per_page))]
+    async fn list_user_repos(
+        &self,
+        access_token: &str,
+        per_page: u32,
+    ) -> Result<Vec<GitHubRepoInfo>, DomainError> {
+        let per_page = per_page.min(100); // GitHub API max = 100
+
+        let url = format!(
+            "https://api.github.com/user/repos?visibility=public&sort=updated&per_page={per_page}&affiliation=owner"
+        );
+
+        let response = self
+            .http
+            .get(&url)
+            .header("Accept", "application/vnd.github.v3+json")
+            .header("Authorization", format!("Bearer {access_token}"))
+            .send()
+            .await
+            .map_err(|e| {
+                DomainError::External(format!("GitHub API /user/repos failed: {e}"))
+            })?;
+
+        let status = response.status();
+
+        if status.as_u16() == 401 {
+            return Err(DomainError::Unauthorized(
+                "Token GitHub expiré ou révoqué. Reconnectez-vous via GitHub OAuth.".to_string(),
+            ));
+        }
+
+        if status.as_u16() == 403 {
+            let body = response.text().await.unwrap_or_default();
+            if body.contains("rate limit") {
+                return Err(DomainError::External(
+                    "GitHub API rate limit atteint. Réessayez plus tard.".to_string(),
+                ));
+            }
+            return Err(DomainError::External(format!(
+                "GitHub API returned 403: {body}"
+            )));
+        }
+
+        if !status.is_success() {
+            let body = response.text().await.unwrap_or_default();
+            return Err(DomainError::External(format!(
+                "GitHub API /user/repos returned {status}: {body}"
+            )));
+        }
+
+        let api_repos: Vec<GitHubApiRepo> = response.json().await.map_err(|e| {
+            DomainError::External(format!("GitHub API /user/repos JSON parse failed: {e}"))
+        })?;
+
+        let repos: Vec<GitHubRepoInfo> = api_repos
+            .into_iter()
+            .map(|r| GitHubRepoInfo {
+                full_name: r.full_name,
+                name: r.name,
+                description: r.description,
+                clone_url: r.clone_url,
+                default_branch: r.default_branch,
+                stars: r.stargazers_count,
+                forks: r.forks_count,
+                language: r.language,
+                license: r.license.and_then(|l| l.spdx_id),
+                is_private: r.private,
+            })
+            .collect();
+
+        info!(
+            count = repos.len(),
+            "GitHub repos listés avec succès (Phase 20B)"
+        );
+
+        Ok(repos)
+    }
 }

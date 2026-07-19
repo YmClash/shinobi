@@ -120,6 +120,7 @@ pub async fn me_handler(
         "email": actor.email,
         "avatar_url": actor.avatar_url,
         "bio": actor.bio,
+        "github_id": actor.github_id,
         "created_at": actor.created_at,
     })))
 }

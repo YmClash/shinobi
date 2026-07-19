@@ -15,6 +15,7 @@ export interface AuthActor {
   email: string | null;
   avatar_url: string | null;
   bio?: string | null;
+  github_id?: number | null;
   created_at: string;
 }
 
@@ -204,6 +205,70 @@ export async function exchangeGitHubCode(
   if (!res.ok) {
     const err = await res.json().catch(() => ({}));
     throw new Error(err?.error?.message ?? `Erreur GitHub OAuth ${res.status}`);
+  }
+  return res.json();
+}
+
+// ── Phase 20B — Le Clonage Massif ─────────────────────────
+
+export interface GitHubRepoWithStatus {
+  full_name: string;
+  name: string;
+  description: string | null;
+  clone_url: string;
+  default_branch: string;
+  stars: number;
+  forks: number;
+  language: string | null;
+  license: string | null;
+  is_private: boolean;
+  already_imported: boolean;
+}
+
+export interface GitHubReposResponse {
+  repos: GitHubRepoWithStatus[];
+  count: number;
+}
+
+export interface BulkImportItemStatus {
+  github_url: string;
+  shinobi_name: string | null;
+  status: "imported" | "skipped" | "error";
+  message: string | null;
+}
+
+export interface BulkImportResult {
+  results: BulkImportItemStatus[];
+  imported: number;
+  skipped: number;
+  failed: number;
+  total: number;
+}
+
+/** GET /api/v1/github/my-repos — Liste les repos GitHub de l'utilisateur connecté. */
+export async function fetchGitHubRepos(): Promise<GitHubReposResponse> {
+  const res = await fetch(`${base()}/api/v1/github/my-repos`, {
+    headers: authHeaders(),
+  });
+  if (!res.ok) {
+    const err = await res.json().catch(() => ({}));
+    throw new Error(err?.error?.message ?? `Erreur ${res.status}`);
+  }
+  return res.json();
+}
+
+/** POST /api/v1/github/bulk-import — Import massif de repos GitHub. */
+export async function bulkImportGitHub(
+  repoUrls: string[]
+): Promise<BulkImportResult> {
+  const res = await fetch(`${base()}/api/v1/github/bulk-import`, {
+    method: "POST",
+    headers: authHeaders(),
+    body: JSON.stringify({ repo_urls: repoUrls }),
+  });
+  if (!res.ok) {
+    const err = await res.json().catch(() => ({}));
+    throw new Error(err?.error?.message ?? `Erreur ${res.status}`);
   }
   return res.json();
 }

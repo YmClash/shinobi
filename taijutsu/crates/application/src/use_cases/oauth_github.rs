@@ -31,9 +31,13 @@ use infrastructure::cache::redis_cache::RedisCache;
 
 #[derive(Debug, Deserialize)]
 struct GitHubTokenResponse {
-    access_token: String,
+    access_token: Option<String>,
     #[allow(dead_code)]
     token_type: Option<String>,
+    /// GitHub renvoie ce champ quand le code est invalide/expiré.
+    /// Ex: "bad_verification_code"
+    error: Option<String>,
+    error_description: Option<String>,
 }
 
 #[derive(Debug, Deserialize)]
@@ -120,7 +124,7 @@ impl OAuthGitHubUseCase {
             .map_err(|e| DomainError::Persistence(format!("Redis SET error: {e}")))?;
 
         let url = format!(
-            "https://github.com/login/oauth/authorize?client_id={}&redirect_uri={}&scope=read:user,user:email&state={}",
+            "https://github.com/login/oauth/authorize?client_id={}&redirect_uri={}&scope=read:user,user:email,public_repo&state={}",
             self.client_id,
             urlencoding::encode(redirect_uri),
             state,
@@ -176,20 +180,51 @@ impl OAuthGitHubUseCase {
             .await
             .map_err(|e| DomainError::External(format!("GitHub token parse error: {e}")))?;
 
-        let access_token = &token_data.access_token;
+        // ⚠️ GitHub renvoie HTTP 200 même en cas d'erreur !
+        // Le champ "error" est présent quand le code est invalide/expiré.
+        if let Some(ref err) = token_data.error {
+            let desc = token_data.error_description.as_deref().unwrap_or("Unknown");
+            return Err(DomainError::External(format!(
+                "GitHub OAuth error: {err} — {desc}. Réessayez le login GitHub."
+            )));
+        }
+
+        let access_token = token_data.access_token.as_deref().ok_or_else(|| {
+            DomainError::External(
+                "GitHub token exchange: access_token absent de la réponse".to_string(),
+            )
+        })?;
+
+        info!(token_len = access_token.len(), "🔑 Access token GitHub obtenu");
 
         // ── 4. GET /user → profil GitHub ────────────────────────
-        let profile: GitHubUserProfile = self
+        let user_resp = self
             .http_client
             .get("https://api.github.com/user")
+            .header("Accept", "application/vnd.github.v3+json")
             .header("Authorization", format!("Bearer {access_token}"))
             .header("User-Agent", "SHINOBI-Forge/1.0")
             .send()
             .await
-            .map_err(|e| DomainError::External(format!("GitHub /user failed: {e}")))?
-            .json()
+            .map_err(|e| DomainError::External(format!("GitHub /user failed: {e}")))?;
+
+        let user_status = user_resp.status();
+        let user_body = user_resp
+            .text()
             .await
-            .map_err(|e| DomainError::External(format!("GitHub /user parse: {e}")))?;
+            .map_err(|e| DomainError::External(format!("GitHub /user body read failed: {e}")))?;
+
+        if !user_status.is_success() {
+            return Err(DomainError::External(format!(
+                "GitHub /user returned {user_status}: {user_body}"
+            )));
+        }
+
+        let profile: GitHubUserProfile = serde_json::from_str(&user_body)
+            .map_err(|e| DomainError::External(format!(
+                "GitHub /user parse: {e} — body: {}",
+                &user_body[..user_body.len().min(200)]
+            )))?;
 
         info!(github_id = profile.id, login = %profile.login, "🔑 Profil GitHub récupéré");
 
@@ -219,6 +254,8 @@ impl OAuthGitHubUseCase {
         // ── 7. Chercher Actor par github_id ─────────────────────
         if let Some(existing) = self.actor_repo.find_by_github_id(profile.id).await? {
             info!(actor_id = %existing.id, "✅ Login GitHub direct (github_id match)");
+            // Phase 20B: Refresh le github_token à chaque login OAuth
+            self.actor_repo.update_github_token(&existing.id, access_token).await?;
             let token = self.generate_jwt_for(&existing)?;
             return Ok(OAuthGitHubResult {
                 actor: existing,
@@ -234,6 +271,8 @@ impl OAuthGitHubUseCase {
                 self.actor_repo
                     .update_github_id(&existing.id, profile.id)
                     .await?;
+                // Phase 20B: Stocker le github_token en clair
+                self.actor_repo.update_github_token(&existing.id, access_token).await?;
 
                 info!(
                     actor_id = %existing.id,
@@ -259,6 +298,7 @@ impl OAuthGitHubUseCase {
         actor.email = verified_email;
         actor.avatar_url = profile.avatar_url;
         actor.github_id = Some(profile.id);
+        actor.github_token = Some(access_token.to_string());
 
         self.actor_repo.save(&actor).await?;
 

@@ -59,6 +59,9 @@ fn row_to_actor(row: sqlx::postgres::PgRow) -> Result<Actor, DomainError> {
         github_id: row
             .try_get::<Option<i64>, _>("github_id")
             .unwrap_or(None),
+        github_token: row
+            .try_get::<Option<String>, _>("github_token")
+            .unwrap_or(None),
         created_at: row
             .try_get::<DateTime<Utc>, _>("created_at")
             .map_err(|e| DomainError::Persistence(e.to_string()))?,
@@ -71,8 +74,8 @@ impl ActorRepository for PostgresActorRepository {
     async fn save(&self, actor: &Actor) -> Result<(), DomainError> {
         sqlx::query(
             r#"
-            INSERT INTO actors (id, handle, display_name, actor_type, avatar_url, email, bio, github_id, created_at)
-            VALUES ($1, $2, $3, $4::actor_type, $5, $6, $7, $8, $9)
+            INSERT INTO actors (id, handle, display_name, actor_type, avatar_url, email, bio, github_id, github_token, created_at)
+            VALUES ($1, $2, $3, $4::actor_type, $5, $6, $7, $8, $9, $10)
             "#,
         )
         .bind(actor.id)
@@ -83,6 +86,7 @@ impl ActorRepository for PostgresActorRepository {
         .bind(&actor.email)
         .bind(&actor.bio)
         .bind(actor.github_id)
+        .bind(&actor.github_token)
         .bind(actor.created_at)
         .execute(&self.pool)
         .await
@@ -100,7 +104,7 @@ impl ActorRepository for PostgresActorRepository {
     #[instrument(skip(self))]
     async fn find_by_id(&self, id: &Uuid) -> Result<Option<Actor>, DomainError> {
         let row = sqlx::query(
-            "SELECT id, handle, display_name, actor_type::text, avatar_url, email, bio, github_id, created_at \
+            "SELECT id, handle, display_name, actor_type::text, avatar_url, email, bio, github_id, github_token, created_at \
              FROM actors WHERE id = $1",
         )
         .bind(id)
@@ -117,7 +121,7 @@ impl ActorRepository for PostgresActorRepository {
     #[instrument(skip(self))]
     async fn find_by_handle(&self, handle: &str) -> Result<Option<Actor>, DomainError> {
         let row = sqlx::query(
-            "SELECT id, handle, display_name, actor_type::text, avatar_url, email, bio, github_id, created_at \
+            "SELECT id, handle, display_name, actor_type::text, avatar_url, email, bio, github_id, github_token, created_at \
              FROM actors WHERE handle = $1",
         )
         .bind(handle)
@@ -134,7 +138,7 @@ impl ActorRepository for PostgresActorRepository {
     #[instrument(skip(self))]
     async fn find_by_email(&self, email: &str) -> Result<Option<Actor>, DomainError> {
         let row = sqlx::query(
-            "SELECT a.id, a.handle, a.display_name, a.actor_type::text, a.avatar_url, a.email, a.bio, a.github_id, a.created_at \
+            "SELECT a.id, a.handle, a.display_name, a.actor_type::text, a.avatar_url, a.email, a.bio, a.github_id, a.github_token, a.created_at \
              FROM actors a WHERE a.email = $1",
         )
         .bind(email)
@@ -233,7 +237,7 @@ impl ActorRepository for PostgresActorRepository {
     ) -> Result<Option<Actor>, DomainError> {
         let row = sqlx::query(
             "SELECT a.id, a.handle, a.display_name, a.actor_type::text, \
-                    a.avatar_url, a.email, a.bio, a.github_id, a.created_at \
+                    a.avatar_url, a.email, a.bio, a.github_id, a.github_token, a.created_at \
              FROM actors a \
              INNER JOIN credentials c ON c.actor_id = a.id \
              WHERE c.secret_hash = $1 AND c.cred_type = $2::credential_type \
@@ -256,7 +260,7 @@ impl ActorRepository for PostgresActorRepository {
     #[instrument(skip(self))]
     async fn find_by_github_id(&self, github_id: i64) -> Result<Option<Actor>, DomainError> {
         let row = sqlx::query(
-            "SELECT id, handle, display_name, actor_type::text, avatar_url, email, bio, github_id, created_at \
+            "SELECT id, handle, display_name, actor_type::text, avatar_url, email, bio, github_id, github_token, created_at \
              FROM actors WHERE github_id = $1",
         )
         .bind(github_id)
@@ -272,16 +276,39 @@ impl ActorRepository for PostgresActorRepository {
 
     #[instrument(skip(self))]
     async fn update_github_id(&self, actor_id: &Uuid, github_id: i64) -> Result<(), DomainError> {
-        sqlx::query(
-            "UPDATE actors SET github_id = $1 WHERE id = $2",
-        )
-        .bind(github_id)
-        .bind(actor_id)
-        .execute(&self.pool)
-        .await
-        .map_err(|e| DomainError::Persistence(e.to_string()))?;
+        sqlx::query("UPDATE actors SET github_id = $1 WHERE id = $2")
+            .bind(github_id)
+            .bind(actor_id)
+            .execute(&self.pool)
+            .await
+            .map_err(|e| DomainError::Persistence(e.to_string()))?;
 
         Ok(())
+    }
+
+    // ── Phase 20B — Le Clonage Massif ────────────────────
+
+    #[instrument(skip(self, token))]
+    async fn update_github_token(&self, actor_id: &Uuid, token: &str) -> Result<(), DomainError> {
+        sqlx::query("UPDATE actors SET github_token = $1 WHERE id = $2")
+            .bind(token)
+            .bind(actor_id)
+            .execute(&self.pool)
+            .await
+            .map_err(|e| DomainError::Persistence(e.to_string()))?;
+
+        Ok(())
+    }
+
+    #[instrument(skip(self))]
+    async fn get_github_token(&self, actor_id: &Uuid) -> Result<Option<String>, DomainError> {
+        let row = sqlx::query("SELECT github_token FROM actors WHERE id = $1")
+            .bind(actor_id)
+            .fetch_optional(&self.pool)
+            .await
+            .map_err(|e| DomainError::Persistence(e.to_string()))?;
+
+        Ok(row.and_then(|r| r.try_get::<Option<String>, _>("github_token").unwrap_or(None)))
     }
 
     #[instrument(skip(self))]
