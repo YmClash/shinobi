@@ -77,8 +77,14 @@ pub struct RefInfo {
 #[async_trait]
 pub trait VcsEngine: Send + Sync {
     /// Initialise un nouveau workspace VCS pour un dépôt donné.
-    /// Le chemin physique est dérivé du `repo_id`.
-    async fn init_workspace(&self, repo_id: &Uuid) -> Result<(), DomainError>;
+    /// Le chemin physique est dérivé de `owner_id` et `repo_id` :
+    /// `{workspace_root}/{owner_id}/{repo_id}/`
+    ///
+    /// ## Multi-Tenant (Phase 21)
+    /// L'`owner_id` est utilisé pour l'isolation physique par propriétaire.
+    /// Les UUIDs sont utilisés (pas les handles) pour éviter les migrations
+    /// physiques lors des renommages de comptes.
+    async fn init_workspace(&self, owner_id: &Uuid, repo_id: &Uuid) -> Result<(), DomainError>;
 
     /// Enregistre une opération dans le graphe de versioning d'un dépôt.
     /// Retourne le CID du contenu associé.

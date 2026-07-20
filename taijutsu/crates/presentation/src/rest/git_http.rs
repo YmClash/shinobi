@@ -281,7 +281,7 @@ async fn git_info_refs(
             path = %repo_git_path.display(),
             "Git HTTP: bare Git repo absent — lazy init du workspace"
         );
-        if let Err(e) = state.vcs_engine.init_workspace(&repository.id).await {
+        if let Err(e) = state.vcs_engine.init_workspace(&repository.owner_id, &repository.id).await {
             warn!(error = %e, "Git HTTP: lazy init failed");
             return (StatusCode::INTERNAL_SERVER_ERROR, "Failed to initialize Git repository").into_response();
         }
@@ -504,7 +504,7 @@ async fn sync_hook_post_push(
     let repo_id = repository.id;
 
     // 0. S'assurer que le workspace est enregistre dans le DashMap
-    state.vcs_engine.init_workspace(&repo_id).await?;
+    state.vcs_engine.init_workspace(&repository.owner_id, &repo_id).await?;
 
     // 1. Recharger le repo jj (pour voir les nouveaux commits Git)
     state.vcs_engine.reload_repo(&repo_id).await?;

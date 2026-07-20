@@ -163,16 +163,18 @@ unsafe impl Sync for WorkspaceHandle {}
 /// Utilise le `GitBackend` de Jujutsu (Phase 11 — Mutation Git).
 /// Chaque workspace est adossé à un repo Git bare interne.
 ///
-/// ## Multi-Tenant (Phase 10A)
-/// Le registre `DashMap<Uuid, Arc<Mutex<WorkspaceHandle>>>` isole
-/// le verrou au niveau de chaque depot. Deux acteurs peuvent commiter
-/// dans des depots differents en parallèle sans contention.
+/// ## Multi-Tenant (Phase 21)
+/// Le registre `DashMap<Uuid, (Uuid, Arc<Mutex<WorkspaceHandle>>)>` stocke
+/// `(owner_id, handle)` par `repo_id`. Cela permet de reconstruire le chemin
+/// physique `{workspace_root}/{owner_id}/{repo_id}/` sans modifier les
+/// signatures des méthodes existantes (git_repo_path, reload_repo, etc.).
 pub struct JujutsuEngine {
-    /// Repertoire racine du workspace VCS.
-    /// Chaque repo vit dans `{workspace_root}/{repo_id}/`.
+    /// Répertoire racine du workspace VCS.
+    /// Chaque repo vit dans `{workspace_root}/{owner_id}/{repo_id}/`.
     workspace_root: PathBuf,
-    /// Registre de handles par repo_id (Phase 10A du Multi-Tenant).
-    handles: DashMap<Uuid, Arc<Mutex<WorkspaceHandle>>>,
+    /// Registre de handles par repo_id (Phase 21 — Multi-Tenant isolé).
+    /// Valeur : (owner_id, workspace_handle)
+    handles: DashMap<Uuid, (Uuid, Arc<Mutex<WorkspaceHandle>>)>,
 }
 
 impl JujutsuEngine {
@@ -205,9 +207,24 @@ impl JujutsuEngine {
         }
     }
 
-    /// Récupérer le handle pour un repo donnée (cheap Arc clone).
+    /// Récupérer le handle pour un repo donné (cheap Arc clone).
     fn get_handle(&self, repo_id: &Uuid) -> Option<Arc<Mutex<WorkspaceHandle>>> {
-        self.handles.get(repo_id).map(|entry| entry.value().clone())
+        self.handles
+            .get(repo_id)
+            .map(|entry| entry.value().1.clone())
+    }
+
+    /// Récupérer l'owner_id associé à un repo (cheap Uuid copy).
+    fn get_owner_id(&self, repo_id: &Uuid) -> Option<Uuid> {
+        self.handles.get(repo_id).map(|entry| entry.value().0)
+    }
+
+    /// Construit le chemin physique d'un repo à partir de owner_id + repo_id.
+    /// Layout : `{workspace_root}/{owner_id}/{repo_id}/`
+    fn repo_path(&self, owner_id: &Uuid, repo_id: &Uuid) -> PathBuf {
+        self.workspace_root
+            .join(owner_id.to_string())
+            .join(repo_id.to_string())
     }
 
     /// Crée un `UserSettings` minimal pour jj-lib.
@@ -243,19 +260,28 @@ behavior = "drop"
 
     // ── Phase 12A — Git Bridge HTTP ────────────────────────────────────
 
-    /// Retourne le chemin du bare Git repo pour un depot donne.
+    /// Retourne le chemin du bare Git repo pour un depot donné.
     ///
     /// Utilise par le Git Bridge HTTP pour passer `GIT_PROJECT_ROOT`
     /// au CGI `git http-backend`.
     ///
-    /// Layout : `{workspace_root}/{repo_id}/.jj/repo/store/git`
+    /// ## Phase 21 — Multi-Tenant
+    /// Retrouve l'`owner_id` depuis le registre DashMap pour reconstruire
+    /// le chemin complet `{workspace_root}/{owner_id}/{repo_id}/.jj/repo/store/git`.
+    /// Si le repo n'est pas dans le registre, fallback sur le chemin plat
+    /// (compatibilité avec les repos non encore initialisés via le nouveau système).
     pub fn git_repo_path(&self, repo_id: &Uuid) -> PathBuf {
-        self.workspace_root
-            .join(repo_id.to_string())
-            .join(".jj")
-            .join("repo")
-            .join("store")
-            .join("git")
+        let base = if let Some(owner_id) = self.get_owner_id(repo_id) {
+            self.repo_path(&owner_id, repo_id)
+        } else {
+            // Fallback : chemin plat legacy (ne devrait pas arriver en production)
+            warn!(
+                repo_id = %repo_id,
+                "git_repo_path: repo non trouvé dans le registre, fallback chemin plat"
+            );
+            self.workspace_root.join(repo_id.to_string())
+        };
+        base.join(".jj").join("repo").join("store").join("git")
     }
 
     /// Resout le HEAD depuis les refs Git du bare repo (pas les heads jj).
@@ -405,9 +431,12 @@ behavior = "drop"
         let handle_arc = self.get_handle(repo_id).ok_or_else(|| {
             DomainError::VcsError(format!("workspace not initialized for repo {repo_id}"))
         })?;
+        let owner_id = self.get_owner_id(repo_id).ok_or_else(|| {
+            DomainError::VcsError(format!("owner_id not found in registry for repo {repo_id}"))
+        })?;
         let rid = *repo_id;
-        // Calculer le chemin du repo jj (meme pattern que init_workspace)
-        let jj_repo_path = self.workspace_root.join(rid.to_string()).join(".jj").join("repo");
+        // Calculer le chemin du repo jj (Phase 21: owner_id/repo_id)
+        let jj_repo_path = self.repo_path(&owner_id, &rid).join(".jj").join("repo");
 
         tokio::task::spawn_blocking(move || {
             let mut guard = handle_arc.lock();
@@ -421,13 +450,10 @@ behavior = "drop"
                 &jj_repo_path,
                 &store_factories,
             )
-            .map_err(|e| {
-                DomainError::VcsError(format!("RepoLoader reload failed: {e}"))
-            })?;
+            .map_err(|e| DomainError::VcsError(format!("RepoLoader reload failed: {e}")))?;
 
-            let reloaded_repo = pollster::block_on(repo_loader.load_at_head()).map_err(|e| {
-                DomainError::VcsError(format!("reload load_at_head failed: {e}"))
-            })?;
+            let reloaded_repo = pollster::block_on(repo_loader.load_at_head())
+                .map_err(|e| DomainError::VcsError(format!("reload load_at_head failed: {e}")))?;
 
             // 2. Importer les refs Git dans la vue jj
             //    Sans cette etape, jj ne voit pas les nouveaux commits pushes
@@ -440,9 +466,8 @@ behavior = "drop"
             };
 
             let mut tx = reloaded_repo.start_transaction();
-            let import_result = pollster::block_on(
-                jj_lib::git::import_refs(tx.repo_mut(), &import_options)
-            );
+            let import_result =
+                pollster::block_on(jj_lib::git::import_refs(tx.repo_mut(), &import_options));
 
             match import_result {
                 Ok(stats) => {
@@ -464,10 +489,9 @@ behavior = "drop"
 
             // 3. Commit la transaction (meme si import_refs a echoue,
             //    on commit pour ne pas bloquer les operations suivantes)
-            let new_repo = pollster::block_on(
-                tx.commit(format!("SHINOBI: git import refs for {rid}"))
-            )
-            .map_err(|e| DomainError::VcsError(format!("reload tx.commit failed: {e}")))?;
+            let new_repo =
+                pollster::block_on(tx.commit(format!("SHINOBI: git import refs for {rid}")))
+                    .map_err(|e| DomainError::VcsError(format!("reload tx.commit failed: {e}")))?;
 
             wh.update_repo(new_repo);
 
@@ -481,7 +505,6 @@ behavior = "drop"
         .await
         .map_err(|e| DomainError::Internal(format!("spawn_blocking join error: {e}")))?
     }
-
 
     /// Lit le snapshot **diff** d'un commit : description + fichiers modifies avec contenu.
     ///
@@ -542,9 +565,7 @@ behavior = "drop"
             //    - Si le commit a un parent → diff vs parent (fichiers modifies)
             //    - Si pas de parent (root commit) → diff vs empty tree (tous les fichiers)
             let parent_ids = commit.parent_ids();
-            let base_tree = if !parent_ids.is_empty()
-                && parent_ids[0] != *store.root_commit_id()
-            {
+            let base_tree = if !parent_ids.is_empty() && parent_ids[0] != *store.root_commit_id() {
                 // Parent existe et n'est pas le root commit
                 match store.get_commit(&parent_ids[0]) {
                     Ok(parent_commit) => {
@@ -606,14 +627,12 @@ behavior = "drop"
                 match reader_result {
                     Ok(mut reader) => {
                         let mut content = Vec::new();
-                        let read_result = pollster::block_on(
-                            tokio::io::AsyncReadExt::read_to_end(&mut reader, &mut content)
-                        );
+                        let read_result = pollster::block_on(tokio::io::AsyncReadExt::read_to_end(
+                            &mut reader,
+                            &mut content,
+                        ));
                         if read_result.is_ok() {
-                            files.push((
-                                path.as_internal_file_string().to_string(),
-                                content,
-                            ));
+                            files.push((path.as_internal_file_string().to_string(), content));
                         } else {
                             warn!(
                                 path = %path.as_internal_file_string(),
@@ -638,7 +657,11 @@ behavior = "drop"
                 "read_commit_snapshot: snapshot lu depuis le tree jj"
             );
 
-            Ok(CommitSnapshot { description, files, parent_commit_ids })
+            Ok(CommitSnapshot {
+                description,
+                files,
+                parent_commit_ids,
+            })
         })
         .await
         .map_err(|e| DomainError::Internal(format!("spawn_blocking join error: {e}")))?
@@ -662,9 +685,8 @@ fn resolve_revision_internal(
 ) -> Result<CommitId, DomainError> {
     // 1. SHA-1 direct
     if revision.len() == 40 && revision.chars().all(|c| c.is_ascii_hexdigit()) {
-        return CommitId::try_from_hex(revision).ok_or_else(|| {
-            DomainError::VcsError(format!("invalid hex commit id '{revision}'"))
-        });
+        return CommitId::try_from_hex(revision)
+            .ok_or_else(|| DomainError::VcsError(format!("invalid hex commit id '{revision}'")));
     }
 
     // 2. Loose ref Git filesystem
@@ -703,9 +725,8 @@ fn resolve_revision_internal(
             let head_content = head_content.trim();
             // HEAD détaché
             if head_content.len() == 40 && head_content.chars().all(|c| c.is_ascii_hexdigit()) {
-                return CommitId::try_from_hex(head_content).ok_or_else(|| {
-                    DomainError::VcsError("invalid detached HEAD SHA".to_string())
-                });
+                return CommitId::try_from_hex(head_content)
+                    .ok_or_else(|| DomainError::VcsError("invalid detached HEAD SHA".to_string()));
             }
             // Symref
             if let Some(ref_name) = head_content.strip_prefix("ref: ") {
@@ -794,13 +815,7 @@ fn collect_loose_refs_recursive(
         };
         let path = entry.path();
         if path.is_dir() {
-            collect_loose_refs_recursive(
-                &path,
-                &format!("{full_name}/"),
-                refs,
-                seen,
-                kind.clone(),
-            );
+            collect_loose_refs_recursive(&path, &format!("{full_name}/"), refs, seen, kind.clone());
         } else if path.is_file() {
             if let Ok(sha) = std::fs::read_to_string(&path) {
                 let sha = sha.trim().to_string();
@@ -825,9 +840,10 @@ fn collect_loose_refs_recursive(
 #[async_trait]
 impl VcsEngine for JujutsuEngine {
     #[instrument(skip(self))]
-    async fn init_workspace(&self, repo_id: &Uuid) -> Result<(), DomainError> {
-        let workspace_path = self.workspace_root.join(repo_id.to_string());
+    async fn init_workspace(&self, owner_id: &Uuid, repo_id: &Uuid) -> Result<(), DomainError> {
+        let workspace_path = self.repo_path(owner_id, repo_id);
         let rid = *repo_id;
+        let oid = *owner_id;
 
         let workspace_handle = tokio::task::spawn_blocking({
             let workspace_path = workspace_path.clone();
@@ -869,10 +885,16 @@ impl VcsEngine for JujutsuEngine {
                             )));
                         }
 
-                        let (workspace, repo) = pollster::block_on(
-                            jj_lib::workspace::Workspace::init_internal_git(&settings, &workspace_path),
-                        )
-                        .map_err(|e| DomainError::VcsError(format!("Migration init_internal_git failed: {e}")))?;
+                        let (workspace, repo) =
+                            pollster::block_on(jj_lib::workspace::Workspace::init_internal_git(
+                                &settings,
+                                &workspace_path,
+                            ))
+                            .map_err(|e| {
+                                DomainError::VcsError(format!(
+                                    "Migration init_internal_git failed: {e}"
+                                ))
+                            })?;
 
                         info!(
                             path = %workspace_path.display(),
@@ -941,7 +963,7 @@ impl VcsEngine for JujutsuEngine {
         .map_err(|e| DomainError::Internal(format!("spawn_blocking join error: {e}")))?;
 
         let wh = workspace_handle?;
-        self.handles.insert(rid, Arc::new(Mutex::new(wh)));
+        self.handles.insert(rid, (oid, Arc::new(Mutex::new(wh))));
 
         Ok(())
     }
@@ -1174,8 +1196,8 @@ impl VcsEngine for JujutsuEngine {
                     .last()
             };
 
-            let head_id = head_id
-                .ok_or_else(|| DomainError::VcsError("no heads in repo".to_string()))?;
+            let head_id =
+                head_id.ok_or_else(|| DomainError::VcsError("no heads in repo".to_string()))?;
             let head_commit = store
                 .get_commit(&head_id)
                 .map_err(|e| DomainError::VcsError(format!("failed to get head commit: {e}")))?;
@@ -1229,9 +1251,9 @@ impl VcsEngine for JujutsuEngine {
 
             // 1. Résoudre la révision
             let commit_id = resolve_revision_internal(&revision_owned, &git_dir)?;
-            let commit = store.get_commit(&commit_id).map_err(|e| {
-                DomainError::CommitNotFound { id: format!("{e}") }
-            })?;
+            let commit = store
+                .get_commit(&commit_id)
+                .map_err(|e| DomainError::CommitNotFound { id: format!("{e}") })?;
             let commit_tree = commit.tree();
             let empty_tree = store.empty_merged_tree();
 
@@ -1306,12 +1328,10 @@ impl VcsEngine for JujutsuEngine {
             }
 
             // 6. Tri : dossiers d'abord, puis fichiers, alphabétique dans chaque groupe
-            result.sort_by(|a, b| {
-                match (&a.kind, &b.kind) {
-                    (EntryKind::Directory, EntryKind::File) => std::cmp::Ordering::Less,
-                    (EntryKind::File, EntryKind::Directory) => std::cmp::Ordering::Greater,
-                    _ => a.name.cmp(&b.name),
-                }
+            result.sort_by(|a, b| match (&a.kind, &b.kind) {
+                (EntryKind::Directory, EntryKind::File) => std::cmp::Ordering::Less,
+                (EntryKind::File, EntryKind::Directory) => std::cmp::Ordering::Greater,
+                _ => a.name.cmp(&b.name),
             });
 
             info!(
@@ -1350,9 +1370,9 @@ impl VcsEngine for JujutsuEngine {
 
             // 1. Résoudre la révision
             let commit_id = resolve_revision_internal(&revision_owned, &git_dir)?;
-            let commit = store.get_commit(&commit_id).map_err(|e| {
-                DomainError::CommitNotFound { id: format!("{e}") }
-            })?;
+            let commit = store
+                .get_commit(&commit_id)
+                .map_err(|e| DomainError::CommitNotFound { id: format!("{e}") })?;
             let commit_tree = commit.tree();
             let empty_tree = store.empty_merged_tree();
 
@@ -1392,9 +1412,10 @@ impl VcsEngine for JujutsuEngine {
                     .map_err(|e| DomainError::VcsError(format!("read_file failed: {e}")))?;
 
                 let mut content = Vec::new();
-                pollster::block_on(
-                    tokio::io::AsyncReadExt::read_to_end(&mut reader, &mut content)
-                )
+                pollster::block_on(tokio::io::AsyncReadExt::read_to_end(
+                    &mut reader,
+                    &mut content,
+                ))
                 .map_err(|e| DomainError::VcsError(format!("read_to_end failed: {e}")))?;
 
                 info!(
@@ -1496,9 +1517,7 @@ impl VcsEngine for JujutsuEngine {
         repo_id: &Uuid,
         content_id: &ContentId,
     ) -> Result<Vec<domain::ports::vcs_engine::FileDiff>, DomainError> {
-        use domain::ports::vcs_engine::{
-            DiffHunk, DiffLine, DiffLineKind, DiffStatus, FileDiff,
-        };
+        use domain::ports::vcs_engine::{DiffHunk, DiffLine, DiffLineKind, DiffStatus, FileDiff};
 
         let handle_arc = self.get_handle(repo_id).ok_or_else(|| {
             DomainError::VcsError(format!("workspace not initialized for repo {repo_id}"))
@@ -1526,9 +1545,7 @@ impl VcsEngine for JujutsuEngine {
 
             // 2. Déterminer le base tree (parent ou empty)
             let parent_ids = commit.parent_ids();
-            let base_tree = if !parent_ids.is_empty()
-                && parent_ids[0] != *store.root_commit_id()
-            {
+            let base_tree = if !parent_ids.is_empty() && parent_ids[0] != *store.root_commit_id() {
                 match store.get_commit(&parent_ids[0]) {
                     Ok(parent_commit) => parent_commit.tree(),
                     Err(_) => store.empty_merged_tree(),
@@ -1568,9 +1585,10 @@ impl VcsEngine for JujutsuEngine {
                     match pollster::block_on(store.read_file(entry_path, id)) {
                         Ok(mut reader) => {
                             let mut buf = Vec::new();
-                            match pollster::block_on(
-                                tokio::io::AsyncReadExt::read_to_end(&mut reader, &mut buf),
-                            ) {
+                            match pollster::block_on(tokio::io::AsyncReadExt::read_to_end(
+                                &mut reader,
+                                &mut buf,
+                            )) {
                                 Ok(_) => Some(buf),
                                 Err(_) => None,
                             }
@@ -1587,9 +1605,10 @@ impl VcsEngine for JujutsuEngine {
                     match pollster::block_on(store.read_file(entry_path, id)) {
                         Ok(mut reader) => {
                             let mut buf = Vec::new();
-                            match pollster::block_on(
-                                tokio::io::AsyncReadExt::read_to_end(&mut reader, &mut buf),
-                            ) {
+                            match pollster::block_on(tokio::io::AsyncReadExt::read_to_end(
+                                &mut reader,
+                                &mut buf,
+                            )) {
                                 Ok(_) => Some(buf),
                                 Err(_) => None,
                             }
@@ -1601,9 +1620,7 @@ impl VcsEngine for JujutsuEngine {
                 };
 
                 // Détecter les fichiers binaires (contiennent des octets nuls)
-                let is_binary = |data: &[u8]| -> bool {
-                    data.iter().take(8000).any(|&b| b == 0)
-                };
+                let is_binary = |data: &[u8]| -> bool { data.iter().take(8000).any(|&b| b == 0) };
 
                 let before_binary = before_content.as_ref().is_some_and(|c| is_binary(c));
                 let after_binary = after_content.as_ref().is_some_and(|c| is_binary(c));
@@ -1686,7 +1703,11 @@ impl VcsEngine for JujutsuEngine {
                         };
 
                         // Retirer le trailing newline pour un affichage propre
-                        let content = change.as_str().unwrap_or("").trim_end_matches('\n').to_string();
+                        let content = change
+                            .as_str()
+                            .unwrap_or("")
+                            .trim_end_matches('\n')
+                            .to_string();
 
                         lines.push(DiffLine {
                             kind,
@@ -1722,7 +1743,6 @@ impl VcsEngine for JujutsuEngine {
     }
 }
 
-
 // ── Tests ──────────────────────────────────────────────────────────────────
 
 #[cfg(test)]
@@ -1734,16 +1754,26 @@ mod tests {
         Uuid::new_v4()
     }
 
+    /// Generates a fresh owner_id for each test (Phase 21 Multi-Tenant).
+    fn test_owner_id() -> Uuid {
+        Uuid::new_v4()
+    }
+
     #[tokio::test]
     async fn test_init_workspace_creates_jj_directory() {
         let tmp = tempfile::TempDir::new().expect("Failed to create temp dir");
         let engine = JujutsuEngine::new(tmp.path());
         let repo_id = test_repo_id();
+        let owner_id = test_owner_id();
 
-        let result = engine.init_workspace(&repo_id).await;
+        let result = engine.init_workspace(&owner_id, &repo_id).await;
         assert!(result.is_ok(), "init_workspace failed: {:?}", result.err());
 
-        let jj_dir = tmp.path().join(repo_id.to_string()).join(".jj");
+        let jj_dir = tmp
+            .path()
+            .join(owner_id.to_string())
+            .join(repo_id.to_string())
+            .join(".jj");
         assert!(jj_dir.exists(), ".jj directory should exist after init");
         assert!(jj_dir.is_dir(), ".jj should be a directory");
 
@@ -1756,8 +1786,9 @@ mod tests {
         let tmp = tempfile::TempDir::new().expect("Failed to create temp dir");
         let engine = JujutsuEngine::new(tmp.path());
         let repo_id = test_repo_id();
+        let owner_id = test_owner_id();
 
-        engine.init_workspace(&repo_id).await.unwrap();
+        engine.init_workspace(&owner_id, &repo_id).await.unwrap();
 
         let result = engine
             .create_operation(&repo_id, "Test operation", &[], &[])
@@ -1782,13 +1813,14 @@ mod tests {
         let tmp = tempfile::TempDir::new().expect("Failed to create temp dir");
         let engine = JujutsuEngine::new(tmp.path());
         let repo_id = test_repo_id();
+        let owner_id = test_owner_id();
 
         // Before init: None (repo not in DashMap)
         let head_before = engine.resolve_head(&repo_id).await.unwrap();
         assert!(head_before.is_none(), "HEAD should be None before init");
 
         // After init: jj creates root commit → HEAD exists
-        engine.init_workspace(&repo_id).await.unwrap();
+        engine.init_workspace(&owner_id, &repo_id).await.unwrap();
         let head_after = engine.resolve_head(&repo_id).await.unwrap();
         assert!(
             head_after.is_some(),
@@ -1829,8 +1861,9 @@ mod tests {
         let tmp = tempfile::TempDir::new().expect("Failed to create temp dir");
         let engine = JujutsuEngine::new(tmp.path());
         let repo_id = test_repo_id();
+        let owner_id = test_owner_id();
 
-        engine.init_workspace(&repo_id).await.unwrap();
+        engine.init_workspace(&owner_id, &repo_id).await.unwrap();
 
         // Capturer le HEAD initial (root commit)
 
@@ -1868,8 +1901,9 @@ mod tests {
         let tmp = tempfile::TempDir::new().expect("Failed to create temp dir");
         let engine = JujutsuEngine::new(tmp.path());
         let repo_id = test_repo_id();
+        let owner_id = test_owner_id();
 
-        engine.init_workspace(&repo_id).await.unwrap();
+        engine.init_workspace(&owner_id, &repo_id).await.unwrap();
 
         let cid1 = engine
             .create_operation(&repo_id, "First commit", &[], &[])
@@ -1892,8 +1926,9 @@ mod tests {
         let tmp = tempfile::TempDir::new().expect("Failed to create temp dir");
         let engine = JujutsuEngine::new(tmp.path());
         let repo_id = test_repo_id();
+        let owner_id = test_owner_id();
 
-        engine.init_workspace(&repo_id).await.unwrap();
+        engine.init_workspace(&owner_id, &repo_id).await.unwrap();
         engine
             .create_operation(&repo_id, "Test commit", &[], &[])
             .await
@@ -1927,6 +1962,7 @@ mod tests {
         let tmp = tempfile::TempDir::new().expect("Failed to create temp dir");
         let engine = JujutsuEngine::new(tmp.path());
         let repo_id = test_repo_id();
+        let owner_id = test_owner_id();
 
         let result = engine
             .create_operation(&repo_id, "Should fail", &[], &[])
@@ -1946,8 +1982,9 @@ mod tests {
         let tmp = tempfile::TempDir::new().expect("Failed to create temp dir");
         let engine = JujutsuEngine::new(tmp.path());
         let repo_id = test_repo_id();
+        let owner_id = test_owner_id();
 
-        engine.init_workspace(&repo_id).await.unwrap();
+        engine.init_workspace(&owner_id, &repo_id).await.unwrap();
         engine
             .create_operation(&repo_id, "Test commit", &[], &[])
             .await
@@ -1966,8 +2003,9 @@ mod tests {
         let tmp = tempfile::TempDir::new().expect("Failed to create temp dir");
         let engine = JujutsuEngine::new(tmp.path());
         let repo_id = test_repo_id();
+        let owner_id = test_owner_id();
 
-        engine.init_workspace(&repo_id).await.unwrap();
+        engine.init_workspace(&owner_id, &repo_id).await.unwrap();
 
         let fake_id = ContentId::new("a".repeat(40));
         let result = engine.diff_since(&repo_id, &fake_id).await;
@@ -1982,8 +2020,9 @@ mod tests {
         let tmp = tempfile::TempDir::new().expect("Failed to create temp dir");
         let engine = JujutsuEngine::new(tmp.path());
         let repo_id = test_repo_id();
+        let owner_id = test_owner_id();
 
-        engine.init_workspace(&repo_id).await.unwrap();
+        engine.init_workspace(&owner_id, &repo_id).await.unwrap();
 
         let head_before = engine
             .resolve_head(&repo_id)
@@ -2023,8 +2062,9 @@ mod tests {
         let tmp = tempfile::TempDir::new().expect("Failed to create temp dir");
         let engine = JujutsuEngine::new(tmp.path());
         let repo_id = test_repo_id();
+        let owner_id = test_owner_id();
 
-        engine.init_workspace(&repo_id).await.unwrap();
+        engine.init_workspace(&owner_id, &repo_id).await.unwrap();
 
         let old_head = engine.resolve_head(&repo_id).await.unwrap().unwrap();
 
@@ -2048,8 +2088,9 @@ mod tests {
         let tmp = tempfile::TempDir::new().expect("Failed to create temp dir");
         let engine = JujutsuEngine::new(tmp.path());
         let repo_id = test_repo_id();
+        let owner_id = test_owner_id();
 
-        engine.init_workspace(&repo_id).await.unwrap();
+        engine.init_workspace(&owner_id, &repo_id).await.unwrap();
 
         let head_before = engine.resolve_head(&repo_id).await.unwrap().unwrap();
 
@@ -2079,8 +2120,9 @@ mod tests {
         let tmp = tempfile::TempDir::new().expect("Failed to create temp dir");
         let engine = JujutsuEngine::new(tmp.path());
         let repo_id = test_repo_id();
+        let owner_id = test_owner_id();
 
-        engine.init_workspace(&repo_id).await.unwrap();
+        engine.init_workspace(&owner_id, &repo_id).await.unwrap();
 
         let files = vec![
             ("src/main.rs".to_string(), b"fn main() {}".to_vec()),
@@ -2111,8 +2153,9 @@ mod tests {
         let tmp = tempfile::TempDir::new().expect("Failed to create temp dir");
         let engine = JujutsuEngine::new(tmp.path());
         let repo_id = test_repo_id();
+        let owner_id = test_owner_id();
 
-        engine.init_workspace(&repo_id).await.unwrap();
+        engine.init_workspace(&owner_id, &repo_id).await.unwrap();
 
         let old_head = engine.resolve_head(&repo_id).await.unwrap().unwrap();
 
@@ -2139,8 +2182,9 @@ mod tests {
         let tmp = tempfile::TempDir::new().expect("Failed to create temp dir");
         let engine = JujutsuEngine::new(tmp.path());
         let repo_id = test_repo_id();
+        let owner_id = test_owner_id();
 
-        engine.init_workspace(&repo_id).await.unwrap();
+        engine.init_workspace(&owner_id, &repo_id).await.unwrap();
 
         let old_head = engine.resolve_head(&repo_id).await.unwrap().unwrap();
 
@@ -2164,8 +2208,9 @@ mod tests {
         let tmp = tempfile::TempDir::new().expect("Failed to create temp dir");
         let engine = JujutsuEngine::new(tmp.path());
         let repo_id = test_repo_id();
+        let owner_id = test_owner_id();
 
-        engine.init_workspace(&repo_id).await.unwrap();
+        engine.init_workspace(&owner_id, &repo_id).await.unwrap();
 
         let old_cid = engine
             .create_operation(&repo_id, "Empty baseline", &[], &[])
@@ -2213,12 +2258,14 @@ mod tests {
         let tmp = tempfile::TempDir::new().expect("Failed to create temp dir");
         let engine = JujutsuEngine::new(tmp.path());
         let repo_id = test_repo_id();
+        let owner_id = test_owner_id();
 
-        engine.init_workspace(&repo_id).await.unwrap();
+        engine.init_workspace(&owner_id, &repo_id).await.unwrap();
 
         // Verify the .jj/repo/store/type file declares "git"
         let store_type_path = tmp
             .path()
+            .join(owner_id.to_string())
             .join(repo_id.to_string())
             .join(".jj")
             .join("repo")
@@ -2236,6 +2283,7 @@ mod tests {
         // Verify the bare git repo directory exists
         let git_dir = tmp
             .path()
+            .join(owner_id.to_string())
             .join(repo_id.to_string())
             .join(".jj")
             .join("repo")
@@ -2283,11 +2331,12 @@ mod tests {
     async fn test_two_repos_isolated_workspaces() {
         let tmp = tempfile::TempDir::new().expect("Failed to create temp dir");
         let engine = JujutsuEngine::new(tmp.path());
+        let owner_id = test_owner_id();
         let repo_a = Uuid::new_v4();
         let repo_b = Uuid::new_v4();
 
-        engine.init_workspace(&repo_a).await.unwrap();
-        engine.init_workspace(&repo_b).await.unwrap();
+        engine.init_workspace(&owner_id, &repo_a).await.unwrap();
+        engine.init_workspace(&owner_id, &repo_b).await.unwrap();
 
         let cid_a = engine
             .create_operation(
@@ -2320,10 +2369,11 @@ mod tests {
     async fn test_dashmap_registers_multiple_repos() {
         let tmp = tempfile::TempDir::new().expect("Failed to create temp dir");
         let engine = JujutsuEngine::new(tmp.path());
+        let owner_id = test_owner_id();
 
         let ids: Vec<Uuid> = (0..3).map(|_| Uuid::new_v4()).collect();
         for id in &ids {
-            engine.init_workspace(id).await.unwrap();
+            engine.init_workspace(&owner_id, id).await.unwrap();
         }
 
         for id in &ids {
@@ -2339,8 +2389,9 @@ mod tests {
         let tmp = tempfile::TempDir::new().expect("Failed to create temp dir");
         let engine = JujutsuEngine::new(tmp.path());
         let repo_id = test_repo_id();
+        let owner_id = test_owner_id();
 
-        engine.init_workspace(&repo_id).await.unwrap();
+        engine.init_workspace(&owner_id, &repo_id).await.unwrap();
 
         // Creer un commit pour avoir un HEAD non-root
         engine
@@ -2372,12 +2423,11 @@ mod tests {
         let tmp = tempfile::TempDir::new().expect("Failed to create temp dir");
         let engine = JujutsuEngine::new(tmp.path());
         let repo_id = test_repo_id();
+        let owner_id = test_owner_id();
 
         let result = engine.reload_repo(&repo_id).await;
-        assert!(
-            result.is_err(),
-            "reload_repo should fail without init"
-        );
+
+        assert!(result.is_err(), "reload_repo should fail without init");
 
         let err = result.unwrap_err().to_string();
         assert!(
@@ -2416,8 +2466,9 @@ mod tests {
         let tmp = tempfile::TempDir::new().expect("Failed to create temp dir");
         let engine = JujutsuEngine::new(tmp.path());
         let repo_id = test_repo_id();
+        let owner_id = test_owner_id();
 
-        engine.init_workspace(&repo_id).await.unwrap();
+        engine.init_workspace(&owner_id, &repo_id).await.unwrap();
 
         // Creer un commit avec des fichiers
         let files = vec![
@@ -2484,8 +2535,9 @@ mod tests {
         let tmp = tempfile::TempDir::new().expect("Failed to create temp dir");
         let engine = JujutsuEngine::new(tmp.path());
         let repo_id = test_repo_id();
+        let owner_id = test_owner_id();
 
-        engine.init_workspace(&repo_id).await.unwrap();
+        engine.init_workspace(&owner_id, &repo_id).await.unwrap();
 
         // Creer un commit vide (empty tree)
         let cid = engine

@@ -57,7 +57,7 @@ use infrastructure::vcs::jujutsu_engine::JujutsuEngine;
 use infrastructure::vcs::git_cgi::GitCgiBackend;
 use infrastructure::auth::jwt_auth_service::JwtAuthService;
 use infrastructure::github::github_client::GitHubClient;
-use domain::entities::actor::DEFAULT_REPO_ID;
+use domain::entities::actor::{DEFAULT_REPO_ID, SYSTEM_ACTOR_ID};
 use domain::ports::vcs_engine::VcsEngine as _; // Trait import — rend init_workspace() visible
 use domain::ports::repository::OperationRepository as _; // Trait import — rend list_recent() visible (backfill)
 use presentation::grpc::services::proto::shinobi_service_server::ShinobiServiceServer;
@@ -126,13 +126,14 @@ async fn main() -> anyhow::Result<()> {
     info!("✅ Redis connecté");
 
     // VCS Engine (Anti-Corruption Layer) — auto-init au démarrage
-    // Phase 10B : init avec DEFAULT_REPO_ID (UUID fantôme pour rétro-compat MVP).
+    // Phase 21 : SYSTEM_ACTOR_ID comme propriétaire du DEFAULT_REPO_ID.
     let vcs_engine = JujutsuEngine::new(&config.vcs_workspace_root);
-    vcs_engine.init_workspace(&DEFAULT_REPO_ID).await?;
+    vcs_engine.init_workspace(&SYSTEM_ACTOR_ID, &DEFAULT_REPO_ID).await?;
     info!(
         workspace = %config.vcs_workspace_root,
+        owner_id = %SYSTEM_ACTOR_ID,
         repo_id = %DEFAULT_REPO_ID,
-        "✅ VCS Engine initialisé (jj-lib ACL — DEFAULT_REPO_ID)"
+        "✅ VCS Engine initialisé (jj-lib ACL — Phase 21 Multi-Tenant)"
     );
 
     // Nen: Kafka Event Publisher (optionnel — graceful degradation)

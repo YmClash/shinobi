@@ -40,8 +40,8 @@ impl GetTreeUseCase {
     ) -> Result<GetTreeResult, DomainError> {
         let repository = self.resolve_repo.execute(owner, repo).await?;
 
-        // Initialiser le workspace si nécessaire (repos créés avant Phase 6)
-        self.vcs.init_workspace(&repository.id).await.ok();
+        // Initialiser le workspace si nécessaire (Phase 21: owner_id/repo_id)
+        self.vcs.init_workspace(&repository.owner_id, &repository.id).await.ok();
 
         let entries = self.vcs
             .list_tree(&repository.id, revision, path)

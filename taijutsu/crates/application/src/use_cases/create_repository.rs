@@ -108,8 +108,8 @@ impl CreateRepositoryUseCase {
             "✅ Dépôt créé dans PostgreSQL"
         );
 
-        // Étape 5 : Initialiser le workspace VCS
-        self.vcs.init_workspace(&repo.id).await?;
+        // Étape 5 : Initialiser le workspace VCS (Phase 21: owner_id/repo_id)
+        self.vcs.init_workspace(&cmd.owner_id, &repo.id).await?;
 
         info!(
             repo_id = %repo.id,
@@ -314,7 +314,7 @@ mod tests {
 
     #[async_trait]
     impl VcsEngine for MockVcsEngine {
-        async fn init_workspace(&self, _repo_id: &Uuid) -> Result<(), DomainError> {
+        async fn init_workspace(&self, _owner_id: &Uuid, _repo_id: &Uuid) -> Result<(), DomainError> {
             self.initialized.store(true, Ordering::SeqCst);
             Ok(())
         }

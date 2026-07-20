@@ -50,7 +50,7 @@ mod tests {
 
     #[async_trait]
     impl VcsEngine for MockVcsEngine {
-        async fn init_workspace(&self, _repo_id: &Uuid) -> Result<(), DomainError> {
+        async fn init_workspace(&self, _owner_id: &Uuid, _repo_id: &Uuid) -> Result<(), DomainError> {
             Ok(())
         }
 

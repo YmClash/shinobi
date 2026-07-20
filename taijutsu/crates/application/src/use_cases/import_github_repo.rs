@@ -142,8 +142,8 @@ impl ImportGitHubRepoUseCase {
             "Repository SHINOBI créé avec metadata mirror"
         );
 
-        // 6. Init le workspace VCS (crée .jj + bare Git repo)
-        self.vcs_engine.init_workspace(&repo.id).await?;
+        // 6. Init le workspace VCS (Phase 21: owner_id/repo_id)
+        self.vcs_engine.init_workspace(&cmd.owner_id, &repo.id).await?;
 
         // 7. Le Fetch Injecté — aspire le contenu GitHub dans le bare Git repo
         let git_path = self.vcs_engine.git_repo_path(&repo.id);
