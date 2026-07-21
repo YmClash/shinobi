@@ -22,49 +22,49 @@ use tracing_subscriber::{EnvFilter, layer::SubscriberExt, util::SubscriberInitEx
 
 use application::use_cases::analyze_operation::AnalyzeOperationUseCase;
 use application::use_cases::create_operation::CreateOperationUseCase;
+use application::use_cases::create_pat::CreatePatUseCase;
 use application::use_cases::create_repository::CreateRepositoryUseCase;
 use application::use_cases::get_blob::GetBlobUseCase;
+use application::use_cases::get_ipfs_content::GetIpfsContentUseCase;
 use application::use_cases::get_operation::GetOperationUseCase;
 use application::use_cases::get_operation_diff::GetOperationDiffUseCase;
-use application::use_cases::get_ipfs_content::GetIpfsContentUseCase;
 use application::use_cases::get_reviews::GetReviewsUseCase;
 use application::use_cases::get_score_history::GetScoreHistoryUseCase;
 use application::use_cases::get_tree::GetTreeUseCase;
+use application::use_cases::import_github_repo::ImportGitHubRepoUseCase;
 use application::use_cases::list_operations::ListOperationsUseCase;
 use application::use_cases::list_refs::ListRefsUseCase;
 use application::use_cases::list_repositories::ListRepositoriesUseCase;
+use application::use_cases::login_actor::LoginActorUseCase;
+use application::use_cases::register_actor::RegisterActorUseCase;
 use application::use_cases::resolve_repo::ResolveRepoUseCase;
 use application::use_cases::review_operation::ReviewOperationUseCase;
 use application::use_cases::search_chunks::SearchChunksUseCase;
 use application::use_cases::sensei_chat::SenseiChatUseCase;
-use application::use_cases::register_actor::RegisterActorUseCase;
-use application::use_cases::login_actor::LoginActorUseCase;
-use application::use_cases::create_pat::CreatePatUseCase;
-use application::use_cases::import_github_repo::ImportGitHubRepoUseCase;
+use domain::entities::actor::{DEFAULT_REPO_ID, SYSTEM_ACTOR_ID};
+use domain::ports::repository::OperationRepository as _; // Trait import — rend list_recent() visible (backfill)
+use domain::ports::vcs_engine::VcsEngine as _; // Trait import — rend init_workspace() visible
+use infrastructure::auth::jwt_auth_service::JwtAuthService;
 use infrastructure::cache::redis_cache::RedisCache;
 use infrastructure::content::ipfs_store::IpfsContentStore;
 use infrastructure::embeddings::nomic_service::NomicEmbedService;
 use infrastructure::events::kafka_consumer::KafkaEventConsumer;
 use infrastructure::events::kafka_producer::KafkaEventPublisher;
 use infrastructure::events::oracle_consumer::OracleKafkaConsumer;
+use infrastructure::github::github_client::GitHubClient;
 use infrastructure::llm::ollama_service::OllamaService;
-use infrastructure::persistence::postgres_chunk_repo::PostgresChunkRepository;
 use infrastructure::persistence::postgres_actor_repo::PostgresActorRepository;
+use infrastructure::persistence::postgres_chunk_repo::PostgresChunkRepository;
 use infrastructure::persistence::postgres_repo::PostgresOperationRepository;
 use infrastructure::persistence::postgres_repo_repo::PostgresRepoRepository;
 use infrastructure::persistence::postgres_review_repo::PostgresReviewRepository;
-use infrastructure::vcs::jujutsu_engine::JujutsuEngine;
 use infrastructure::vcs::git_cgi::GitCgiBackend;
-use infrastructure::auth::jwt_auth_service::JwtAuthService;
-use infrastructure::github::github_client::GitHubClient;
-use domain::entities::actor::{DEFAULT_REPO_ID, SYSTEM_ACTOR_ID};
-use domain::ports::vcs_engine::VcsEngine as _; // Trait import — rend init_workspace() visible
-use domain::ports::repository::OperationRepository as _; // Trait import — rend list_recent() visible (backfill)
-use presentation::grpc::services::proto::shinobi_service_server::ShinobiServiceServer;
+use infrastructure::vcs::jujutsu_engine::JujutsuEngine;
 use presentation::grpc::services::ShinobiServiceImpl;
-use presentation::rest::routes::create_router;
+use presentation::grpc::services::proto::shinobi_service_server::ShinobiServiceServer;
 use presentation::rest::git_http::create_git_router;
-use presentation::state::{SharedState, GitHttpState};
+use presentation::rest::routes::create_router;
+use presentation::state::{GitHttpState, SharedState};
 use tensai::multi_chunker::MultiChunker;
 
 use config::Config;
@@ -116,9 +116,7 @@ async fn main() -> anyhow::Result<()> {
     // Auto-migration : applique les migrations SQL pendantes au démarrage.
     // Garantit qu'un volume PostgreSQL vierge (premier `docker compose up`)
     // est automatiquement provisionné sans intervention manuelle.
-    sqlx::migrate!("./migrations")
-        .run(&pg_pool)
-        .await?;
+    sqlx::migrate!("./migrations").run(&pg_pool).await?;
     info!("✅ Migrations SQL appliquées");
 
     // Fūinjutsu: Redis
@@ -128,7 +126,9 @@ async fn main() -> anyhow::Result<()> {
     // VCS Engine (Anti-Corruption Layer) — auto-init au démarrage
     // Phase 21 : SYSTEM_ACTOR_ID comme propriétaire du DEFAULT_REPO_ID.
     let vcs_engine = JujutsuEngine::new(&config.vcs_workspace_root);
-    vcs_engine.init_workspace(&SYSTEM_ACTOR_ID, &DEFAULT_REPO_ID).await?;
+    vcs_engine
+        .init_workspace(&SYSTEM_ACTOR_ID, &DEFAULT_REPO_ID)
+        .await?;
     info!(
         workspace = %config.vcs_workspace_root,
         owner_id = %SYSTEM_ACTOR_ID,
@@ -262,21 +262,15 @@ async fn main() -> anyhow::Result<()> {
         content_store.clone(),
     ));
 
-    let get_reviews = Arc::new(GetReviewsUseCase::new(
-        review_repo.clone(),
-    ));
+    let get_reviews = Arc::new(GetReviewsUseCase::new(review_repo.clone()));
 
-    let get_score_history = Arc::new(GetScoreHistoryUseCase::new(
-        review_repo.clone(),
-    ));
+    let get_score_history = Arc::new(GetScoreHistoryUseCase::new(review_repo.clone()));
 
     // ── Phase 10C: Résolution sémantique des dépôts ────
-    let actor_repo: Arc<PostgresActorRepository> = Arc::new(
-        PostgresActorRepository::new(pg_pool.clone()),
-    );
-    let repo_repo: Arc<PostgresRepoRepository> = Arc::new(
-        PostgresRepoRepository::new(pg_pool.clone()),
-    );
+    let actor_repo: Arc<PostgresActorRepository> =
+        Arc::new(PostgresActorRepository::new(pg_pool.clone()));
+    let repo_repo: Arc<PostgresRepoRepository> =
+        Arc::new(PostgresRepoRepository::new(pg_pool.clone()));
     let resolve_repo = Arc::new(ResolveRepoUseCase::new(
         actor_repo.clone(),
         repo_repo.clone(),
@@ -294,8 +288,9 @@ async fn main() -> anyhow::Result<()> {
     ));
 
     // ── Phase 19A : Auth & RBAC ────────────────────────────────
-    let auth_service: Arc<dyn domain::ports::auth_service::AuthService> =
-        Arc::new(JwtAuthService::new(&config.jwt_secret, config.jwt_duration_secs));
+    let auth_service: Arc<dyn domain::ports::auth_service::AuthService> = Arc::new(
+        JwtAuthService::new(&config.jwt_secret, config.jwt_duration_secs),
+    );
 
     let register_actor = Arc::new(RegisterActorUseCase::new(
         actor_repo.clone(),
@@ -318,18 +313,9 @@ async fn main() -> anyhow::Result<()> {
     );
 
     // ── Phase 6 : Explorateur de Code ─────────────────────────────
-    let get_tree = Arc::new(GetTreeUseCase::new(
-        vcs.clone(),
-        resolve_repo.clone(),
-    ));
-    let get_blob = Arc::new(GetBlobUseCase::new(
-        vcs.clone(),
-        resolve_repo.clone(),
-    ));
-    let list_refs_uc = Arc::new(ListRefsUseCase::new(
-        vcs.clone(),
-        resolve_repo.clone(),
-    ));
+    let get_tree = Arc::new(GetTreeUseCase::new(vcs.clone(), resolve_repo.clone()));
+    let get_blob = Arc::new(GetBlobUseCase::new(vcs.clone(), resolve_repo.clone()));
+    let list_refs_uc = Arc::new(ListRefsUseCase::new(vcs.clone(), resolve_repo.clone()));
 
     // ── Phase 15 : Agent Sensei (先生) — LLM conversationnel ─────────
     let sensei_chat: Option<Arc<SenseiChatUseCase>> = if config.sensei_enabled {
@@ -433,7 +419,11 @@ async fn main() -> anyhow::Result<()> {
         get_blob,
         list_refs: list_refs_uc,
         sensei_chat,
-        sensei_ollama_url: if config.sensei_enabled { Some(config.sensei_ollama_url.clone()) } else { None },
+        sensei_ollama_url: if config.sensei_enabled {
+            Some(config.sensei_ollama_url.clone())
+        } else {
+            None
+        },
         // Phase 17 — Diff Colorisé
         vcs_engine: vcs.clone(),
         operation_repo: repo.clone(),
@@ -483,8 +473,7 @@ async fn main() -> anyhow::Result<()> {
             actor_repo: actor_repo.clone(),
             repo_repo: repo_repo.clone(),
         };
-        create_router(shared_state.clone())
-            .merge(create_git_router(git_state))
+        create_router(shared_state.clone()).merge(create_git_router(git_state))
     } else {
         create_router(shared_state.clone())
     };
@@ -521,19 +510,22 @@ async fn main() -> anyhow::Result<()> {
 
     // ── Agent Tensai : Consumer Kafka (optionnel) ──
     let tensai_consumer_handle = if config.tensai_consumer_enabled {
-        match (&content_store, KafkaEventConsumer::new(
-            &config.kafka_brokers,
-            &config.kafka_topic,
-            &config.kafka_consumer_group,
-            cancel_token.clone(),
-        )) {
+        match (
+            &content_store,
+            KafkaEventConsumer::new(
+                &config.kafka_brokers,
+                &config.kafka_topic,
+                &config.kafka_consumer_group,
+                cancel_token.clone(),
+            ),
+        ) {
             (Some(cs), Ok(consumer)) => {
                 let analyzer = Arc::new(AnalyzeOperationUseCase::new(
                     cs.clone(),
                     Arc::new(MultiChunker::new()),
                     Some(chunk_repo.clone()), // Phase 6B — Persistence des chunks
                     embedding_service.clone(), // Phase 7A — Embedding vectoriel
-                    event_publisher.clone(), // Phase 7B — Re-publication analysis-complete
+                    event_publisher.clone(),  // Phase 7B — Re-publication analysis-complete
                 ));
 
                 info!(
@@ -586,12 +578,16 @@ async fn main() -> anyhow::Result<()> {
 
     // ── Agent Oracle : Consumer Kafka analysis-complete (Phase 9) ──
     let oracle_consumer_handle = if config.oracle_consumer_enabled {
-        match (&content_store, &llm_service, OracleKafkaConsumer::new(
-            &config.kafka_brokers,
-            &config.kafka_analysis_topic,  // Écoute le topic analysis-complete
-            &config.oracle_consumer_group,
-            cancel_token.clone(),
-        )) {
+        match (
+            &content_store,
+            &llm_service,
+            OracleKafkaConsumer::new(
+                &config.kafka_brokers,
+                &config.kafka_analysis_topic, // Écoute le topic analysis-complete
+                &config.oracle_consumer_group,
+                cancel_token.clone(),
+            ),
+        ) {
             (Some(cs), Some(llm), Ok(consumer)) => {
                 let reviewer = Arc::new(ReviewOperationUseCase::new(
                     repo.clone(),
@@ -609,8 +605,8 @@ async fn main() -> anyhow::Result<()> {
                 );
 
                 let handle = tokio::spawn(async move {
-                    let handler: infrastructure::events::oracle_consumer::OracleHandler =
-                        Box::new(move |operation_id| {
+                    let handler: infrastructure::events::oracle_consumer::OracleHandler = Box::new(
+                        move |operation_id| {
                             let reviewer = reviewer.clone();
                             async move {
                                 match reviewer.execute(operation_id).await {
@@ -639,7 +635,8 @@ async fn main() -> anyhow::Result<()> {
                                 }
                             }
                             .boxed()
-                        });
+                        },
+                    );
 
                     if let Err(e) = consumer.start(handler).await {
                         error!("❌ Oracle Consumer terminé avec erreur: {e}");
@@ -788,7 +785,10 @@ async fn run_backfill(
                 );
                 analyzed += 1;
             }
-            Ok(application::use_cases::analyze_operation::AnalysisOutcome::Skipped { reason, .. }) => {
+            Ok(application::use_cases::analyze_operation::AnalysisOutcome::Skipped {
+                reason,
+                ..
+            }) => {
                 info!(
                     progress = %progress,
                     operation_id = %operation.id,
@@ -809,13 +809,7 @@ async fn run_backfill(
         }
     }
 
-    info!(
-        total,
-        analyzed,
-        skipped,
-        errors,
-        "\n🏁 BACKFILL TERMINÉ"
-    );
+    info!(total, analyzed, skipped, errors, "\n🏁 BACKFILL TERMINÉ");
 
     Ok(())
 }
