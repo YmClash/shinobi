@@ -4,6 +4,26 @@
 //! l'`operation_id` de chaque `AnalysisCompleteSummary` pour déclencher
 //! la code review par le LLM local.
 //!
+//! ## Architecture Découplée (Phase 22)
+//!
+//! Le consumer utilise un pattern **mpsc bounded channel** pour découpler
+//! la boucle de polling Kafka du traitement LLM (potentiellement lent).
+//!
+//! ```text
+//! ┌─────────────────────┐     ┌──────────────────────────┐
+//! │  Consumer (rapide)   │     │  Worker (séquentiel)      │
+//! │  Kafka recv()        │     │  rx.recv()                │
+//! │  → tx.send(op_id)   ├────►│  → handler(op_id).await   │
+//! │  → offset validé ✅  │ mpsc│  → un par un              │
+//! │  → retour écouter    │     │  → pas d'OOM Ollama       │
+//! └─────────────────────┘     └──────────────────────────┘
+//! ```
+//!
+//! **Pourquoi ?** Granite3 peut prendre 6+ minutes pour une inférence.
+//! Sans découplage, Kafka expulse le consumer après `max.poll.interval.ms`
+//! (PollExceeded). Avec le channel, le consumer continue de poller
+//! pendant que le worker traite à son rythme.
+//!
 //! ## Différence avec KafkaEventConsumer
 //! Le consumer Tensai désérialise des `Operation` complètes.
 //! Le consumer Oracle désérialise des `AnalysisCompleteSummary` (plus léger)
@@ -13,6 +33,7 @@ use rdkafka::config::ClientConfig;
 use rdkafka::consumer::{Consumer, StreamConsumer};
 use rdkafka::Message;
 use metrics::counter;
+use tokio::sync::mpsc;
 use tokio_util::sync::CancellationToken;
 use tracing::{error, info, warn};
 use uuid::Uuid;
@@ -23,10 +44,16 @@ use domain::errors::DomainError;
 pub type OracleHandler =
     Box<dyn Fn(Uuid) -> futures::future::BoxFuture<'static, ()> + Send + Sync>;
 
+/// Taille du buffer mpsc — salle d'attente interne.
+/// 32 messages max en file d'attente avant que le consumer ralentisse
+/// (backpressure naturelle). Suffisant pour un bulk import de ~30 commits
+/// sans bloquer le consumer.
+const CHANNEL_BUFFER_SIZE: usize = 32;
+
 /// Consumer Kafka pour l'agent Oracle Reviewer.
 ///
 /// Écoute le topic `shinobi.tensai.analysis-complete` et transmet
-/// l'`operation_id` au handler fourni (use case de review).
+/// l'`operation_id` au worker via un canal mpsc borné.
 pub struct OracleKafkaConsumer {
     consumer: StreamConsumer,
     topic: String,
@@ -57,6 +84,11 @@ impl OracleKafkaConsumer {
             .set("enable.auto.commit", "true")
             .set("auto.commit.interval.ms", "5000")
             .set("session.timeout.ms", "30000")
+            // Phase 22 : Filet de sécurité — 15 min max entre polls.
+            // Le découplage mpsc rend ceci quasi-impossible à atteindre,
+            // mais c'est une défense en profondeur au cas où le channel
+            // serait plein ET le send() bloquerait longtemps.
+            .set("max.poll.interval.ms", "900000")
             .create()
             .map_err(|e| {
                 DomainError::Internal(format!("Oracle Kafka consumer creation failed: {e}"))
@@ -66,7 +98,7 @@ impl OracleKafkaConsumer {
             brokers = %brokers,
             topic = %topic,
             group_id = %group_id,
-            "OracleKafkaConsumer initialisé"
+            "OracleKafkaConsumer initialisé (mpsc découplé)"
         );
 
         Ok(Self {
@@ -76,7 +108,10 @@ impl OracleKafkaConsumer {
         })
     }
 
-    /// Démarre la boucle de consommation Oracle.
+    /// Démarre la boucle de consommation Oracle avec découplage mpsc.
+    ///
+    /// Spawne un **worker séquentiel** qui traite les messages un par un,
+    /// pendant que la boucle principale continue de poller Kafka sans blocage.
     pub async fn start(&self, handler: OracleHandler) -> Result<(), DomainError> {
         self.consumer
             .subscribe(&[&self.topic])
@@ -87,11 +122,54 @@ impl OracleKafkaConsumer {
                 ))
             })?;
 
+        // ── Canal mpsc borné : la "salle d'attente" ──────────────
+        let (tx, mut rx) = mpsc::channel::<Uuid>(CHANNEL_BUFFER_SIZE);
+
+        // ── Worker séquentiel : traite les reviews une par une ───
+        let worker_cancel = self.cancel_token.clone();
+        let topic_clone = self.topic.clone();
+        let worker_handle = tokio::spawn(async move {
+            info!("🔮 Oracle Worker — Démarré (traitement séquentiel)");
+
+            loop {
+                tokio::select! {
+                    _ = worker_cancel.cancelled() => {
+                        info!("🛑 Oracle Worker — Shutdown gracieux");
+                        break;
+                    }
+                    maybe_op_id = rx.recv() => {
+                        match maybe_op_id {
+                            Some(operation_id) => {
+                                info!(
+                                    operation_id = %operation_id,
+                                    "🔮 Oracle Worker — Traitement démarré"
+                                );
+                                handler(operation_id).await;
+                                counter!(
+                                    "oracle_reviews_processed_total",
+                                    "topic" => topic_clone.clone()
+                                ).increment(1);
+                            }
+                            None => {
+                                // Le sender (consumer) a été droppé → fin normale.
+                                info!("🔮 Oracle Worker — Canal fermé, arrêt");
+                                break;
+                            }
+                        }
+                    }
+                }
+            }
+
+            info!("🔮 Oracle Worker — Arrêté proprement");
+        });
+
         info!(
             topic = %self.topic,
-            "🔮 Oracle Consumer — Boucle de consommation démarrée"
+            buffer_size = CHANNEL_BUFFER_SIZE,
+            "🔮 Oracle Consumer — Boucle de consommation démarrée (mpsc découplé)"
         );
 
+        // ── Consumer : polling Kafka rapide → dispatch dans le canal ──
         loop {
             tokio::select! {
                 _ = self.cancel_token.cancelled() => {
@@ -129,14 +207,21 @@ impl OracleKafkaConsumer {
                                         operation_id = %summary.operation_id,
                                         partition = message.partition(),
                                         offset = message.offset(),
-                                        "📨 Oracle — Événement analysis-complete reçu"
+                                        "📨 Oracle — Événement analysis-complete reçu → file d'attente"
                                     );
 
                                     // Métriques Prometheus
                                     counter!("kafka_messages_consumed_total", "consumer" => "oracle", "topic" => self.topic.clone())
                                         .increment(1);
 
-                                    handler(summary.operation_id).await;
+                                    // Envoyer dans le canal mpsc (non bloquant si buffer < 32).
+                                    // Si le buffer est plein, on attend — backpressure naturelle.
+                                    if let Err(e) = tx.send(summary.operation_id).await {
+                                        error!(
+                                            operation_id = %e.0,
+                                            "❌ Oracle — Canal mpsc fermé, message perdu"
+                                        );
+                                    }
                                 }
                                 Err(e) => {
                                     warn!(
@@ -161,6 +246,10 @@ impl OracleKafkaConsumer {
                 }
             }
         }
+
+        // ── Cleanup : droper le sender et attendre le worker ────
+        drop(tx);
+        let _ = worker_handle.await;
 
         info!("🔮 Oracle Consumer — Boucle arrêtée proprement");
         Ok(())
