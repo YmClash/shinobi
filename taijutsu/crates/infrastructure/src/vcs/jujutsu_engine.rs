@@ -1759,9 +1759,25 @@ mod tests {
         Uuid::new_v4()
     }
 
+    /// Creates a temp directory with a short path to avoid Windows path length
+    /// issues with jj-lib/gitoxide. On Windows, `tempfile::TempDir::new()` uses
+    /// `C:\Users\...\AppData\Local\Temp\.tmpXXXXXX` (~46 chars). Combined with
+    /// `{owner_uuid}/{repo_uuid}/.jj/repo/store/git/index`, this exceeds the
+    /// internal path limit of gix (~100 chars for the workspace root), causing
+    /// "Failed to read index" errors.
+    ///
+    /// This helper creates temp dirs under `C:\tmp\jjt_<random>` (~20 chars)
+    /// to keep the total path well within limits.
+    fn short_temp_dir() -> tempfile::TempDir {
+        let base = std::path::PathBuf::from("C:\\tmp");
+        std::fs::create_dir_all(&base).expect("Cannot create C:\\tmp for tests");
+        tempfile::TempDir::with_prefix_in("jjt_", &base)
+            .expect("Failed to create short temp dir in C:\\tmp")
+    }
+
     #[tokio::test]
     async fn test_init_workspace_creates_jj_directory() {
-        let tmp = tempfile::TempDir::new().expect("Failed to create temp dir");
+        let tmp = short_temp_dir();
         let engine = JujutsuEngine::new(tmp.path());
         let repo_id = test_repo_id();
         let owner_id = test_owner_id();
@@ -1783,7 +1799,7 @@ mod tests {
 
     #[tokio::test]
     async fn test_create_operation_returns_content_id() {
-        let tmp = tempfile::TempDir::new().expect("Failed to create temp dir");
+        let tmp = short_temp_dir();
         let engine = JujutsuEngine::new(tmp.path());
         let repo_id = test_repo_id();
         let owner_id = test_owner_id();
@@ -1810,7 +1826,7 @@ mod tests {
 
     #[tokio::test]
     async fn test_resolve_head_returns_some_after_init() {
-        let tmp = tempfile::TempDir::new().expect("Failed to create temp dir");
+        let tmp = short_temp_dir();
         let engine = JujutsuEngine::new(tmp.path());
         let repo_id = test_repo_id();
         let owner_id = test_owner_id();
@@ -1858,7 +1874,7 @@ mod tests {
 
     #[tokio::test]
     async fn test_create_operation_writes_real_commit() {
-        let tmp = tempfile::TempDir::new().expect("Failed to create temp dir");
+        let tmp = short_temp_dir();
         let engine = JujutsuEngine::new(tmp.path());
         let repo_id = test_repo_id();
         let owner_id = test_owner_id();
@@ -1898,7 +1914,7 @@ mod tests {
 
     #[tokio::test]
     async fn test_create_operation_multiple_commits() {
-        let tmp = tempfile::TempDir::new().expect("Failed to create temp dir");
+        let tmp = short_temp_dir();
         let engine = JujutsuEngine::new(tmp.path());
         let repo_id = test_repo_id();
         let owner_id = test_owner_id();
@@ -1923,7 +1939,7 @@ mod tests {
 
     #[tokio::test]
     async fn test_resolve_head_deterministic() {
-        let tmp = tempfile::TempDir::new().expect("Failed to create temp dir");
+        let tmp = short_temp_dir();
         let engine = JujutsuEngine::new(tmp.path());
         let repo_id = test_repo_id();
         let owner_id = test_owner_id();
@@ -1959,10 +1975,10 @@ mod tests {
 
     #[tokio::test]
     async fn test_create_operation_without_init_returns_error() {
-        let tmp = tempfile::TempDir::new().expect("Failed to create temp dir");
+        let tmp = short_temp_dir();
         let engine = JujutsuEngine::new(tmp.path());
         let repo_id = test_repo_id();
-        let owner_id = test_owner_id();
+        let _owner_id = test_owner_id();
 
         let result = engine
             .create_operation(&repo_id, "Should fail", &[], &[])
@@ -1979,7 +1995,7 @@ mod tests {
 
     #[tokio::test]
     async fn test_diff_since_empty_on_same_head() {
-        let tmp = tempfile::TempDir::new().expect("Failed to create temp dir");
+        let tmp = short_temp_dir();
         let engine = JujutsuEngine::new(tmp.path());
         let repo_id = test_repo_id();
         let owner_id = test_owner_id();
@@ -2000,7 +2016,7 @@ mod tests {
 
     #[tokio::test]
     async fn test_diff_since_invalid_commit_returns_error() {
-        let tmp = tempfile::TempDir::new().expect("Failed to create temp dir");
+        let tmp = short_temp_dir();
         let engine = JujutsuEngine::new(tmp.path());
         let repo_id = test_repo_id();
         let owner_id = test_owner_id();
@@ -2017,7 +2033,7 @@ mod tests {
 
     #[tokio::test]
     async fn test_repo_updated_after_transaction() {
-        let tmp = tempfile::TempDir::new().expect("Failed to create temp dir");
+        let tmp = short_temp_dir();
         let engine = JujutsuEngine::new(tmp.path());
         let repo_id = test_repo_id();
         let owner_id = test_owner_id();
@@ -2059,7 +2075,7 @@ mod tests {
 
     #[tokio::test]
     async fn test_diff_since_detects_new_commit() {
-        let tmp = tempfile::TempDir::new().expect("Failed to create temp dir");
+        let tmp = short_temp_dir();
         let engine = JujutsuEngine::new(tmp.path());
         let repo_id = test_repo_id();
         let owner_id = test_owner_id();
@@ -2085,7 +2101,7 @@ mod tests {
 
     #[tokio::test]
     async fn test_create_operation_with_single_file() {
-        let tmp = tempfile::TempDir::new().expect("Failed to create temp dir");
+        let tmp = short_temp_dir();
         let engine = JujutsuEngine::new(tmp.path());
         let repo_id = test_repo_id();
         let owner_id = test_owner_id();
@@ -2117,7 +2133,7 @@ mod tests {
 
     #[tokio::test]
     async fn test_create_operation_with_multiple_files() {
-        let tmp = tempfile::TempDir::new().expect("Failed to create temp dir");
+        let tmp = short_temp_dir();
         let engine = JujutsuEngine::new(tmp.path());
         let repo_id = test_repo_id();
         let owner_id = test_owner_id();
@@ -2150,7 +2166,7 @@ mod tests {
 
     #[tokio::test]
     async fn test_diff_since_detects_file_addition() {
-        let tmp = tempfile::TempDir::new().expect("Failed to create temp dir");
+        let tmp = short_temp_dir();
         let engine = JujutsuEngine::new(tmp.path());
         let repo_id = test_repo_id();
         let owner_id = test_owner_id();
@@ -2179,7 +2195,7 @@ mod tests {
 
     #[tokio::test]
     async fn test_create_with_empty_files_uses_empty_tree() {
-        let tmp = tempfile::TempDir::new().expect("Failed to create temp dir");
+        let tmp = short_temp_dir();
         let engine = JujutsuEngine::new(tmp.path());
         let repo_id = test_repo_id();
         let owner_id = test_owner_id();
@@ -2205,7 +2221,7 @@ mod tests {
 
     #[tokio::test]
     async fn test_create_with_file_then_diff_shows_path() {
-        let tmp = tempfile::TempDir::new().expect("Failed to create temp dir");
+        let tmp = short_temp_dir();
         let engine = JujutsuEngine::new(tmp.path());
         let repo_id = test_repo_id();
         let owner_id = test_owner_id();
@@ -2255,7 +2271,7 @@ mod tests {
 
     #[tokio::test]
     async fn test_git_repo_exists_after_init() {
-        let tmp = tempfile::TempDir::new().expect("Failed to create temp dir");
+        let tmp = short_temp_dir();
         let engine = JujutsuEngine::new(tmp.path());
         let repo_id = test_repo_id();
         let owner_id = test_owner_id();
@@ -2329,7 +2345,7 @@ mod tests {
 
     #[tokio::test]
     async fn test_two_repos_isolated_workspaces() {
-        let tmp = tempfile::TempDir::new().expect("Failed to create temp dir");
+        let tmp = short_temp_dir();
         let engine = JujutsuEngine::new(tmp.path());
         let owner_id = test_owner_id();
         let repo_a = Uuid::new_v4();
@@ -2367,7 +2383,7 @@ mod tests {
 
     #[tokio::test]
     async fn test_dashmap_registers_multiple_repos() {
-        let tmp = tempfile::TempDir::new().expect("Failed to create temp dir");
+        let tmp = short_temp_dir();
         let engine = JujutsuEngine::new(tmp.path());
         let owner_id = test_owner_id();
 
@@ -2386,7 +2402,7 @@ mod tests {
 
     #[tokio::test]
     async fn test_reload_repo_idempotent() {
-        let tmp = tempfile::TempDir::new().expect("Failed to create temp dir");
+        let tmp = short_temp_dir();
         let engine = JujutsuEngine::new(tmp.path());
         let repo_id = test_repo_id();
         let owner_id = test_owner_id();
@@ -2420,10 +2436,10 @@ mod tests {
 
     #[tokio::test]
     async fn test_reload_repo_without_init_returns_error() {
-        let tmp = tempfile::TempDir::new().expect("Failed to create temp dir");
+        let tmp = short_temp_dir();
         let engine = JujutsuEngine::new(tmp.path());
         let repo_id = test_repo_id();
-        let owner_id = test_owner_id();
+        let _owner_id = test_owner_id();
 
         let result = engine.reload_repo(&repo_id).await;
 
@@ -2438,7 +2454,7 @@ mod tests {
 
     #[test]
     fn test_git_repo_path_layout() {
-        let tmp = tempfile::TempDir::new().expect("Failed to create temp dir");
+        let tmp = short_temp_dir();
         let engine = JujutsuEngine::new(tmp.path());
         let repo_id = Uuid::parse_str("a1a2a3a4-b1b2-c1c2-d1d2-e1e2e3e4e5e6").unwrap();
 
@@ -2463,7 +2479,7 @@ mod tests {
 
     #[tokio::test]
     async fn test_read_commit_snapshot_returns_files_and_description() {
-        let tmp = tempfile::TempDir::new().expect("Failed to create temp dir");
+        let tmp = short_temp_dir();
         let engine = JujutsuEngine::new(tmp.path());
         let repo_id = test_repo_id();
         let owner_id = test_owner_id();
@@ -2532,7 +2548,7 @@ mod tests {
 
     #[tokio::test]
     async fn test_read_commit_snapshot_empty_commit() {
-        let tmp = tempfile::TempDir::new().expect("Failed to create temp dir");
+        let tmp = short_temp_dir();
         let engine = JujutsuEngine::new(tmp.path());
         let repo_id = test_repo_id();
         let owner_id = test_owner_id();
@@ -2557,4 +2573,5 @@ mod tests {
             snapshot.files.len()
         );
     }
+
 }
