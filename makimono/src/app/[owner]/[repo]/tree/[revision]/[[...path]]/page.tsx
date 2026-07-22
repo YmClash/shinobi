@@ -25,6 +25,7 @@ import BreadcrumbNav from "@/components/explorer/BreadcrumbNav";
 import BranchSelector from "@/components/explorer/BranchSelector";
 import FileBrowser from "@/components/explorer/FileBrowser";
 import ExplorerFileClient from "@/components/explorer/ExplorerFileClient";
+import DeleteRepoButton from "@/components/forge/delete-repo-button";
 
 // ── Route params ─────────────────────────────────────────────
 
@@ -325,6 +326,14 @@ git push -u origin main`}</pre>
               <Download size={14} />
               <span>Cloner</span>
             </button>
+            {repoMeta && (
+              <DeleteRepoButton
+                owner={owner}
+                repo={repo}
+                displayName={repoMeta.display_name}
+                ownerId={repoMeta.owner_id}
+              />
+            )}
           </div>
         </div>
       </header>

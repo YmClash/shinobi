@@ -24,6 +24,7 @@ use application::use_cases::analyze_operation::AnalyzeOperationUseCase;
 use application::use_cases::create_operation::CreateOperationUseCase;
 use application::use_cases::create_pat::CreatePatUseCase;
 use application::use_cases::create_repository::CreateRepositoryUseCase;
+use application::use_cases::delete_repository::DeleteRepositoryUseCase;
 use application::use_cases::get_blob::GetBlobUseCase;
 use application::use_cases::get_ipfs_content::GetIpfsContentUseCase;
 use application::use_cases::get_operation::GetOperationUseCase;
@@ -403,6 +404,23 @@ async fn main() -> anyhow::Result<()> {
 
     info!("🐙 GitHub Bulk Import initialisé (Phase 20B — Le Clonage Massif)");
 
+    // ── Phase 24 : Soft Delete (Corbeille) ──────────────────────────
+    let delete_repository = Arc::new(DeleteRepositoryUseCase::new(
+        actor_repo.clone(),
+        repo_repo.clone(),
+    ));
+
+    let purge_trash = Arc::new(
+        application::use_cases::purge_trash::PurgeTrashUseCase::new(
+            repo_repo.clone(),
+            std::path::PathBuf::from(&config.vcs_workspace_root),
+        ),
+    );
+
+    info!("🗑️ Corbeille initialisée (Phase 24 — rétention {}s)",
+        application::use_cases::purge_trash::TRASH_RETENTION_SECS
+    );
+
     let shared_state = SharedState {
         create_operation,
         get_operation,
@@ -443,6 +461,8 @@ async fn main() -> anyhow::Result<()> {
         // Phase 20B — Le Clonage Massif
         list_github_repos,
         bulk_import_github,
+        // Phase 24 — Soft Delete (Corbeille)
+        delete_repository,
     };
 
     // ── Git Bridge HTTP (Phase 12A) ────────────────────
@@ -490,6 +510,29 @@ async fn main() -> anyhow::Result<()> {
             .await
             .map_err(|e| anyhow::anyhow!("Axum server error: {e}"))
     };
+
+    // ── Phase 24 : Timer de purge automatique (corbeille) ────────────
+    {
+        let purge = purge_trash.clone();
+        let cancel = cancel_token.clone();
+        tokio::spawn(async move {
+            // Vérifier toutes les 10 minutes (adapté au délai de rétention de 1h)
+            let mut interval = tokio::time::interval(std::time::Duration::from_secs(600));
+            loop {
+                interval.tick().await;
+                if cancel.is_cancelled() {
+                    info!("🗑️ Purge timer — arrêt demandé");
+                    break;
+                }
+                match purge.execute().await {
+                    Ok(n) if n > 0 => info!("🗑️ Purge: {n} dépôt(s) expiré(s) supprimé(s) définitivement"),
+                    Ok(_) => {},
+                    Err(e) => warn!("⚠️ Purge automatique échouée: {e}"),
+                }
+            }
+        });
+        info!("⏱️ Timer de purge automatique démarré (toutes les 10 min)");
+    }
 
     // ── Serveur Tonic (gRPC / Ninpo) ───────────────
     let grpc_addr = SocketAddr::from(([0, 0, 0, 0], config.grpc_port));

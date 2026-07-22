@@ -13,7 +13,7 @@
 //! - `POST /{owner}/{repo}.git/git-receive-pack`   — Push
 //! - `POST /{owner}/{repo}.git/git-upload-pack`    — Clone/Fetch
 //!
-//! ## Authentification (Phase 19A-Git — Les Portes de Fer)
+//! ## Authentification (Phase 19A-Git + Phase 23 — Les Portes Scellées)
 //! - **Push** (`git-receive-pack`) : PAT obligatoire via Basic Auth
 //! - **Clone/Fetch** (`git-upload-pack`) : Public (V1 — pas de repos prives)
 //! - **info/refs** : Auth conditionnelle (seulement si `service=git-receive-pack`)
@@ -33,7 +33,6 @@ use axum::{Router, routing::get, routing::post};
 use base64::Engine;
 use serde::Deserialize;
 use tracing::{info, warn};
-
 
 use domain::entities::actor::Actor;
 use domain::entities::operation::Operation;
@@ -66,10 +65,7 @@ struct InfoRefsQuery {
 /// elles utilisent un etat different (`GitHttpState`).
 pub fn create_git_router(state: GitHttpState) -> Router {
     Router::new()
-        .route(
-            "/{owner}/{repo_dot_git}/info/refs",
-            get(git_info_refs),
-        )
+        .route("/{owner}/{repo_dot_git}/info/refs", get(git_info_refs))
         .route(
             "/{owner}/{repo_dot_git}/git-receive-pack",
             post(git_receive_pack),
@@ -103,11 +99,15 @@ fn challenge_401(message: &str) -> Response {
 /// - **password** : PAT brut (ex: `shb_abc123...`)
 fn extract_basic_auth(headers: &HeaderMap) -> Option<(String, String)> {
     let header = headers.get("authorization")?.to_str().ok()?;
-    let encoded = header.strip_prefix("Basic ")
+    let encoded = header
+        .strip_prefix("Basic ")
         .or_else(|| header.strip_prefix("basic "))?;
     let decoded = String::from_utf8(
-        base64::engine::general_purpose::STANDARD.decode(encoded).ok()?
-    ).ok()?;
+        base64::engine::general_purpose::STANDARD
+            .decode(encoded)
+            .ok()?,
+    )
+    .ok()?;
     let (user, pass) = decoded.split_once(':')?;
     Some((user.to_string(), pass.to_string()))
 }
@@ -124,10 +124,7 @@ fn extract_basic_auth(headers: &HeaderMap) -> Option<(String, String)> {
 /// Retourne une `Response` 401 avec challenge si :
 /// - Header absent ou mal forme
 /// - PAT inconnu en base
-async fn authenticate_pat(
-    state: &GitHttpState,
-    headers: &HeaderMap,
-) -> Result<Actor, Response> {
+async fn authenticate_pat(state: &GitHttpState, headers: &HeaderMap) -> Result<Actor, Response> {
     let (username, password) = extract_basic_auth(headers)
         .ok_or_else(|| challenge_401("Authentication required — use a Personal Access Token"))?;
 
@@ -135,7 +132,8 @@ async fn authenticate_pat(
     let pat_hash = state.auth_service.hash_pat_for_lookup(&password);
 
     // Reverse lookup : hash → actor
-    let actor = state.actor_repo
+    let actor = state
+        .actor_repo
         .find_actor_by_credential_hash(&pat_hash, "api_key")
         .await
         .map_err(|e| {
@@ -159,6 +157,53 @@ async fn authenticate_pat(
     Ok(actor)
 }
 
+/// Tente d'authentifier un PAT sans echouer si absent.
+///
+/// Retourne `Ok(Some(actor))` si un PAT valide est present,
+/// `Ok(None)` si aucun header auth n'est fourni,
+/// `Err(response)` si le header est present mais invalide.
+///
+/// Phase 23 : Pour les routes en lecture (clone/fetch), on tente
+/// l'auth de facon non-bloquante. Si le repo est public et qu'il
+/// n'y a pas de header auth, on laisse passer.
+async fn try_authenticate_pat(
+    state: &GitHttpState,
+    headers: &HeaderMap,
+) -> Result<Option<Actor>, Response> {
+    // Pas de header auth → anonyme
+    let (username, password) = match extract_basic_auth(headers) {
+        Some(creds) => creds,
+        None => return Ok(None),
+    };
+
+    // Header present → valider le PAT
+    let pat_hash = state.auth_service.hash_pat_for_lookup(&password);
+
+    let actor = state
+        .actor_repo
+        .find_actor_by_credential_hash(&pat_hash, "api_key")
+        .await
+        .map_err(|e| {
+            warn!(error = %e, "Git Auth: erreur DB pendant le lookup PAT");
+            (StatusCode::INTERNAL_SERVER_ERROR, "Authentication error").into_response()
+        })?
+        .ok_or_else(|| {
+            warn!(
+                username = %username,
+                "Git Auth: PAT invalide ou inconnu"
+            );
+            challenge_401("Invalid Personal Access Token")
+        })?;
+
+    info!(
+        actor_handle = %actor.handle,
+        actor_id = %actor.id,
+        "Git Auth: PAT valide — acteur authentifie"
+    );
+
+    Ok(Some(actor))
+}
+
 /// Verifie si un acteur a le droit de pusher dans un repo.
 ///
 /// V1 : owner OU collaborateur (tout role).
@@ -173,10 +218,38 @@ async fn is_authorized_to_push(
         return true;
     }
     // Sinon, verifier si collaborateur
-    state.repo_repo
+    state
+        .repo_repo
         .is_collaborator(&actor.id, &repository.id)
         .await
         .unwrap_or(false)
+}
+
+/// Verifie si un acteur (ou anonyme) a le droit de lire un repo.
+///
+/// Phase 23 — Les Portes Scellees :
+/// - Repo public → toujours OK (meme anonyme)
+/// - Repo prive → doit etre owner OU collaborateur
+async fn is_authorized_to_read(
+    state: &GitHttpState,
+    actor: Option<&Actor>,
+    repository: &domain::entities::repository::Repository,
+) -> bool {
+    if repository.is_public() {
+        return true;
+    }
+    // Repo prive : seul le owner ou un collaborateur peut lire
+    match actor {
+        Some(a) => {
+            a.id == repository.owner_id
+                || state
+                    .repo_repo
+                    .is_collaborator(&a.id, &repository.id)
+                    .await
+                    .unwrap_or(false)
+        }
+        None => false, // Anonyme ne peut pas lire un repo prive
+    }
 }
 
 // ── Helpers ──────────────────────────────────────────────────────────
@@ -188,9 +261,7 @@ fn strip_git_suffix(name: &str) -> &str {
 }
 
 /// Convertit une `CgiResponse` en `axum::response::Response`.
-fn cgi_to_axum_response(
-    cgi: infrastructure::vcs::git_cgi::CgiResponse,
-) -> Response {
+fn cgi_to_axum_response(cgi: infrastructure::vcs::git_cgi::CgiResponse) -> Response {
     let status = StatusCode::from_u16(cgi.status).unwrap_or(StatusCode::OK);
 
     let mut headers = HeaderMap::new();
@@ -217,9 +288,11 @@ fn cgi_to_axum_response(
 /// VSCode/terminal appelle cette route pour demander la liste des
 /// branches et commits du depot distant.
 ///
-/// ## Auth (Phase 19A-Git)
+/// ## Auth (Phase 19A-Git + Phase 23)
 /// - Si `service=git-receive-pack` (push) : PAT obligatoire
-/// - Si `service=git-upload-pack` (clone) : Public (V1)
+/// - Si `service=git-upload-pack` (clone) :
+///   - Repo public : pas de PAT requis
+///   - Repo privé : PAT obligatoire + owner/collaborateur
 async fn git_info_refs(
     State(state): State<GitHttpState>,
     Path(path): Path<GitRepoPath>,
@@ -244,29 +317,49 @@ async fn git_info_refs(
         }
     };
 
-    // 1b. Auth conditionnelle : exiger PAT si push (Phase 19A-Git)
-    if query.service.as_deref() == Some("git-receive-pack") {
-        let actor = match authenticate_pat(&state, &headers).await {
-            Ok(actor) => actor,
-            Err(response) => return response,
-        };
+    // 1b. Auth conditionnelle selon service + visibilite
+    match query.service.as_deref() {
+        // Push : PAT toujours obligatoire (Phase 19A-Git)
+        Some("git-receive-pack") => {
+            let actor = match authenticate_pat(&state, &headers).await {
+                Ok(actor) => actor,
+                Err(response) => return response,
+            };
 
-        // Verifier l'ownership/collaboration
-        if !is_authorized_to_push(&state, &actor, &repository).await {
-            warn!(
+            if !is_authorized_to_push(&state, &actor, &repository).await {
+                warn!(
+                    actor = %actor.handle,
+                    repo = %repo_name,
+                    owner = %path.owner,
+                    "Git Auth: acces refuse — pas owner ni collaborateur"
+                );
+                return challenge_401("No access to this repository");
+            }
+
+            info!(
                 actor = %actor.handle,
                 repo = %repo_name,
-                owner = %path.owner,
-                "Git Auth: acces refuse — pas owner ni collaborateur"
+                "Git HTTP: push auth OK (info/refs)"
             );
-            return challenge_401("No access to this repository");
         }
+        // Clone/Fetch : check visibilite (Phase 23)
+        Some("git-upload-pack") => {
+            let actor = match try_authenticate_pat(&state, &headers).await {
+                Ok(maybe_actor) => maybe_actor,
+                Err(response) => return response, // PAT present mais invalide
+            };
 
-        info!(
-            actor = %actor.handle,
-            repo = %repo_name,
-            "Git HTTP: push auth OK (info/refs)"
-        );
+            if !is_authorized_to_read(&state, actor.as_ref(), &repository).await {
+                // Repo prive sans auth → challenge 401
+                if actor.is_none() {
+                    return challenge_401("Authentication required for private repository");
+                }
+                // Auth OK mais pas autorise → 404 (ne pas reveler l'existence)
+                return (StatusCode::NOT_FOUND, "Repository not found").into_response();
+            }
+        }
+        // Autre service ou absent → pas de check supplementaire
+        _ => {}
     }
 
     // 2. Construire le chemin vers le bare Git repo
@@ -281,9 +374,17 @@ async fn git_info_refs(
             path = %repo_git_path.display(),
             "Git HTTP: bare Git repo absent — lazy init du workspace"
         );
-        if let Err(e) = state.vcs_engine.init_workspace(&repository.owner_id, &repository.id).await {
+        if let Err(e) = state
+            .vcs_engine
+            .init_workspace(&repository.owner_id, &repository.id)
+            .await
+        {
             warn!(error = %e, "Git HTTP: lazy init failed");
-            return (StatusCode::INTERNAL_SERVER_ERROR, "Failed to initialize Git repository").into_response();
+            return (
+                StatusCode::INTERNAL_SERVER_ERROR,
+                "Failed to initialize Git repository",
+            )
+                .into_response();
         }
         // Re-verifier apres init
         if !repo_git_path.exists() {
@@ -428,9 +529,9 @@ async fn git_receive_pack(
 ///
 /// Lecture seule — pas de Sync Hook ni d'etincelle Kafka.
 ///
-/// ## Auth (Phase 19A-Git)
-/// Public en V1 — pas de repos prives. L'auth sera ajoutee quand
-/// le concept `visibility = 'private'` sera implemente (Phase 20).
+/// ## Auth (Phase 23 — Les Portes Scellees)
+/// - Repo public : acces libre (aucun PAT requis)
+/// - Repo prive : PAT obligatoire + owner/collaborateur
 async fn git_upload_pack(
     State(state): State<GitHttpState>,
     Path(path): Path<GitRepoPath>,
@@ -455,16 +556,30 @@ async fn git_upload_pack(
         }
     };
 
-    // 2. Construire le chemin vers le bare Git repo
+    // 2. Phase 23 : check visibilite
+    let actor = match try_authenticate_pat(&state, &headers).await {
+        Ok(maybe_actor) => maybe_actor,
+        Err(response) => return response, // PAT present mais invalide
+    };
+
+    if !is_authorized_to_read(&state, actor.as_ref(), &repository).await {
+        if actor.is_none() {
+            return challenge_401("Authentication required for private repository");
+        }
+        // Auth OK mais pas autorise → 404 (ne pas reveler l'existence)
+        return (StatusCode::NOT_FOUND, "Repository not found").into_response();
+    }
+
+    // 3. Construire le chemin vers le bare Git repo
     let repo_git_path = state.vcs_engine.git_repo_path(&repository.id);
 
-    // 3. Extraire le Content-Type
+    // 4. Extraire le Content-Type
     let content_type = headers
         .get(axum::http::header::CONTENT_TYPE)
         .and_then(|v| v.to_str().ok())
         .unwrap_or("application/x-git-upload-pack-request");
 
-    // 4. Executer le CGI upload-pack
+    // 5. Executer le CGI upload-pack
     match state
         .git_cgi
         .execute_cgi(
@@ -504,7 +619,10 @@ async fn sync_hook_post_push(
     let repo_id = repository.id;
 
     // 0. S'assurer que le workspace est enregistre dans le DashMap
-    state.vcs_engine.init_workspace(&repository.owner_id, &repo_id).await?;
+    state
+        .vcs_engine
+        .init_workspace(&repository.owner_id, &repo_id)
+        .await?;
 
     // 1. Recharger le repo jj (pour voir les nouveaux commits Git)
     state.vcs_engine.reload_repo(&repo_id).await?;
@@ -515,14 +633,9 @@ async fn sync_hook_post_push(
     //      commit orphelin cree par un precedent Sync Hook
     //    - resolve_git_head() lit directement refs/heads/main dans le
     //      bare git repo, garanti d'etre le commit qui vient d'etre pushe
-    let content_id = state
-        .vcs_engine
-        .resolve_git_head(&repo_id)
-        .ok_or_else(|| {
-            domain::errors::DomainError::VcsError(
-                "No git HEAD after reload — empty repo?".to_string(),
-            )
-        })?;
+    let content_id = state.vcs_engine.resolve_git_head(&repo_id).ok_or_else(|| {
+        domain::errors::DomainError::VcsError("No git HEAD after reload — empty repo?".to_string())
+    })?;
 
     info!(
         repo_id = %repo_id,
@@ -593,7 +706,11 @@ async fn sync_hook_post_push(
     // 5. Résoudre les parents Git → UUID Operation (La Lignée Sanguine — Phase 12A-Fix2)
     let mut parent_op_ids: Vec<uuid::Uuid> = Vec::new();
     for parent_sha in &snapshot.parent_commit_ids {
-        match state.operation_repo.find_by_content_id(&repo_id, parent_sha).await {
+        match state
+            .operation_repo
+            .find_by_content_id(&repo_id, parent_sha)
+            .await
+        {
             Ok(Some(parent_op)) => {
                 parent_op_ids.push(parent_op.id);
                 info!(

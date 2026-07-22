@@ -392,6 +392,90 @@ export async function createRepository(
   });
 }
 
+// ── Phase 24 — Soft Delete (Corbeille) ───────────────────────────
+
+export interface TrashRepository {
+  id: string;
+  name: string;
+  display_name: string;
+  description: string | null;
+  visibility: string;
+  deleted_at: string;
+  seconds_until_purge: number;
+}
+
+export interface TrashResponse {
+  owner: string;
+  trash: TrashRepository[];
+  count: number;
+  retention_seconds: number;
+}
+
+/** Met un dépôt en corbeille (soft delete). Requiert un JWT valide. */
+export async function archiveRepository(
+  owner: string,
+  repo: string,
+  confirmationWord: string,
+  expectedWord: string,
+  token: string,
+): Promise<void> {
+  const url = `${getBaseUrl()}/api/v1/repos/${encodeURIComponent(owner)}/${encodeURIComponent(repo)}/archive`;
+  const res = await fetch(url, {
+    method: "POST",
+    headers: {
+      "Content-Type": "application/json",
+      Authorization: `Bearer ${token}`,
+    },
+    body: JSON.stringify({
+      confirmation_word: confirmationWord,
+      expected_word: expectedWord,
+    }),
+  });
+  if (!res.ok) {
+    const text = await res.text().catch(() => "Unknown error");
+    throw new Error(`HTTP ${res.status}: ${text}`);
+  }
+}
+
+/** Restaure un dépôt depuis la corbeille. Requiert un JWT valide. */
+export async function restoreRepository(
+  owner: string,
+  repo: string,
+  token: string,
+): Promise<Repository> {
+  const url = `${getBaseUrl()}/api/v1/repos/${encodeURIComponent(owner)}/${encodeURIComponent(repo)}/restore`;
+  const res = await fetch(url, {
+    method: "POST",
+    headers: {
+      "Content-Type": "application/json",
+      Authorization: `Bearer ${token}`,
+    },
+  });
+  if (!res.ok) {
+    const text = await res.text().catch(() => "Unknown error");
+    throw new Error(`HTTP ${res.status}: ${text}`);
+  }
+  return res.json() as Promise<Repository>;
+}
+
+/** Liste les dépôts en corbeille d'un utilisateur. Requiert un JWT valide. */
+export async function listTrashRepositories(
+  handle: string,
+  token: string,
+): Promise<TrashResponse> {
+  const url = `${getBaseUrl()}/api/v1/actors/${encodeURIComponent(handle)}/trash`;
+  const res = await fetch(url, {
+    headers: {
+      Authorization: `Bearer ${token}`,
+    },
+  });
+  if (!res.ok) {
+    const text = await res.text().catch(() => "Unknown error");
+    throw new Error(`HTTP ${res.status}: ${text}`);
+  }
+  return res.json() as Promise<TrashResponse>;
+}
+
 // ── Sensei Agent (Phase 15 — 先生) ─────────────────────────────
 
 /** Message dans l'historique de conversation. */

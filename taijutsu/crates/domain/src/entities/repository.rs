@@ -96,6 +96,12 @@ pub struct Repository {
     /// Timestamp du dernier import miroir réussi.
     /// `None` = jamais synchronisé ou repo natif.
     pub mirror_synced_at: Option<DateTime<Utc>>,
+
+    // ── Phase 24 — Soft Delete ────────────────────────────────────
+
+    /// Timestamp de suppression (soft delete). `None` = dépôt actif.
+    /// Si renseigné, le repo est en corbeille et sera purgé après le délai de rétention.
+    pub deleted_at: Option<DateTime<Utc>>,
 }
 
 impl Repository {
@@ -116,6 +122,7 @@ impl Repository {
             created_at: Utc::now(),
             mirror_source_url: None,
             mirror_synced_at: None,
+            deleted_at: None,
         }
     }
 
@@ -132,6 +139,20 @@ impl Repository {
     /// Vérifie si le dépôt est un miroir importé depuis GitHub (Phase 19B).
     pub fn is_mirror(&self) -> bool {
         self.mirror_source_url.is_some()
+    }
+
+    /// Vérifie si le dépôt est dans la corbeille (soft-deleted).
+    pub fn is_deleted(&self) -> bool {
+        self.deleted_at.is_some()
+    }
+
+    /// Nombre de secondes restantes avant purge définitive.
+    /// Retourne `None` si le dépôt n'est pas supprimé.
+    pub fn seconds_until_purge(&self, retention_secs: i64) -> Option<i64> {
+        self.deleted_at.map(|d| {
+            let deadline = d + chrono::Duration::seconds(retention_secs);
+            (deadline - Utc::now()).num_seconds().max(0)
+        })
     }
 }
 

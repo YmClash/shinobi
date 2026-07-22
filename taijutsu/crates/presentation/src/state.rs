@@ -126,6 +126,10 @@ pub struct SharedState {
 
     /// Use case: import massif de repos GitHub.
     pub bulk_import_github: Arc<application::use_cases::bulk_import_github::BulkImportGitHubUseCase>,
+
+    // ── Phase 24 — Soft Delete (Corbeille) ────────────────────────
+    /// Use case: suppression (soft delete) et restauration de dépôts.
+    pub delete_repository: Arc<application::use_cases::delete_repository::DeleteRepositoryUseCase>,
 }
 
 // ── Phase 12A — Git Bridge HTTP ──────────────────────────────────────

@@ -26,6 +26,7 @@ use domain::ports::review_repository::OperationReview;
 use domain::ports::vcs_engine::{EntryKind, RefKind};
 
 use crate::errors::AppError;
+use crate::rest::auth_middleware::MaybeAuth;
 use crate::state::SharedState;
 
 // ─── Types Request / Response ────────────────────
@@ -314,6 +315,19 @@ pub fn create_router(state: SharedState) -> Router {
         // ── Phase 20B — Le Clonage Massif ────────────────────────
         .route("/api/v1/github/my-repos", get(list_github_repos_handler))
         .route("/api/v1/github/bulk-import", post(bulk_import_github_handler))
+        // ── Phase 24 — Soft Delete (Corbeille) ─────────────────
+        .route(
+            "/api/v1/repos/{owner}/{repo}/archive",
+            post(archive_repository_handler),
+        )
+        .route(
+            "/api/v1/repos/{owner}/{repo}/restore",
+            post(restore_repository_handler),
+        )
+        .route(
+            "/api/v1/actors/{handle}/trash",
+            get(list_trash_handler),
+        )
         // ── Métriques Prometheus ────────────────────
         .route(
             "/metrics",
@@ -582,14 +596,46 @@ async fn create_repository_handler(
 }
 
 /// Lister les dépôts d'un acteur — `GET /api/v1/actors/{handle}/repos`
+///
+/// ## Visibilité (Phase 23)
+/// - Si le visiteur est le propriétaire (JWT match) → tous les repos
+/// - Sinon (anonyme ou autre utilisateur) → repos publics uniquement
 async fn list_repositories_handler(
     State(state): State<SharedState>,
     Path(handle): Path<String>,
+    auth: MaybeAuth,
 ) -> Result<Json<serde_json::Value>, AppError> {
     info!(handle = %handle, "REST: ListRepositories reçu");
 
     let repos = state.list_repositories.execute(&handle).await?;
-    let repos_json: Vec<RepositoryJson> = repos.into_iter().map(RepositoryJson::from).collect();
+
+    // Phase 23 : filtrer par visibilité selon l'identité du visiteur
+    let filtered_repos: Vec<domain::entities::repository::Repository> = match &auth.0 {
+        Some(claims) => {
+            // Vérifier si le visiteur est le propriétaire
+            let is_owner = repos.first().map_or(false, |r| r.owner_id == claims.actor_id());
+            if is_owner {
+                repos // Propriétaire voit tout
+            } else {
+                // Autre utilisateur : publics + repos où il est collaborateur
+                let mut visible = Vec::new();
+                for repo in repos {
+                    if repo.is_public() {
+                        visible.push(repo);
+                    } else if state.repo_repo.is_collaborator(&claims.actor_id(), &repo.id).await.unwrap_or(false) {
+                        visible.push(repo);
+                    }
+                }
+                visible
+            }
+        }
+        None => {
+            // Anonyme : publics uniquement (Option A)
+            repos.into_iter().filter(|r| r.is_public()).collect()
+        }
+    };
+
+    let repos_json: Vec<RepositoryJson> = filtered_repos.into_iter().map(RepositoryJson::from).collect();
 
     Ok(Json(serde_json::json!({
         "owner": handle,
@@ -599,13 +645,17 @@ async fn list_repositories_handler(
 }
 
 /// Détail d'un dépôt — `GET /api/v1/repos/{owner}/{repo}`
+///
+/// ## Visibilité (Phase 23)
+/// Retourne 404 si le repo est privé et que le visiteur n'est pas autorisé.
 async fn get_repository_handler(
     State(state): State<SharedState>,
     Path((owner, repo)): Path<(String, String)>,
+    auth: MaybeAuth,
 ) -> Result<Json<RepositoryJson>, AppError> {
     info!(owner = %owner, repo = %repo, "REST: GetRepository reçu");
 
-    let repository = state.resolve_repo.execute(&owner, &repo).await?;
+    let repository = resolve_repo_with_access_check(&state, &owner, &repo, &auth).await?;
 
     Ok(Json(RepositoryJson::from(repository)))
 }
@@ -627,10 +677,57 @@ struct RepoOperationPath {
     id: Uuid,
 }
 
+// ── Phase 23 : Garde de visibilité centralisé ─────────────────────────
+
+/// Résout un repo et vérifie l'accès en lecture.
+///
+/// - Repo public → OK pour tous (même anonyme)
+/// - Repo privé → nécessite JWT valide + owner/collaborateur
+/// - Non autorisé → 404 (pas 403, pour ne pas révéler l'existence)
+async fn resolve_repo_with_access_check(
+    state: &SharedState,
+    owner: &str,
+    repo: &str,
+    auth: &MaybeAuth,
+) -> Result<domain::entities::repository::Repository, AppError> {
+    let repository = state.resolve_repo.execute(owner, repo).await?;
+
+    // Repo public : accès libre
+    if repository.is_public() {
+        return Ok(repository);
+    }
+
+    // Repo privé : vérifier l'identité
+    match &auth.0 {
+        Some(claims) => {
+            let actor_id = claims.actor_id();
+            if actor_id == repository.owner_id {
+                return Ok(repository); // Propriétaire
+            }
+            if state.repo_repo.is_collaborator(&actor_id, &repository.id).await.unwrap_or(false) {
+                return Ok(repository); // Collaborateur
+            }
+            // Auth OK mais pas autorisé → 404 (ne pas révéler l'existence)
+            Err(AppError::from(DomainError::NotFound {
+                entity_type: "Repository",
+                id: uuid::Uuid::nil(),
+            }))
+        }
+        None => {
+            // Anonyme sur repo privé → 404
+            Err(AppError::from(DomainError::NotFound {
+                entity_type: "Repository",
+                id: uuid::Uuid::nil(),
+            }))
+        }
+    }
+}
+
 /// Créer une opération — `POST /api/v1/repos/:owner/:repo/operations`
 async fn federated_create_operation(
     State(state): State<SharedState>,
     Path(path): Path<RepoPath>,
+    auth: MaybeAuth,
     Json(body): Json<CreateOperationBody>,
 ) -> Result<(axum::http::StatusCode, Json<OperationJson>), AppError> {
     info!(
@@ -640,7 +737,7 @@ async fn federated_create_operation(
         "REST Fédéré: CreateOperation"
     );
 
-    let repository = state.resolve_repo.execute(&path.owner, &path.repo).await?;
+    let repository = resolve_repo_with_access_check(&state, &path.owner, &path.repo, &auth).await?;
 
     let files: Vec<(String, Vec<u8>)> = body
         .files
@@ -674,6 +771,7 @@ async fn federated_list_operations(
     State(state): State<SharedState>,
     Path(path): Path<RepoPath>,
     Query(params): Query<ListOperationsQuery>,
+    auth: MaybeAuth,
 ) -> Result<Json<serde_json::Value>, AppError> {
     info!(
         owner = %path.owner,
@@ -681,7 +779,7 @@ async fn federated_list_operations(
         "REST Fédéré: ListOperations"
     );
 
-    let repository = state.resolve_repo.execute(&path.owner, &path.repo).await?;
+    let repository = resolve_repo_with_access_check(&state, &path.owner, &path.repo, &auth).await?;
 
     let filter = if let Some(author_id) = params.author_id {
         ListFilter::ByAuthor { author_id }
@@ -711,6 +809,7 @@ async fn federated_list_operations(
 async fn federated_get_operation(
     State(state): State<SharedState>,
     Path(path): Path<RepoOperationPath>,
+    auth: MaybeAuth,
 ) -> Result<Json<OperationJson>, AppError> {
     info!(
         owner = %path.owner,
@@ -719,8 +818,7 @@ async fn federated_get_operation(
         "REST Fédéré: GetOperation"
     );
 
-    // Valider que le repo existe (autorisation implicite)
-    let _repository = state.resolve_repo.execute(&path.owner, &path.repo).await?;
+    let _repository = resolve_repo_with_access_check(&state, &path.owner, &path.repo, &auth).await?;
 
     let operation = state.get_operation.execute(path.id).await?;
     Ok(Json(OperationJson::from(operation)))
@@ -730,8 +828,9 @@ async fn federated_get_operation(
 async fn federated_get_diff(
     State(state): State<SharedState>,
     Path(path): Path<RepoOperationPath>,
+    auth: MaybeAuth,
 ) -> Result<Json<serde_json::Value>, AppError> {
-    let _repository = state.resolve_repo.execute(&path.owner, &path.repo).await?;
+    let _repository = resolve_repo_with_access_check(&state, &path.owner, &path.repo, &auth).await?;
 
     let result = state.get_operation_diff.execute(path.id).await?;
 
@@ -747,8 +846,9 @@ async fn federated_get_diff(
 async fn federated_get_reviews(
     State(state): State<SharedState>,
     Path(path): Path<RepoOperationPath>,
+    auth: MaybeAuth,
 ) -> Result<Json<serde_json::Value>, AppError> {
-    let _repository = state.resolve_repo.execute(&path.owner, &path.repo).await?;
+    let _repository = resolve_repo_with_access_check(&state, &path.owner, &path.repo, &auth).await?;
 
     let result = state.get_reviews.execute(path.id).await?;
     let reviews_json: Vec<ReviewJson> = result.reviews.into_iter().map(ReviewJson::from).collect();
@@ -764,8 +864,9 @@ async fn federated_get_reviews(
 async fn federated_get_ipfs(
     State(state): State<SharedState>,
     Path(path): Path<RepoOperationPath>,
+    auth: MaybeAuth,
 ) -> Result<Json<serde_json::Value>, AppError> {
-    let _repository = state.resolve_repo.execute(&path.owner, &path.repo).await?;
+    let _repository = resolve_repo_with_access_check(&state, &path.owner, &path.repo, &auth).await?;
 
     let result = state.get_ipfs_content.execute(path.id).await?;
 
@@ -783,8 +884,9 @@ async fn federated_get_chunks(
     State(state): State<SharedState>,
     Path(path): Path<RepoOperationPath>,
     Query(params): Query<ChunksQuery>,
+    auth: MaybeAuth,
 ) -> Result<Json<serde_json::Value>, AppError> {
-    let _repository = state.resolve_repo.execute(&path.owner, &path.repo).await?;
+    let _repository = resolve_repo_with_access_check(&state, &path.owner, &path.repo, &auth).await?;
 
     let filter = match params.file {
         Some(file_path) => ChunkSearchFilter::ByFile {
@@ -817,6 +919,7 @@ async fn federated_get_chunks(
 async fn federated_get_diff_content(
     State(state): State<SharedState>,
     Path(path): Path<RepoOperationPath>,
+    auth: MaybeAuth,
 ) -> Result<Json<serde_json::Value>, AppError> {
     info!(
         owner = %path.owner,
@@ -825,7 +928,7 @@ async fn federated_get_diff_content(
         "REST Fédéré: GetDiffContent (Phase 17)"
     );
 
-    let repository = state.resolve_repo.execute(&path.owner, &path.repo).await?;
+    let repository = resolve_repo_with_access_check(&state, &path.owner, &path.repo, &auth).await?;
 
     // Retrouver l'opération pour obtenir le content_id
     let operation = state.get_operation.execute(path.id).await?;
@@ -911,6 +1014,7 @@ async fn explorer_tree_handler(
     State(state): State<SharedState>,
     Path(path): Path<RepoRevPath>,
     Query(params): Query<ExplorerPathQuery>,
+    auth: MaybeAuth,
 ) -> Result<Json<serde_json::Value>, AppError> {
     info!(
         owner = %path.owner,
@@ -919,6 +1023,9 @@ async fn explorer_tree_handler(
         query_path = %params.path,
         "Phase 6: explorer_tree"
     );
+
+    // Phase 23 : check visibilité
+    let _repository = resolve_repo_with_access_check(&state, &path.owner, &path.repo, &auth).await?;
 
     let file_path = params.path.trim_matches('/').to_string();
 
@@ -984,8 +1091,12 @@ async fn explorer_tree_handler(
 async fn explorer_refs_handler(
     State(state): State<SharedState>,
     Path((owner, repo)): Path<(String, String)>,
+    auth: MaybeAuth,
 ) -> Result<Json<serde_json::Value>, AppError> {
     info!(owner = %owner, repo = %repo, "Phase 6: explorer_refs");
+
+    // Phase 23 : check visibilité
+    let _repository = resolve_repo_with_access_check(&state, &owner, &repo, &auth).await?;
 
     let refs = state.list_refs.execute(&owner, &repo).await?;
 
@@ -1412,5 +1523,113 @@ async fn bulk_import_github_handler(
         "skipped": result.skipped,
         "failed": result.failed,
         "total": result.results.len(),
+    })))
+}
+
+// ── Phase 24 — Soft Delete (Corbeille) ────────────────────────────
+
+/// Corps de la requête POST /api/v1/repos/{owner}/{repo}/archive.
+#[derive(Debug, Deserialize)]
+struct ArchiveRepoBody {
+    /// Mot de confirmation tapé par l'utilisateur.
+    confirmation_word: String,
+    /// Mot de confirmation attendu (généré côté frontend).
+    expected_word: String,
+}
+
+/// Mettre un dépôt en corbeille — `POST /api/v1/repos/{owner}/{repo}/archive`
+///
+/// Auth obligatoire (JWT). Seul le propriétaire peut supprimer.
+async fn archive_repository_handler(
+    auth: crate::rest::auth_middleware::AuthUser,
+    State(state): State<SharedState>,
+    Path((owner, repo)): Path<(String, String)>,
+    Json(body): Json<ArchiveRepoBody>,
+) -> Result<axum::http::StatusCode, AppError> {
+    info!(
+        owner = %owner,
+        repo = %repo,
+        actor_id = %auth.0.actor_id(),
+        "REST: ArchiveRepository (Phase 24 — Soft Delete)"
+    );
+
+    let cmd = application::use_cases::delete_repository::SoftDeleteCommand {
+        actor_id: auth.0.actor_id(),
+        owner,
+        repo,
+        confirmation_word: body.confirmation_word,
+        expected_word: body.expected_word,
+    };
+
+    state.delete_repository.execute_soft_delete(cmd).await?;
+
+    Ok(axum::http::StatusCode::NO_CONTENT)
+}
+
+/// Restaurer un dépôt depuis la corbeille — `POST /api/v1/repos/{owner}/{repo}/restore`
+///
+/// Auth obligatoire (JWT). Seul le propriétaire peut restaurer.
+async fn restore_repository_handler(
+    auth: crate::rest::auth_middleware::AuthUser,
+    State(state): State<SharedState>,
+    Path((owner, repo)): Path<(String, String)>,
+) -> Result<Json<RepositoryJson>, AppError> {
+    info!(
+        owner = %owner,
+        repo = %repo,
+        actor_id = %auth.0.actor_id(),
+        "REST: RestoreRepository (Phase 24 — Corbeille)"
+    );
+
+    let cmd = application::use_cases::delete_repository::RestoreCommand {
+        actor_id: auth.0.actor_id(),
+        owner,
+        repo,
+    };
+
+    let repository = state.delete_repository.execute_restore(cmd).await?;
+    Ok(Json(RepositoryJson::from(repository)))
+}
+
+/// Lister les dépôts en corbeille — `GET /api/v1/actors/{handle}/trash`
+///
+/// Auth obligatoire (JWT). Retourne les repos soft-deleted du propriétaire
+/// avec le temps restant avant purge définitive.
+async fn list_trash_handler(
+    auth: crate::rest::auth_middleware::AuthUser,
+    State(state): State<SharedState>,
+    Path(handle): Path<String>,
+) -> Result<Json<serde_json::Value>, AppError> {
+    info!(
+        handle = %handle,
+        actor_id = %auth.0.actor_id(),
+        "REST: ListTrash (Phase 24 — Corbeille)"
+    );
+
+    let repos = state.delete_repository.list_trash(&handle).await?;
+
+    let retention_secs = application::use_cases::purge_trash::TRASH_RETENTION_SECS;
+
+    let trash_json: Vec<serde_json::Value> = repos
+        .iter()
+        .map(|r| {
+            let seconds_left = r.seconds_until_purge(retention_secs).unwrap_or(0);
+            serde_json::json!({
+                "id": r.id,
+                "name": r.name,
+                "display_name": r.display_name,
+                "description": r.description,
+                "visibility": r.visibility.as_sql_str(),
+                "deleted_at": r.deleted_at,
+                "seconds_until_purge": seconds_left,
+            })
+        })
+        .collect();
+
+    Ok(Json(serde_json::json!({
+        "owner": handle,
+        "trash": trash_json,
+        "count": trash_json.len(),
+        "retention_seconds": retention_secs,
     })))
 }

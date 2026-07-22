@@ -8,6 +8,7 @@ import { ImportGitHubForm } from "@/components/forge/import-github-form";
 import { GitHubReposList } from "@/components/forge/github-repos-list";
 import { useRepositories, emitRepoCreated } from "@/hooks/use-api";
 import { useAuth } from "@/hooks/use-auth";
+import { TrashSection } from "@/components/forge/trash-section";
 
 import { forgeRepository } from "./actions";
 
@@ -172,6 +173,8 @@ export default function ForgePage() {
           </p>
         </div>
       )}
+      {/* ── Phase 24 — Corbeille (Trash) ─────────────── */}
+      <TrashSection onRestored={refetch} />
     </div>
   );
 }

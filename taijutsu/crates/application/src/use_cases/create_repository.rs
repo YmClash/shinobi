@@ -297,6 +297,21 @@ mod tests {
         async fn update_mirror_synced_at(&self, _repo_id: &Uuid) -> Result<(), DomainError> {
             Ok(())
         }
+        async fn soft_delete(&self, _repo_id: &Uuid) -> Result<bool, DomainError> {
+            Ok(true)
+        }
+        async fn restore(&self, _repo_id: &Uuid) -> Result<bool, DomainError> {
+            Ok(true)
+        }
+        async fn hard_delete(&self, _repo_id: &Uuid) -> Result<bool, DomainError> {
+            Ok(true)
+        }
+        async fn list_deleted_by_owner(&self, _owner_id: &Uuid) -> Result<Vec<Repository>, DomainError> {
+            Ok(vec![])
+        }
+        async fn list_expired_trash(&self, _retention_secs: i64) -> Result<Vec<Repository>, DomainError> {
+            Ok(vec![])
+        }
     }
 
     // ── Mock VcsEngine ──────────────────────────────
