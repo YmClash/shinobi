@@ -130,6 +130,10 @@ pub struct SharedState {
     // ── Phase 24 — Soft Delete (Corbeille) ────────────────────────
     /// Use case: suppression (soft delete) et restauration de dépôts.
     pub delete_repository: Arc<application::use_cases::delete_repository::DeleteRepositoryUseCase>,
+
+    // ── Phase 25 — Service Accounts (L'Acte de Naissance) ────────
+    /// Use case: création, listing et suppression de Service Accounts IA.
+    pub create_service_account: Arc<application::use_cases::create_service_account::CreateServiceAccountUseCase>,
 }
 
 // ── Phase 12A — Git Bridge HTTP ──────────────────────────────────────

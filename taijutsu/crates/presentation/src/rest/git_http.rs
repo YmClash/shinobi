@@ -217,12 +217,29 @@ async fn is_authorized_to_push(
     if actor.id == repository.owner_id {
         return true;
     }
-    // Sinon, verifier si collaborateur
-    state
+    // Verifier si collaborateur direct
+    if state
         .repo_repo
         .is_collaborator(&actor.id, &repository.id)
         .await
         .unwrap_or(false)
+    {
+        return true;
+    }
+    // Phase 25 : Heritage RBAC — si AI agent, verifier les droits du parent
+    if actor.is_ai() {
+        if let Some(parent_id) = actor.parent_id {
+            if parent_id == repository.owner_id {
+                return true;
+            }
+            return state
+                .repo_repo
+                .is_collaborator(&parent_id, &repository.id)
+                .await
+                .unwrap_or(false);
+        }
+    }
+    false
 }
 
 /// Verifie si un acteur (ou anonyme) a le droit de lire un repo.
@@ -241,12 +258,31 @@ async fn is_authorized_to_read(
     // Repo prive : seul le owner ou un collaborateur peut lire
     match actor {
         Some(a) => {
-            a.id == repository.owner_id
-                || state
-                    .repo_repo
-                    .is_collaborator(&a.id, &repository.id)
-                    .await
-                    .unwrap_or(false)
+            if a.id == repository.owner_id {
+                return true;
+            }
+            if state
+                .repo_repo
+                .is_collaborator(&a.id, &repository.id)
+                .await
+                .unwrap_or(false)
+            {
+                return true;
+            }
+            // Phase 25 : Heritage RBAC — si AI agent, verifier les droits du parent
+            if a.is_ai() {
+                if let Some(parent_id) = a.parent_id {
+                    if parent_id == repository.owner_id {
+                        return true;
+                    }
+                    return state
+                        .repo_repo
+                        .is_collaborator(&parent_id, &repository.id)
+                        .await
+                        .unwrap_or(false);
+                }
+            }
+            false
         }
         None => false, // Anonyme ne peut pas lire un repo prive
     }

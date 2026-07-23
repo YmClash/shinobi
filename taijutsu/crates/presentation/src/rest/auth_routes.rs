@@ -238,3 +238,105 @@ pub async fn github_callback_handler(
         })),
     ))
 }
+
+// ── Phase 25 — Service Accounts (L'Acte de Naissance) ────────────────
+
+#[derive(Debug, Deserialize)]
+pub struct CreateServiceAccountRequest {
+    pub handle: String,
+    pub display_name: String,
+    pub label: Option<String>,
+}
+
+/// POST /api/v1/auth/service-accounts — Créer un Service Account.
+///
+/// Retourne le bot créé et le PAT en clair (unique affichage).
+pub async fn create_service_account_handler(
+    State(state): State<SharedState>,
+    auth: AuthUser,
+    Json(body): Json<CreateServiceAccountRequest>,
+) -> Result<impl IntoResponse, AppError> {
+    use application::use_cases::create_service_account::CreateServiceAccountCommand;
+
+    let result = state
+        .create_service_account
+        .execute(CreateServiceAccountCommand {
+            parent_actor_id: auth.0.actor_id(),
+            handle: body.handle,
+            display_name: body.display_name,
+            label: body.label,
+        })
+        .await?;
+
+    Ok((
+        StatusCode::CREATED,
+        Json(serde_json::json!({
+            "actor": {
+                "id": result.actor.id,
+                "handle": result.actor.handle,
+                "display_name": result.actor.display_name,
+                "actor_type": result.actor.actor_type.as_sql_str(),
+                "parent_id": result.actor.parent_id,
+                "created_at": result.actor.created_at,
+            },
+            "token": result.raw_token,
+            "warning": "Ce token ne sera plus affiché. Copiez-le maintenant !",
+        })),
+    ))
+}
+
+/// GET /api/v1/auth/service-accounts — Lister mes Service Accounts.
+pub async fn list_service_accounts_handler(
+    State(state): State<SharedState>,
+    auth: AuthUser,
+) -> Result<impl IntoResponse, AppError> {
+    let bots = state
+        .create_service_account
+        .list(&auth.0.actor_id())
+        .await?;
+
+    let bots_json: Vec<serde_json::Value> = bots
+        .iter()
+        .map(|bot| {
+            serde_json::json!({
+                "id": bot.id,
+                "handle": bot.handle,
+                "display_name": bot.display_name,
+                "actor_type": bot.actor_type.as_sql_str(),
+                "parent_id": bot.parent_id,
+                "avatar_url": bot.avatar_url,
+                "created_at": bot.created_at,
+            })
+        })
+        .collect();
+
+    Ok(Json(serde_json::json!({
+        "service_accounts": bots_json,
+        "count": bots.len(),
+    })))
+}
+
+/// DELETE /api/v1/auth/service-accounts/{id} — Supprimer un Service Account.
+pub async fn delete_service_account_handler(
+    State(state): State<SharedState>,
+    auth: AuthUser,
+    axum::extract::Path(bot_id): axum::extract::Path<uuid::Uuid>,
+) -> Result<impl IntoResponse, AppError> {
+    let deleted = state
+        .create_service_account
+        .delete(&auth.0.actor_id(), &bot_id)
+        .await?;
+
+    if deleted {
+        Ok(Json(serde_json::json!({
+            "deleted": true,
+            "id": bot_id,
+        })))
+    } else {
+        Err(AppError::from(domain::errors::DomainError::NotFound {
+            entity_type: "ServiceAccount",
+            id: bot_id,
+        }))
+    }
+}
+

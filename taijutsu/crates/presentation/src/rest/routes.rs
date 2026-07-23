@@ -328,6 +328,16 @@ pub fn create_router(state: SharedState) -> Router {
             "/api/v1/actors/{handle}/trash",
             get(list_trash_handler),
         )
+        // ── Phase 25 — Service Accounts (L'Acte de Naissance) ────────
+        .route(
+            "/api/v1/auth/service-accounts",
+            post(crate::rest::auth_routes::create_service_account_handler)
+                .get(crate::rest::auth_routes::list_service_accounts_handler),
+        )
+        .route(
+            "/api/v1/auth/service-accounts/{id}",
+            axum::routing::delete(crate::rest::auth_routes::delete_service_account_handler),
+        )
         // ── Métriques Prometheus ────────────────────
         .route(
             "/metrics",
@@ -617,13 +627,39 @@ async fn list_repositories_handler(
             if is_owner {
                 repos // Propriétaire voit tout
             } else {
-                // Autre utilisateur : publics + repos où il est collaborateur
+                // Phase 25 : si le visiteur est un AI agent, vérifier aussi via parent_id
                 let mut visible = Vec::new();
+                let actor_id = claims.actor_id();
+
+                // Récupérer l'acteur pour vérifier l'héritage AI
+                let parent_id_opt = if let Ok(Some(actor)) = state.actor_repo.find_by_id(&actor_id).await {
+                    if actor.is_ai() { actor.parent_id } else { None }
+                } else {
+                    None
+                };
+
+                // Vérifier si le visiteur (ou son parent) est le propriétaire
+                let is_parent_owner = parent_id_opt.map_or(false, |pid| {
+                    repos.first().map_or(false, |r| r.owner_id == pid)
+                });
+                if is_parent_owner {
+                    return Ok(Json(serde_json::json!({
+                        "owner": handle,
+                        "repositories": repos.into_iter().map(RepositoryJson::from).collect::<Vec<_>>(),
+                        "count": 0, // will be overridden
+                    })));
+                }
+
                 for repo in repos {
                     if repo.is_public() {
                         visible.push(repo);
-                    } else if state.repo_repo.is_collaborator(&claims.actor_id(), &repo.id).await.unwrap_or(false) {
+                    } else if state.repo_repo.is_collaborator(&actor_id, &repo.id).await.unwrap_or(false) {
                         visible.push(repo);
+                    } else if let Some(pid) = parent_id_opt {
+                        // Phase 25 : héritage RBAC du parent
+                        if state.repo_repo.is_collaborator(&pid, &repo.id).await.unwrap_or(false) {
+                            visible.push(repo);
+                        }
                     }
                 }
                 visible
@@ -707,6 +743,22 @@ async fn resolve_repo_with_access_check(
             if state.repo_repo.is_collaborator(&actor_id, &repository.id).await.unwrap_or(false) {
                 return Ok(repository); // Collaborateur
             }
+
+            // Phase 25 : Héritage RBAC — si l'acteur est un AI agent,
+            // vérifier les droits de son parent humain.
+            if let Ok(Some(actor)) = state.actor_repo.find_by_id(&actor_id).await {
+                if actor.is_ai() {
+                    if let Some(parent_id) = actor.parent_id {
+                        if parent_id == repository.owner_id {
+                            return Ok(repository); // Parent est owner
+                        }
+                        if state.repo_repo.is_collaborator(&parent_id, &repository.id).await.unwrap_or(false) {
+                            return Ok(repository); // Parent est collaborateur
+                        }
+                    }
+                }
+            }
+
             // Auth OK mais pas autorisé → 404 (ne pas révéler l'existence)
             Err(AppError::from(DomainError::NotFound {
                 entity_type: "Repository",

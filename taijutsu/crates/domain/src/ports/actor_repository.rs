@@ -92,6 +92,22 @@ pub trait ActorRepository: Send + Sync {
         &self,
         actor_id: &Uuid,
     ) -> Result<Vec<PatInfo>, DomainError>;
+
+    // ── Phase 25 — Service Accounts ─────────────────────────
+
+    /// Liste les Service Accounts (bots) créés par un acteur humain.
+    /// Retourne les bots dont `parent_id` == `parent_id`.
+    async fn list_service_accounts(
+        &self,
+        parent_id: &Uuid,
+    ) -> Result<Vec<Actor>, DomainError>;
+
+    /// Supprime un Service Account (hard delete).
+    /// Retourne `true` si un bot a été supprimé, `false` si introuvable.
+    async fn delete_service_account(
+        &self,
+        bot_id: &Uuid,
+    ) -> Result<bool, DomainError>;
 }
 
 /// Informations d'un PAT (sans le secret).

@@ -24,6 +24,7 @@ use application::use_cases::analyze_operation::AnalyzeOperationUseCase;
 use application::use_cases::create_operation::CreateOperationUseCase;
 use application::use_cases::create_pat::CreatePatUseCase;
 use application::use_cases::create_repository::CreateRepositoryUseCase;
+use application::use_cases::create_service_account::CreateServiceAccountUseCase;
 use application::use_cases::delete_repository::DeleteRepositoryUseCase;
 use application::use_cases::get_blob::GetBlobUseCase;
 use application::use_cases::get_ipfs_content::GetIpfsContentUseCase;
@@ -421,6 +422,14 @@ async fn main() -> anyhow::Result<()> {
         application::use_cases::purge_trash::TRASH_RETENTION_SECS
     );
 
+    // ── Phase 25 : Service Accounts (L'Acte de Naissance) ──────────────
+    let create_service_account = Arc::new(CreateServiceAccountUseCase::new(
+        actor_repo.clone(),
+        auth_service.clone(),
+    ));
+
+    info!("🤖 Service Accounts initialisé (Phase 25 — L'Acte de Naissance)");
+
     let shared_state = SharedState {
         create_operation,
         get_operation,
@@ -463,6 +472,8 @@ async fn main() -> anyhow::Result<()> {
         bulk_import_github,
         // Phase 24 — Soft Delete (Corbeille)
         delete_repository,
+        // Phase 25 — Service Accounts (L'Acte de Naissance)
+        create_service_account,
     };
 
     // ── Git Bridge HTTP (Phase 12A) ────────────────────

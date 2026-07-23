@@ -107,6 +107,12 @@ mod tests {
         async fn list_pats(&self, _actor_id: &Uuid) -> Result<Vec<domain::ports::actor_repository::PatInfo>, DomainError> {
             Ok(vec![])
         }
+        async fn list_service_accounts(&self, _parent_id: &Uuid) -> Result<Vec<Actor>, DomainError> {
+            Ok(vec![])
+        }
+        async fn delete_service_account(&self, _bot_id: &Uuid) -> Result<bool, DomainError> {
+            Ok(false)
+        }
     }
 
     // ── Mock RepoRepository ──────────────────────────
@@ -186,6 +192,7 @@ mod tests {
             bio: None,
             github_id: None,
             github_token: None,
+            parent_id: None,
             created_at: chrono::Utc::now(),
         }
     }

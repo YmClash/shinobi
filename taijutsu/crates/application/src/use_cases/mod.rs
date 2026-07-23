@@ -3,6 +3,7 @@ pub mod bulk_import_github;
 pub mod create_operation;
 pub mod create_pat;
 pub mod create_repository;
+pub mod create_service_account;
 pub mod delete_repository;
 pub mod get_blob;
 pub mod get_operation;
