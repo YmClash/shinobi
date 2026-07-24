@@ -5,11 +5,10 @@ import { useParams } from "next/navigation";
 import Link from "next/link";
 import { getActorProfile, type ActorProfile } from "@/lib/auth";
 import { listRepositories, type Repository } from "@/lib/api";
-import { Separator } from "@/components/ui/separator";
 
 // ═══════════════════════════════════════════════════════════════
-// Phase 25B — Profil Public Acteur
-// Page publique /@handle — Affiche le profil d'un humain ou bot
+// Phase 25B — Profil Public Acteur (Redesign Premium)
+// Page publique /profile/[handle]
 // ═══════════════════════════════════════════════════════════════
 
 export default function ProfilePage() {
@@ -54,10 +53,10 @@ export default function ProfilePage() {
 
   if (loading) {
     return (
-      <div className="profile-page">
-        <div className="profile-loading">
-          <div className="auth-spinner" />
-          <p className="text-xs text-muted-foreground mt-3">Chargement du profil...</p>
+      <div className="pf">
+        <div className="pf-loading">
+          <div className="pf-pulse-ring" />
+          <p>Chargement du profil...</p>
         </div>
       </div>
     );
@@ -65,14 +64,14 @@ export default function ProfilePage() {
 
   if (error || !profile) {
     return (
-      <div className="profile-page">
-        <div className="profile-not-found">
-          <span className="text-5xl mb-3 block opacity-30">👤</span>
-          <h1 className="text-lg font-bold">Profil introuvable</h1>
-          <p className="text-sm text-muted-foreground mt-1">
-            L&apos;acteur <code className="font-mono bg-muted px-1 rounded">@{handle}</code> n&apos;existe pas.
+      <div className="pf">
+        <div className="pf-not-found">
+          <div className="pf-404-icon">?</div>
+          <h1>Acteur introuvable</h1>
+          <p>
+            Le handle <code>@{handle}</code> n&apos;existe pas dans le système SHINOBI.
           </p>
-          <Link href="/forge" className="profile-back-link mt-4">
+          <Link href="/forge" className="pf-back-btn">
             ← Retour à la Forge
           </Link>
         </div>
@@ -89,119 +88,138 @@ export default function ProfilePage() {
   });
 
   return (
-    <div className="profile-page">
-      {/* ── Profile Header Card ────────────── */}
-      <div className="profile-header-card">
-        <div className="profile-avatar-section">
-          {actor.avatar_url ? (
-            <img
-              src={actor.avatar_url}
-              alt={actor.handle}
-              className="profile-avatar-img"
-            />
-          ) : (
-            <div className="profile-avatar-fallback">
-              {isBot ? "🤖" : actor.handle.charAt(0).toUpperCase()}
+    <div className="pf">
+      {/* ── Hero Banner ────────────────────── */}
+      <div className={`pf-hero ${isBot ? "pf-hero-bot" : "pf-hero-human"}`}>
+        <div className="pf-hero-pattern" />
+        <div className="pf-hero-glow" />
+
+        <div className="pf-hero-content">
+          {/* Avatar */}
+          <div className="pf-avatar-wrap">
+            {actor.avatar_url ? (
+              <img
+                src={actor.avatar_url}
+                alt={actor.handle}
+                className="pf-avatar"
+              />
+            ) : (
+              <div className="pf-avatar pf-avatar-gen">
+                {isBot ? "🤖" : actor.handle.charAt(0).toUpperCase()}
+              </div>
+            )}
+            <div className={`pf-avatar-ring ${isBot ? "pf-ring-bot" : "pf-ring-human"}`} />
+          </div>
+
+          {/* Identity */}
+          <div className="pf-identity">
+            <div className="pf-name-row">
+              <h1 className="pf-name">{actor.display_name}</h1>
+              <span className={`pf-badge ${isBot ? "pf-badge-bot" : isHuman ? "pf-badge-human" : "pf-badge-sys"}`}>
+                {isBot ? "🤖 AI AGENT" : isHuman ? "👤 HUMAN" : "⚙️ SYSTEM"}
+              </span>
             </div>
-          )}
-          <span className={`profile-type-badge ${isBot ? "profile-badge-bot" : isHuman ? "profile-badge-human" : "profile-badge-system"}`}>
-            {isBot ? "🤖 AI Agent" : isHuman ? "👤 Human" : "⚙️ System"}
-          </span>
+            <p className="pf-handle">@{actor.handle}</p>
+            {actor.bio && <p className="pf-bio">{actor.bio}</p>}
+          </div>
         </div>
 
-        <div className="profile-info-section">
-          <h1 className="profile-display-name">{actor.display_name}</h1>
-          <p className="profile-handle">@{actor.handle}</p>
-          {actor.bio && (
-            <p className="profile-bio">{actor.bio}</p>
-          )}
-
-          {/* Parent info for bots */}
-          {isBot && parent && (
-            <div className="profile-parent-card">
-              <span className="text-xs text-muted-foreground">Créé par</span>
-              <Link href={`/profile/${parent.handle}`} className="profile-parent-link">
-                {parent.avatar_url ? (
-                  <img
-                    src={parent.avatar_url}
-                    alt={parent.handle}
-                    className="profile-parent-avatar"
-                  />
-                ) : (
-                  <span className="profile-parent-avatar-fb">
-                    {parent.handle.charAt(0).toUpperCase()}
-                  </span>
-                )}
-                <span className="profile-parent-name">
-                  {parent.display_name}
-                  <span className="profile-parent-handle">@{parent.handle}</span>
+        {/* Parent link for bots */}
+        {isBot && parent && (
+          <Link href={`/profile/${parent.handle}`} className="pf-parent-chip">
+            <span className="pf-parent-label">Créé par</span>
+            <div className="pf-parent-info">
+              {parent.avatar_url ? (
+                <img src={parent.avatar_url} alt={parent.handle} className="pf-parent-av" />
+              ) : (
+                <span className="pf-parent-av pf-parent-av-fb">
+                  {parent.handle.charAt(0).toUpperCase()}
                 </span>
-              </Link>
+              )}
+              <span className="pf-parent-name">{parent.display_name}</span>
+              <span className="pf-parent-handle">@{parent.handle}</span>
             </div>
-          )}
-        </div>
+            <span className="pf-parent-arrow">→</span>
+          </Link>
+        )}
       </div>
 
-      {/* ── Stats Bar ──────────────────────── */}
-      <div className="profile-stats">
-        <div className="profile-stat">
-          <span className="profile-stat-value">{stats.public_repos}</span>
-          <span className="profile-stat-label">Dépôts publics</span>
+      {/* ── Stats Row ──────────────────────── */}
+      <div className="pf-stats">
+        <div className="pf-stat">
+          <span className="pf-stat-num">{stats.public_repos}</span>
+          <span className="pf-stat-lbl">Dépôts publics</span>
         </div>
+        <div className="pf-stat-divider" />
         {isHuman && (
-          <div className="profile-stat">
-            <span className="profile-stat-value">{stats.bots_count}</span>
-            <span className="profile-stat-label">Bots IA</span>
-          </div>
+          <>
+            <div className="pf-stat">
+              <span className="pf-stat-num">{stats.bots_count}</span>
+              <span className="pf-stat-lbl">Bots IA</span>
+            </div>
+            <div className="pf-stat-divider" />
+          </>
         )}
-        <div className="profile-stat">
-          <span className="profile-stat-value">{memberSince}</span>
-          <span className="profile-stat-label">Membre depuis</span>
+        <div className="pf-stat">
+          <span className="pf-stat-num">{memberSince}</span>
+          <span className="pf-stat-lbl">Membre depuis</span>
         </div>
         {isBot && (
-          <div className="profile-stat">
-            <span className="profile-stat-value">↑ RBAC</span>
-            <span className="profile-stat-label">Héritage actif</span>
-          </div>
+          <>
+            <div className="pf-stat-divider" />
+            <div className="pf-stat pf-stat-rbac">
+              <span className="pf-stat-num">⚡</span>
+              <span className="pf-stat-lbl">RBAC hérité</span>
+            </div>
+          </>
         )}
       </div>
 
-      <Separator />
-
-      {/* ── Repos Section ──────────────────── */}
-      <div className="profile-repos-section">
-        <h2 className="text-sm font-semibold mb-3">
-          📦 Dépôts {isBot ? "(hérités du parent)" : ""}
-          <span className="profile-repos-count">{repos.length}</span>
-        </h2>
+      {/* ── Repos ──────────────────────────── */}
+      <div className="pf-section">
+        <div className="pf-section-head">
+          <h2 className="pf-section-title">
+            {isBot ? "🔗 Dépôts accessibles" : "📦 Dépôts"}
+          </h2>
+          <span className="pf-section-count">{repos.length}</span>
+        </div>
 
         {repos.length === 0 ? (
-          <div className="text-center py-8 text-muted-foreground">
-            <span className="text-3xl block mb-2 opacity-30">📦</span>
-            <p className="text-sm">Aucun dépôt public</p>
+          <div className="pf-empty">
+            <div className="pf-empty-icon">{isBot ? "🔗" : "📦"}</div>
+            <p className="pf-empty-title">Aucun dépôt public</p>
+            <p className="pf-empty-sub">
+              {isBot
+                ? "Ce bot héritera des dépôts de son créateur."
+                : "Créez votre premier dépôt depuis la Forge."}
+            </p>
           </div>
         ) : (
-          <div className="profile-repos-grid">
+          <div className="pf-repos">
             {repos.map((repo) => (
               <Link
                 key={repo.id}
                 href={`/${handle}/${repo.name}`}
-                className="profile-repo-card"
+                className="pf-repo"
               >
-                <div className="profile-repo-header">
-                  <span className="profile-repo-name">{repo.display_name}</span>
-                  <span className={`profile-repo-vis ${repo.visibility === "private" ? "profile-vis-private" : ""}`}>
-                    {repo.visibility === "private" ? "🔒" : "🌐"} {repo.visibility}
+                <div className="pf-repo-top">
+                  <span className="pf-repo-icon">
+                    {repo.visibility === "private" ? "🔒" : "📂"}
+                  </span>
+                  <span className="pf-repo-name">{repo.display_name}</span>
+                  <span className={`pf-repo-vis ${repo.visibility === "private" ? "pf-vis-priv" : ""}`}>
+                    {repo.visibility}
                   </span>
                 </div>
                 {repo.description && (
-                  <p className="profile-repo-desc">{repo.description}</p>
+                  <p className="pf-repo-desc">{repo.description}</p>
                 )}
-                <div className="profile-repo-meta">
-                  <span className="text-xs text-muted-foreground">
+                <div className="pf-repo-foot">
+                  <span>
                     {new Date(repo.created_at).toLocaleDateString("fr-FR", {
                       day: "numeric",
                       month: "short",
+                      year: "numeric",
                     })}
                   </span>
                 </div>
@@ -210,6 +228,38 @@ export default function ProfilePage() {
           </div>
         )}
       </div>
+
+      {/* ── Capabilities (bots only) ───────── */}
+      {isBot && (
+        <div className="pf-section">
+          <div className="pf-section-head">
+            <h2 className="pf-section-title">⚙️ Capacités</h2>
+          </div>
+          <div className="pf-caps">
+            <div className="pf-cap">
+              <span className="pf-cap-icon">🔑</span>
+              <div>
+                <span className="pf-cap-title">Authentification PAT</span>
+                <span className="pf-cap-desc">Token personnel pour git push/pull</span>
+              </div>
+            </div>
+            <div className="pf-cap">
+              <span className="pf-cap-icon">🔗</span>
+              <div>
+                <span className="pf-cap-title">Héritage RBAC</span>
+                <span className="pf-cap-desc">Accès aux repos du créateur</span>
+              </div>
+            </div>
+            <div className="pf-cap">
+              <span className="pf-cap-icon">🤖</span>
+              <div>
+                <span className="pf-cap-title">Commits autonomes</span>
+                <span className="pf-cap-desc">Opérations traçables dans l&apos;historique</span>
+              </div>
+            </div>
+          </div>
+        </div>
+      )}
     </div>
   );
 }
