@@ -272,3 +272,116 @@ export async function bulkImportGitHub(
   }
   return res.json();
 }
+
+// ── Phase 25 — Service Accounts (L'Acte de Naissance) ─────────
+
+export interface ServiceAccount {
+  id: string;
+  handle: string;
+  display_name: string;
+  actor_type: string;
+  parent_id: string;
+  avatar_url: string | null;
+  created_at: string;
+}
+
+export interface CreateServiceAccountResponse {
+  actor: ServiceAccount;
+  token: string;
+  warning: string;
+}
+
+export interface ServiceAccountsListResponse {
+  service_accounts: ServiceAccount[];
+  count: number;
+}
+
+export interface DeleteServiceAccountResponse {
+  deleted: boolean;
+  id: string;
+}
+
+/** POST /api/v1/auth/service-accounts — Créer un Service Account (bot IA). */
+export async function createServiceAccount(data: {
+  handle: string;
+  display_name: string;
+  label?: string;
+}): Promise<CreateServiceAccountResponse> {
+  const res = await fetch(`${base()}/api/v1/auth/service-accounts`, {
+    method: "POST",
+    headers: authHeaders(),
+    body: JSON.stringify(data),
+  });
+  if (!res.ok) {
+    const err = await res.json().catch(() => ({}));
+    throw new Error(err?.error?.message ?? `Erreur ${res.status}`);
+  }
+  return res.json();
+}
+
+/** GET /api/v1/auth/service-accounts — Lister mes bots. */
+export async function listServiceAccounts(): Promise<ServiceAccountsListResponse> {
+  const res = await fetch(`${base()}/api/v1/auth/service-accounts`, {
+    headers: authHeaders(),
+  });
+  if (!res.ok) {
+    throw new Error("Impossible de charger les Service Accounts");
+  }
+  return res.json();
+}
+
+/** DELETE /api/v1/auth/service-accounts/{id} — Supprimer un bot. */
+export async function deleteServiceAccount(
+  botId: string
+): Promise<DeleteServiceAccountResponse> {
+  const res = await fetch(
+    `${base()}/api/v1/auth/service-accounts/${encodeURIComponent(botId)}`,
+    {
+      method: "DELETE",
+      headers: authHeaders(),
+    }
+  );
+  if (!res.ok) {
+    const err = await res.json().catch(() => ({}));
+    throw new Error(err?.error?.message ?? `Erreur ${res.status}`);
+  }
+  return res.json();
+}
+
+// ── Phase 25B — Profil Public Acteur ──────────────────────────
+
+export interface ActorProfile {
+  actor: {
+    id: string;
+    handle: string;
+    display_name: string;
+    actor_type: string;
+    avatar_url: string | null;
+    bio: string | null;
+    created_at: string;
+  };
+  stats: {
+    public_repos: number;
+    total_repos: number;
+    bots_count: number;
+  };
+  parent: {
+    id: string;
+    handle: string;
+    display_name: string;
+    avatar_url: string | null;
+  } | null;
+}
+
+/** GET /api/v1/actors/{handle}/profile — Profil public d'un acteur. */
+export async function getActorProfile(
+  handle: string
+): Promise<ActorProfile> {
+  const res = await fetch(
+    `${base()}/api/v1/actors/${encodeURIComponent(handle)}/profile`
+  );
+  if (!res.ok) {
+    throw new Error(`Profil introuvable (${res.status})`);
+  }
+  return res.json();
+}

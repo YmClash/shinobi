@@ -192,6 +192,16 @@ export function Sidebar() {
                 </div>
               )}
             </Link>
+            {/* Phase 25 — Service Accounts nav link */}
+            {!collapsed && (
+              <Link
+                href="/settings/bots"
+                className={`sidebar-user-item text-xs ${pathname === "/settings/bots" ? "bg-sidebar-accent" : ""}`}
+              >
+                <span className="text-base">🤖</span>
+                <span className="sidebar-user-handle" style={{ fontSize: "0.68rem" }}>Service Accounts</span>
+              </Link>
+            )}
             <Separator className="bg-sidebar-border" />
           </>
         )}

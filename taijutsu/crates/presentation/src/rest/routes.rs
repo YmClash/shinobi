@@ -338,6 +338,11 @@ pub fn create_router(state: SharedState) -> Router {
             "/api/v1/auth/service-accounts/{id}",
             axum::routing::delete(crate::rest::auth_routes::delete_service_account_handler),
         )
+        // ── Phase 25B — Profil Public Acteur ─────────────────────
+        .route(
+            "/api/v1/actors/{handle}/profile",
+            get(actor_profile_handler),
+        )
         // ── Métriques Prometheus ────────────────────
         .route(
             "/metrics",
@@ -1683,5 +1688,75 @@ async fn list_trash_handler(
         "trash": trash_json,
         "count": trash_json.len(),
         "retention_seconds": retention_secs,
+    })))
+}
+
+// ── Phase 25B — Profil Public Acteur ─────────────────────────────────
+
+/// Profil public d'un acteur — `GET /api/v1/actors/{handle}/profile`
+///
+/// Retourne les informations publiques d'un acteur (humain ou bot).
+/// Pour les bots, inclut le parent_handle.
+async fn actor_profile_handler(
+    State(state): State<SharedState>,
+    Path(handle): Path<String>,
+) -> Result<Json<serde_json::Value>, AppError> {
+    info!(handle = %handle, "REST: GetActorProfile");
+
+    let actor = state
+        .actor_repo
+        .find_by_handle(&handle)
+        .await?
+        .ok_or_else(|| AppError(DomainError::BusinessRule(
+            format!("Acteur '{}' introuvable", handle),
+        )))?;
+
+    // Compter les repos publics de cet acteur
+    let repos = state.list_repositories.execute(&handle).await.unwrap_or_default();
+    let public_repos = repos.iter().filter(|r| r.is_public()).count();
+
+    // Si c'est un bot, récupérer le parent
+    let parent_info = if actor.is_ai() {
+        if let Some(pid) = actor.parent_id {
+            if let Ok(Some(parent)) = state.actor_repo.find_by_id(&pid).await {
+                Some(serde_json::json!({
+                    "id": parent.id,
+                    "handle": parent.handle,
+                    "display_name": parent.display_name,
+                    "avatar_url": parent.avatar_url,
+                }))
+            } else {
+                None
+            }
+        } else {
+            None
+        }
+    } else {
+        None
+    };
+
+    // Compter les bots si c'est un humain
+    let bots_count = if actor.is_human() {
+        state.actor_repo.list_service_accounts(&actor.id).await.map(|b| b.len()).unwrap_or(0)
+    } else {
+        0
+    };
+
+    Ok(Json(serde_json::json!({
+        "actor": {
+            "id": actor.id,
+            "handle": actor.handle,
+            "display_name": actor.display_name,
+            "actor_type": actor.actor_type,
+            "avatar_url": actor.avatar_url,
+            "bio": actor.bio,
+            "created_at": actor.created_at,
+        },
+        "stats": {
+            "public_repos": public_repos,
+            "total_repos": repos.len(),
+            "bots_count": bots_count,
+        },
+        "parent": parent_info,
     })))
 }
