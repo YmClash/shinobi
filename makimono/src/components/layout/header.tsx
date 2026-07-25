@@ -47,9 +47,9 @@ export function Header() {
             {user ? (
               <div className="header-user-menu">
                 <Link
-                  href="/settings/tokens"
+                  href={`/profile/${user.handle}`}
                   className="header-user-badge"
-                  title="Gérer les tokens"
+                  title="Voir mon profil"
                 >
                   {user.avatar_url ? (
                     <img

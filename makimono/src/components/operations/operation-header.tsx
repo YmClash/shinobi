@@ -7,6 +7,8 @@ import type { Operation } from "@/lib/api";
 
 interface OperationHeaderProps {
   operation: Operation;
+  owner: string;
+  repo: string;
 }
 
 function truncateId(id: string, len = 12): string {
@@ -20,7 +22,7 @@ function formatDate(dateStr: string): string {
   });
 }
 
-export function OperationHeader({ operation }: OperationHeaderProps) {
+export function OperationHeader({ operation, owner, repo }: OperationHeaderProps) {
   const copyToClipboard = (text: string) => {
     navigator.clipboard.writeText(text).catch(() => {});
   };
@@ -29,7 +31,7 @@ export function OperationHeader({ operation }: OperationHeaderProps) {
     <div className="space-y-3">
       {/* Back + Title */}
       <div className="flex items-start gap-3">
-        <Link href="/operations">
+        <Link href={`/${owner}/${repo}/operations`}>
           <Button variant="ghost" size="sm" className="gap-1 text-xs">
             ← Retour
           </Button>

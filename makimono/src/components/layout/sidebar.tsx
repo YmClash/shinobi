@@ -171,7 +171,7 @@ export function Sidebar() {
         {user && (
           <>
             <Link
-              href="/settings/tokens"
+              href={`/profile/${user.handle}`}
               className={`sidebar-user-item ${collapsed ? "justify-center" : ""}`}
             >
               {user.avatar_url ? (

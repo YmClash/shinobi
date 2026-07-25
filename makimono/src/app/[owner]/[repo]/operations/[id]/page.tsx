@@ -70,7 +70,7 @@ export default function OperationDetailPage() {
   return (
     <div className="max-w-5xl mx-auto space-y-6">
       {/* ── Header ──────────────────────────── */}
-      <OperationHeader operation={operation} />
+      <OperationHeader operation={operation} owner={owner} repo={repo} />
 
       {/* ── Oracle Review (auto-revealed) ──── */}
       <OracleReview operationId={id} repoPrefix={repoPrefix} />
