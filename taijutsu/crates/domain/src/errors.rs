@@ -66,4 +66,9 @@ pub enum DomainError {
     /// signal au handler de basculer vers `read_blob`.
     #[error("Le chemin est un fichier, pas un répertoire: {path}")]
     IsFile { path: String },
+
+    /// Conflit de merge — le fast-forward est impossible car les branches ont divergé.
+    /// Phase 26A — Le Katana Croisé.
+    #[error("Merge conflict: {source_branch} cannot be fast-forwarded into {target_branch}")]
+    MergeConflict { source_branch: String, target_branch: String },
 }

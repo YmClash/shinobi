@@ -430,6 +430,47 @@ async fn main() -> anyhow::Result<()> {
 
     info!("🤖 Service Accounts initialisé (Phase 25 — L'Acte de Naissance)");
 
+    // ── Phase 26A : Merge Requests (Le Katana Croisé) ──────────────────
+    let mr_repo: Arc<dyn domain::ports::mr_repository::MrRepository> = Arc::new(
+        infrastructure::persistence::postgres_mr_repo::PostgresMrRepository::new(pg_pool.clone()),
+    );
+    let create_mr = Arc::new(
+        application::use_cases::create_mr::CreateMrUseCase::new(
+            mr_repo.clone(),
+            repo_repo.clone(),
+        ),
+    );
+    let list_mrs = Arc::new(
+        application::use_cases::list_mrs::ListMrsUseCase::new(mr_repo.clone()),
+    );
+    let get_mr = Arc::new(
+        application::use_cases::get_mr::GetMrUseCase::new(mr_repo.clone(), vcs.clone()),
+    );
+    let review_mr = Arc::new(
+        application::use_cases::review_mr::ReviewMrUseCase::new(
+            mr_repo.clone(),
+            repo_repo.clone(),
+        ),
+    );
+    let merge_mr = Arc::new(
+        application::use_cases::merge_mr::MergeMrUseCase::new(
+            mr_repo.clone(),
+            repo_repo.clone(),
+            vcs.clone(),
+        ),
+    );
+    let close_mr = Arc::new(
+        application::use_cases::close_mr::CloseMrUseCase::new(
+            mr_repo.clone(),
+            repo_repo.clone(),
+        ),
+    );
+    let mr_diff = Arc::new(
+        application::use_cases::mr_diff::MrDiffUseCase::new(mr_repo.clone(), vcs.clone()),
+    );
+
+    info!("⚔️ Merge Requests initialisé (Phase 26A — Le Katana Croisé)");
+
     let shared_state = SharedState {
         create_operation,
         get_operation,
@@ -474,6 +515,15 @@ async fn main() -> anyhow::Result<()> {
         delete_repository,
         // Phase 25 — Service Accounts (L'Acte de Naissance)
         create_service_account,
+        // Phase 26A — Merge Requests (Le Katana Croisé)
+        mr_repo,
+        create_mr,
+        list_mrs,
+        get_mr,
+        review_mr,
+        merge_mr,
+        close_mr,
+        mr_diff,
     };
 
     // ── Git Bridge HTTP (Phase 12A) ────────────────────

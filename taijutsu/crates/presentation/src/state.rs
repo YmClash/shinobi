@@ -134,6 +134,24 @@ pub struct SharedState {
     // ── Phase 25 — Service Accounts (L'Acte de Naissance) ────────
     /// Use case: création, listing et suppression de Service Accounts IA.
     pub create_service_account: Arc<application::use_cases::create_service_account::CreateServiceAccountUseCase>,
+
+    // ── Phase 26A — Merge Requests (Le Katana Croisé) ────────────
+    /// Repository MR (pour les handlers qui lisent directement).
+    pub mr_repo: Arc<dyn domain::ports::mr_repository::MrRepository>,
+    /// Use case: créer une MR.
+    pub create_mr: Arc<application::use_cases::create_mr::CreateMrUseCase>,
+    /// Use case: lister les MR d'un repo.
+    pub list_mrs: Arc<application::use_cases::list_mrs::ListMrsUseCase>,
+    /// Use case: récupérer une MR avec détails + conflits.
+    pub get_mr: Arc<application::use_cases::get_mr::GetMrUseCase>,
+    /// Use case: soumettre une review.
+    pub review_mr: Arc<application::use_cases::review_mr::ReviewMrUseCase>,
+    /// Use case: fusionner une MR.
+    pub merge_mr: Arc<application::use_cases::merge_mr::MergeMrUseCase>,
+    /// Use case: fermer une MR sans fusion.
+    pub close_mr: Arc<application::use_cases::close_mr::CloseMrUseCase>,
+    /// Use case: calculer le diff d'une MR.
+    pub mr_diff: Arc<application::use_cases::mr_diff::MrDiffUseCase>,
 }
 
 // ── Phase 12A — Git Bridge HTTP ──────────────────────────────────────

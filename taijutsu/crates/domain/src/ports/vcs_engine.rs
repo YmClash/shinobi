@@ -161,6 +161,55 @@ pub trait VcsEngine: Send + Sync {
         repo_id: &Uuid,
         content_id: &ContentId,
     ) -> Result<Vec<FileDiff>, DomainError>;
+
+    // ── Phase 26A — Merge Requests (Le Katana Croisé) ────────────────────
+
+    /// Vérifie si un fast-forward est possible entre deux branches.
+    ///
+    /// Retourne `true` si `target_ref` est un ancêtre de `source_ref`
+    /// (i.e., la branche cible peut être avancée directement vers la source).
+    async fn can_fast_forward(
+        &self,
+        repo_id: &Uuid,
+        source_ref: &str,
+        target_ref: &str,
+    ) -> Result<bool, DomainError>;
+
+    /// Exécute un fast-forward merge : avance le bookmark de `target_ref`
+    /// vers le commit pointé par `source_ref`.
+    ///
+    /// ## Pré-conditions
+    /// - `can_fast_forward()` doit retourner `true`
+    /// - Le bookmark `target_ref` doit exister
+    async fn merge_fast_forward(
+        &self,
+        repo_id: &Uuid,
+        source_ref: &str,
+        target_ref: &str,
+    ) -> Result<ContentId, DomainError>;
+
+    /// Exécute un squash merge : crée un nouveau commit unique contenant
+    /// tous les changements de `source_ref` par rapport à `target_ref`,
+    /// avec le message fourni, puis avance `target_ref` vers ce nouveau commit.
+    async fn squash_merge(
+        &self,
+        repo_id: &Uuid,
+        source_ref: &str,
+        target_ref: &str,
+        message: &str,
+    ) -> Result<ContentId, DomainError>;
+
+    /// Calcule le diff entre le merge-base (ancêtre commun) et la branche source.
+    ///
+    /// C'est la bonne façon de calculer le diff d'une MR :
+    /// **merge-base → source** (pas source → target directement), sinon les
+    /// commits récents de `main` apparaîtraient en négatif.
+    async fn diff_merge_base(
+        &self,
+        repo_id: &Uuid,
+        source_ref: &str,
+        target_ref: &str,
+    ) -> Result<Vec<FileDiff>, DomainError>;
 }
 
 // ── Phase 17 — Types de Diff Colorisé ────────────────────────────────

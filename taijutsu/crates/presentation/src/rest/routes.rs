@@ -343,6 +343,31 @@ pub fn create_router(state: SharedState) -> Router {
             "/api/v1/actors/{handle}/profile",
             get(actor_profile_handler),
         )
+        // ── Phase 26A — Merge Requests (Le Katana Croisé) ─────────
+        .route(
+            "/api/v1/repos/{owner}/{repo}/mrs",
+            post(create_mr_handler).get(list_mrs_handler),
+        )
+        .route(
+            "/api/v1/repos/{owner}/{repo}/mrs/{number}",
+            get(get_mr_handler),
+        )
+        .route(
+            "/api/v1/repos/{owner}/{repo}/mrs/{number}/reviews",
+            post(review_mr_handler),
+        )
+        .route(
+            "/api/v1/repos/{owner}/{repo}/mrs/{number}/merge",
+            post(merge_mr_handler),
+        )
+        .route(
+            "/api/v1/repos/{owner}/{repo}/mrs/{number}/close",
+            post(close_mr_handler),
+        )
+        .route(
+            "/api/v1/repos/{owner}/{repo}/mrs/{number}/diff",
+            get(mr_diff_handler),
+        )
         // ── Métriques Prometheus ────────────────────
         .route(
             "/metrics",
@@ -1758,5 +1783,304 @@ async fn actor_profile_handler(
             "bots_count": bots_count,
         },
         "parent": parent_info,
+    })))
+}
+
+// ── Phase 26A — Merge Requests (Le Katana Croisé) ────────────────────────
+
+/// Requête JSON pour créer une MR.
+#[derive(Debug, Deserialize)]
+struct CreateMrBody {
+    pub title: String,
+    pub description: Option<String>,
+    pub source_branch: String,
+    #[serde(default = "default_target_branch")]
+    pub target_branch: String,
+}
+
+fn default_target_branch() -> String {
+    "main".to_string()
+}
+
+/// Query params pour filtrer les MR.
+#[derive(Debug, Deserialize)]
+struct ListMrsQuery {
+    pub status: Option<String>,
+    #[serde(default = "default_mr_limit")]
+    pub limit: usize,
+    #[serde(default)]
+    pub offset: usize,
+}
+
+fn default_mr_limit() -> usize {
+    30
+}
+
+/// Requête JSON pour reviewer une MR.
+#[derive(Debug, Deserialize)]
+struct ReviewMrBody {
+    pub verdict: String,
+    pub body: Option<String>,
+}
+
+/// Requête JSON pour merger une MR.
+#[derive(Debug, Deserialize)]
+struct MergeMrBody {
+    #[serde(default = "default_merge_strategy")]
+    pub strategy: String,
+}
+
+fn default_merge_strategy() -> String {
+    "fast_forward".to_string()
+}
+
+/// `POST /api/v1/repos/{owner}/{repo}/mrs` — Créer une MR.
+async fn create_mr_handler(
+    auth: crate::rest::auth_middleware::AuthUser,
+    State(state): State<SharedState>,
+    Path((owner, repo)): Path<(String, String)>,
+    Json(body): Json<CreateMrBody>,
+) -> Result<Json<serde_json::Value>, AppError> {
+    let repo_entity = state.resolve_repo.execute(&owner, &repo).await?;
+
+    let cmd = application::use_cases::create_mr::CreateMrCommand {
+        author_id: auth.0.actor_id(),
+        repository_id: repo_entity.id,
+        title: body.title,
+        description: body.description,
+        source_branch: body.source_branch,
+        target_branch: body.target_branch,
+    };
+
+    let mr = state.create_mr.execute(cmd).await?;
+
+    Ok(Json(serde_json::json!({
+        "id": mr.id,
+        "number": mr.number,
+        "title": mr.title,
+        "description": mr.description,
+        "source_branch": mr.source_branch,
+        "target_branch": mr.target_branch,
+        "status": mr.status,
+        "author_id": mr.author_id,
+        "created_at": mr.created_at,
+    })))
+}
+
+/// `GET /api/v1/repos/{owner}/{repo}/mrs` — Lister les MR.
+async fn list_mrs_handler(
+    State(state): State<SharedState>,
+    Path((owner, repo)): Path<(String, String)>,
+    _auth: MaybeAuth,
+    Query(query): Query<ListMrsQuery>,
+) -> Result<Json<serde_json::Value>, AppError> {
+    let repo_entity = state.resolve_repo.execute(&owner, &repo).await?;
+
+    let status = query.status.as_deref().and_then(domain::MrStatus::from_sql_str);
+
+    let (mrs, total) = state
+        .list_mrs
+        .execute(&repo_entity.id, status, query.limit, query.offset)
+        .await?;
+
+    let items: Vec<serde_json::Value> = mrs
+        .into_iter()
+        .map(|mr| {
+            serde_json::json!({
+                "id": mr.id,
+                "number": mr.number,
+                "title": mr.title,
+                "source_branch": mr.source_branch,
+                "target_branch": mr.target_branch,
+                "status": mr.status,
+                "author_id": mr.author_id,
+                "created_at": mr.created_at,
+                "updated_at": mr.updated_at,
+            })
+        })
+        .collect();
+
+    Ok(Json(serde_json::json!({
+        "items": items,
+        "total": total,
+    })))
+}
+
+/// `GET /api/v1/repos/{owner}/{repo}/mrs/{number}` — Détail d'une MR.
+async fn get_mr_handler(
+    State(state): State<SharedState>,
+    Path((owner, repo, number)): Path<(String, String, i32)>,
+    _auth: MaybeAuth,
+) -> Result<Json<serde_json::Value>, AppError> {
+    let repo_entity = state.resolve_repo.execute(&owner, &repo).await?;
+
+    let detail = state.get_mr.execute(&repo_entity.id, number).await?;
+
+    let reviews: Vec<serde_json::Value> = detail
+        .reviews
+        .into_iter()
+        .map(|r| {
+            serde_json::json!({
+                "id": r.id,
+                "reviewer_id": r.reviewer_id,
+                "verdict": r.verdict,
+                "body": r.body,
+                "created_at": r.created_at,
+            })
+        })
+        .collect();
+
+    let events: Vec<serde_json::Value> = detail
+        .events
+        .into_iter()
+        .map(|e| {
+            serde_json::json!({
+                "id": e.id,
+                "actor_id": e.actor_id,
+                "event_type": e.event_type.as_sql_str(),
+                "payload": e.payload,
+                "created_at": e.created_at,
+            })
+        })
+        .collect();
+
+    let mr = &detail.mr;
+    Ok(Json(serde_json::json!({
+        "id": mr.id,
+        "number": mr.number,
+        "title": mr.title,
+        "description": mr.description,
+        "source_branch": mr.source_branch,
+        "target_branch": mr.target_branch,
+        "status": mr.status,
+        "author_id": mr.author_id,
+        "merged_by": mr.merged_by,
+        "merged_at": mr.merged_at,
+        "closed_at": mr.closed_at,
+        "created_at": mr.created_at,
+        "updated_at": mr.updated_at,
+        "has_conflicts": detail.has_conflicts,
+        "reviews": reviews,
+        "events": events,
+    })))
+}
+
+/// `POST /api/v1/repos/{owner}/{repo}/mrs/{number}/reviews` — Reviewer une MR.
+async fn review_mr_handler(
+    auth: crate::rest::auth_middleware::AuthUser,
+    State(state): State<SharedState>,
+    Path((owner, repo, number)): Path<(String, String, i32)>,
+    Json(body): Json<ReviewMrBody>,
+) -> Result<Json<serde_json::Value>, AppError> {
+    let repo_entity = state.resolve_repo.execute(&owner, &repo).await?;
+
+    let verdict = domain::MrVerdict::from_sql_str(&body.verdict).ok_or_else(|| {
+        DomainError::BusinessRule(format!(
+            "Verdict invalide: '{}'. Attendu: 'approve' ou 'changes_requested'",
+            body.verdict
+        ))
+    })?;
+
+    let cmd = application::use_cases::review_mr::ReviewMrCommand {
+        reviewer_id: auth.0.actor_id(),
+        repository_id: repo_entity.id,
+        mr_number: number,
+        verdict,
+        body: body.body,
+    };
+
+    let review = state.review_mr.execute(cmd).await?;
+
+    Ok(Json(serde_json::json!({
+        "id": review.id,
+        "mr_id": review.mr_id,
+        "reviewer_id": review.reviewer_id,
+        "verdict": review.verdict,
+        "body": review.body,
+        "created_at": review.created_at,
+    })))
+}
+
+/// `POST /api/v1/repos/{owner}/{repo}/mrs/{number}/merge` — Merger une MR.
+async fn merge_mr_handler(
+    auth: crate::rest::auth_middleware::AuthUser,
+    State(state): State<SharedState>,
+    Path((owner, repo, number)): Path<(String, String, i32)>,
+    Json(body): Json<MergeMrBody>,
+) -> Result<Json<serde_json::Value>, AppError> {
+    let repo_entity = state.resolve_repo.execute(&owner, &repo).await?;
+
+    let strategy = match body.strategy.as_str() {
+        "fast_forward" => domain::MergeStrategy::FastForward,
+        "squash" => domain::MergeStrategy::Squash,
+        other => {
+            return Err(AppError(DomainError::BusinessRule(format!(
+                "Stratégie de merge invalide: '{}'. Attendu: 'fast_forward' ou 'squash'",
+                other
+            ))));
+        }
+    };
+
+    let cmd = application::use_cases::merge_mr::MergeMrCommand {
+        actor_id: auth.0.actor_id(),
+        repository_id: repo_entity.id,
+        mr_number: number,
+        strategy,
+    };
+
+    let result = state.merge_mr.execute(cmd).await?;
+
+    Ok(Json(serde_json::json!({
+        "merge_commit_id": result.merge_commit_id,
+        "status": "merged",
+    })))
+}
+
+/// `POST /api/v1/repos/{owner}/{repo}/mrs/{number}/close` — Fermer une MR.
+async fn close_mr_handler(
+    auth: crate::rest::auth_middleware::AuthUser,
+    State(state): State<SharedState>,
+    Path((owner, repo, number)): Path<(String, String, i32)>,
+) -> Result<Json<serde_json::Value>, AppError> {
+    let repo_entity = state.resolve_repo.execute(&owner, &repo).await?;
+    let actor_id = auth.0.actor_id();
+
+    state
+        .close_mr
+        .execute(&actor_id, &repo_entity.id, number)
+        .await?;
+
+    Ok(Json(serde_json::json!({
+        "status": "closed",
+    })))
+}
+
+/// `GET /api/v1/repos/{owner}/{repo}/mrs/{number}/diff` — Diff d'une MR.
+async fn mr_diff_handler(
+    State(state): State<SharedState>,
+    Path((owner, repo, number)): Path<(String, String, i32)>,
+    _auth: MaybeAuth,
+) -> Result<Json<serde_json::Value>, AppError> {
+    let repo_entity = state.resolve_repo.execute(&owner, &repo).await?;
+
+    let files = state.mr_diff.execute(&repo_entity.id, number).await?;
+
+    let files_json: Vec<serde_json::Value> = files
+        .into_iter()
+        .map(|f| {
+            serde_json::json!({
+                "path": f.path,
+                "status": f.status,
+                "hunks": f.hunks,
+                "additions": f.additions,
+                "deletions": f.deletions,
+                "too_large": f.too_large,
+            })
+        })
+        .collect();
+
+    Ok(Json(serde_json::json!({
+        "files": files_json,
+        "total_files": files_json.len(),
     })))
 }

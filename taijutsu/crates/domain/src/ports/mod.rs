@@ -13,6 +13,7 @@ pub mod event_consumer;
 pub mod event_publisher;
 pub mod github_service;
 pub mod llm_service;
+pub mod mr_repository;
 pub mod repo_repository;
 pub mod repository;
 pub mod review_repository;

@@ -1741,6 +1741,382 @@ impl VcsEngine for JujutsuEngine {
         .await
         .map_err(|e| DomainError::Internal(format!("spawn_blocking join error: {e}")))?
     }
+
+    // ── Phase 26A — Merge Requests (Le Katana Croisé) ────────────────────
+
+    #[instrument(skip(self))]
+    async fn can_fast_forward(
+        &self,
+        repo_id: &Uuid,
+        source_ref: &str,
+        target_ref: &str,
+    ) -> Result<bool, DomainError> {
+        let handle_arc = self.get_handle(repo_id).ok_or_else(|| {
+            DomainError::VcsError(format!("workspace not initialized for repo {repo_id}"))
+        })?;
+
+        let git_dir = self.git_repo_path(repo_id);
+        let source = source_ref.to_string();
+        let target = target_ref.to_string();
+
+        tokio::task::spawn_blocking(move || {
+            let guard = handle_arc.lock();
+            let wh = &*guard;
+            let repo = &wh.repo;
+            let store = repo.store();
+
+            // Résoudre les deux refs en CommitId
+            let source_commit_id = resolve_revision_internal(&source, &git_dir)?;
+            let target_commit_id = resolve_revision_internal(&target, &git_dir)?;
+
+            // Si les deux pointent vers le même commit, FF est trivial (rien à faire)
+            if source_commit_id == target_commit_id {
+                return Ok(true);
+            }
+
+            // Vérifier si target est un ancêtre de source
+            // On remonte les parents de source jusqu'à trouver target (ou épuiser le graphe)
+            let mut visited = HashSet::new();
+            let mut stack = vec![source_commit_id.clone()];
+
+            while let Some(current_id) = stack.pop() {
+                if current_id == target_commit_id {
+                    return Ok(true);
+                }
+                if !visited.insert(current_id.clone()) {
+                    continue;
+                }
+                // Charger le commit et ajouter ses parents à la pile
+                if let Ok(commit) = store.get_commit(&current_id) {
+                    for pid in commit.parent_ids() {
+                        if *pid != *store.root_commit_id() {
+                            stack.push(pid.clone());
+                        }
+                    }
+                }
+            }
+
+            Ok(false)
+        })
+        .await
+        .map_err(|e| DomainError::Internal(format!("spawn_blocking join error: {e}")))?
+    }
+
+    #[instrument(skip(self))]
+    async fn merge_fast_forward(
+        &self,
+        repo_id: &Uuid,
+        source_ref: &str,
+        target_ref: &str,
+    ) -> Result<ContentId, DomainError> {
+        let handle_arc = self.get_handle(repo_id).ok_or_else(|| {
+            DomainError::VcsError(format!("workspace not initialized for repo {repo_id}"))
+        })?;
+
+        let git_dir = self.git_repo_path(repo_id);
+        let source = source_ref.to_string();
+        let target = target_ref.to_string();
+        let rid = *repo_id;
+
+        tokio::task::spawn_blocking(move || {
+            let mut guard = handle_arc.lock();
+            let wh = &mut *guard;
+
+            // Résoudre la ref source en SHA-1
+            let source_commit_id = resolve_revision_internal(&source, &git_dir)?;
+            let source_hex = source_commit_id.hex();
+
+            // Écrire la nouvelle ref target directement dans le filesystem Git
+            // (même approche que git update-ref)
+            let target_ref_path = git_dir.join("refs").join("heads").join(&target);
+
+            // S'assurer que le répertoire parent existe (pour les branches imbriquées)
+            if let Some(parent) = target_ref_path.parent() {
+                std::fs::create_dir_all(parent).map_err(|e| {
+                    DomainError::VcsError(format!("Cannot create ref dir: {e}"))
+                })?;
+            }
+
+            std::fs::write(&target_ref_path, format!("{source_hex}\n")).map_err(|e| {
+                DomainError::VcsError(format!(
+                    "Failed to update ref {target} → {source_hex}: {e}"
+                ))
+            })?;
+
+            // Recharger le repo jj pour synchroniser les refs
+            let settings = JujutsuEngine::create_settings()?;
+            let jj_repo_path = git_dir
+                .parent() // store
+                .and_then(|p| p.parent()) // repo
+                .ok_or_else(|| DomainError::VcsError("Cannot resolve jj repo path".to_string()))?;
+
+            let store_factories = jj_lib::repo::StoreFactories::default();
+            let repo_loader = jj_lib::repo::RepoLoader::init_from_file_system(
+                &settings,
+                jj_repo_path,
+                &store_factories,
+            )
+            .map_err(|e| DomainError::VcsError(format!("RepoLoader reload failed: {e}")))?;
+
+            let reloaded_repo = pollster::block_on(repo_loader.load_at_head())
+                .map_err(|e| DomainError::VcsError(format!("reload load_at_head failed: {e}")))?;
+
+            let import_options = jj_lib::git::GitImportOptions {
+                auto_local_bookmark: true,
+                abandon_unreachable_commits: false,
+                remote_auto_track_bookmarks: std::collections::HashMap::new(),
+            };
+
+            let mut tx = reloaded_repo.start_transaction();
+            let _ = pollster::block_on(jj_lib::git::import_refs(tx.repo_mut(), &import_options));
+
+            let new_repo = pollster::block_on(
+                tx.commit(format!("SHINOBI: fast-forward merge {source} → {target} for {rid}")),
+            )
+            .map_err(|e| DomainError::VcsError(format!("merge tx.commit failed: {e}")))?;
+
+            wh.update_repo(new_repo);
+
+            info!(
+                repo_id = %rid,
+                source = %source,
+                target = %target,
+                commit = %source_hex,
+                "Fast-forward merge effectué"
+            );
+
+            Ok(ContentId::new(source_hex))
+        })
+        .await
+        .map_err(|e| DomainError::Internal(format!("spawn_blocking join error: {e}")))?
+    }
+
+    #[instrument(skip(self))]
+    async fn squash_merge(
+        &self,
+        repo_id: &Uuid,
+        source_ref: &str,
+        target_ref: &str,
+        message: &str,
+    ) -> Result<ContentId, DomainError> {
+        // V1 : le squash merge utilise un fast-forward après que l'utilisateur
+        // ait squash ses commits manuellement. En V2, on implémentera le vrai
+        // squash via la manipulation directe du tree jj.
+        // Pour l'instant, on fait un fast-forward et on log le message.
+        info!(
+            repo_id = %repo_id,
+            source = %source_ref,
+            target = %target_ref,
+            message = %message,
+            "squash_merge: fallback sur fast-forward (V1)"
+        );
+        self.merge_fast_forward(repo_id, source_ref, target_ref).await
+    }
+
+    #[instrument(skip(self))]
+    async fn diff_merge_base(
+        &self,
+        repo_id: &Uuid,
+        source_ref: &str,
+        target_ref: &str,
+    ) -> Result<Vec<domain::ports::vcs_engine::FileDiff>, DomainError> {
+        let handle_arc = self.get_handle(repo_id).ok_or_else(|| {
+            DomainError::VcsError(format!("workspace not initialized for repo {repo_id}"))
+        })?;
+
+        let git_dir = self.git_repo_path(repo_id);
+        let source = source_ref.to_string();
+        let target = target_ref.to_string();
+
+        tokio::task::spawn_blocking(move || {
+            use domain::ports::vcs_engine::{DiffHunk, DiffLine, DiffLineKind, DiffStatus, FileDiff};
+
+            let guard = handle_arc.lock();
+            let wh = &*guard;
+            let repo = &wh.repo;
+            let store = repo.store();
+
+            // 1. Résoudre les deux refs
+            let source_commit_id = resolve_revision_internal(&source, &git_dir)?;
+            let target_commit_id = resolve_revision_internal(&target, &git_dir)?;
+
+            let source_commit = store
+                .get_commit(&source_commit_id)
+                .map_err(|e| DomainError::VcsError(format!("Cannot load source commit: {e}")))?;
+
+            let target_commit = store
+                .get_commit(&target_commit_id)
+                .map_err(|e| DomainError::VcsError(format!("Cannot load target commit: {e}")))?;
+
+            // 2. Trouver le merge-base (ancêtre commun)
+            // Stratégie simplifiée V1 : on utilise le target comme base
+            // (correct quand target est un ancêtre de source, i.e., le cas FF).
+            // Pour le vrai merge-base (LCA dans le DAG), on utiliserait
+            // jj_lib::merge mais c'est plus complexe.
+            let base_tree = target_commit.tree();
+            let source_tree = source_commit.tree();
+
+            // 3. Diff base_tree → source_tree
+            let diff_stream = base_tree.diff_stream(&source_tree, &EverythingMatcher);
+            let entries: Vec<_> = pollster::block_on(diff_stream.collect::<Vec<_>>());
+
+            let mut file_diffs: Vec<FileDiff> = Vec::new();
+
+            for entry in entries {
+                let diff = match entry.values {
+                    Ok(d) => d,
+                    Err(_) => continue,
+                };
+
+                let path = entry.path.as_internal_file_string().to_string();
+
+                let before_value = diff.before.as_resolved().and_then(|v| v.as_ref());
+                let after_value = diff.after.as_resolved().and_then(|v| v.as_ref());
+
+                let status = match (before_value, after_value) {
+                    (None, Some(_)) => DiffStatus::Added,
+                    (Some(_), None) => DiffStatus::Deleted,
+                    (Some(_), Some(_)) => DiffStatus::Modified,
+                    (None, None) => continue,
+                };
+
+                // Lire le contenu "before"
+                let before_content = if let Some(TreeValue::File { id, .. }) = before_value {
+                    let entry_path = &entry.path;
+                    match pollster::block_on(store.read_file(entry_path, id)) {
+                        Ok(mut reader) => {
+                            let mut buf = Vec::new();
+                            match pollster::block_on(tokio::io::AsyncReadExt::read_to_end(
+                                &mut reader, &mut buf,
+                            )) {
+                                Ok(_) => Some(buf),
+                                Err(_) => None,
+                            }
+                        }
+                        Err(_) => None,
+                    }
+                } else {
+                    None
+                };
+
+                // Lire le contenu "after"
+                let after_content = if let Some(TreeValue::File { id, .. }) = after_value {
+                    let entry_path = &entry.path;
+                    match pollster::block_on(store.read_file(entry_path, id)) {
+                        Ok(mut reader) => {
+                            let mut buf = Vec::new();
+                            match pollster::block_on(tokio::io::AsyncReadExt::read_to_end(
+                                &mut reader, &mut buf,
+                            )) {
+                                Ok(_) => Some(buf),
+                                Err(_) => None,
+                            }
+                        }
+                        Err(_) => None,
+                    }
+                } else {
+                    None
+                };
+
+                // Convertir en texte
+                let before_text = before_content
+                    .as_ref()
+                    .and_then(|b| std::str::from_utf8(b).ok())
+                    .unwrap_or("");
+                let after_text = after_content
+                    .as_ref()
+                    .and_then(|b| std::str::from_utf8(b).ok())
+                    .unwrap_or("");
+
+                // Protection taille
+                let total_lines = before_text.lines().count() + after_text.lines().count();
+                if total_lines > 2000 {
+                    file_diffs.push(FileDiff {
+                        path,
+                        status,
+                        hunks: vec![],
+                        additions: 0,
+                        deletions: 0,
+                        too_large: true,
+                    });
+                    continue;
+                }
+
+                // Calcul du diff textuel
+                let text_diff = similar::TextDiff::from_lines(before_text, after_text);
+
+                let mut hunks = Vec::new();
+                let mut total_additions: u32 = 0;
+                let mut total_deletions: u32 = 0;
+
+                for group in text_diff.grouped_ops(3) {
+                    let mut lines = Vec::new();
+                    let first_op = group.first();
+                    let last_op = group.last();
+                    let (old_start, new_start) = first_op
+                        .map(|op| (op.old_range().start + 1, op.new_range().start + 1))
+                        .unwrap_or((1, 1));
+                    let (old_end, new_end) = last_op
+                        .map(|op| (op.old_range().end, op.new_range().end))
+                        .unwrap_or((1, 1));
+                    let old_count = old_end.saturating_sub(old_start - 1);
+                    let new_count = new_end.saturating_sub(new_start - 1);
+                    let header =
+                        format!("@@ -{old_start},{old_count} +{new_start},{new_count} @@");
+
+                    for op in &group {
+                        for change in text_diff.iter_changes(op) {
+                            let (kind, old_line, new_line) = match change.tag() {
+                                similar::ChangeTag::Equal => {
+                                    let ol = change.old_index().map(|i| (i + 1) as u32);
+                                    let nl = change.new_index().map(|i| (i + 1) as u32);
+                                    (DiffLineKind::Context, ol, nl)
+                                }
+                                similar::ChangeTag::Delete => {
+                                    total_deletions += 1;
+                                    let ol = change.old_index().map(|i| (i + 1) as u32);
+                                    (DiffLineKind::Remove, ol, None)
+                                }
+                                similar::ChangeTag::Insert => {
+                                    total_additions += 1;
+                                    let nl = change.new_index().map(|i| (i + 1) as u32);
+                                    (DiffLineKind::Add, None, nl)
+                                }
+                            };
+                            lines.push(DiffLine {
+                                kind,
+                                content: change.value().to_string(),
+                                old_line,
+                                new_line,
+                            });
+                        }
+                    }
+
+                    hunks.push(DiffHunk { header, lines });
+                }
+
+                file_diffs.push(FileDiff {
+                    path,
+                    status,
+                    hunks,
+                    additions: total_additions,
+                    deletions: total_deletions,
+                    too_large: false,
+                });
+            }
+
+            info!(
+                source = %source,
+                target = %target,
+                file_count = file_diffs.len(),
+                "diff_merge_base: diff calculé (merge-base → source)"
+            );
+
+            Ok(file_diffs)
+        })
+        .await
+        .map_err(|e| DomainError::Internal(format!("spawn_blocking join error: {e}")))?
+    }
 }
 
 // ── Tests ──────────────────────────────────────────────────────────────────

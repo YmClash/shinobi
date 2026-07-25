@@ -366,6 +366,18 @@ mod tests {
         async fn diff_content(&self, _repo_id: &Uuid, _cid: &ContentId) -> Result<Vec<domain::ports::vcs_engine::FileDiff>, DomainError> {
             Ok(vec![])
         }
+        async fn can_fast_forward(&self, _repo_id: &Uuid, _source: &str, _target: &str) -> Result<bool, DomainError> {
+            Ok(true)
+        }
+        async fn merge_fast_forward(&self, _repo_id: &Uuid, _source: &str, _target: &str) -> Result<ContentId, DomainError> {
+            Ok(ContentId::new("mock-merge-commit"))
+        }
+        async fn squash_merge(&self, _repo_id: &Uuid, _source: &str, _target: &str, _message: &str) -> Result<ContentId, DomainError> {
+            Ok(ContentId::new("mock-squash-commit"))
+        }
+        async fn diff_merge_base(&self, _repo_id: &Uuid, _source: &str, _target: &str) -> Result<Vec<domain::ports::vcs_engine::FileDiff>, DomainError> {
+            Ok(vec![])
+        }
     }
 
     // ── Helpers ──────────────────────────────────────
