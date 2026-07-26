@@ -368,6 +368,11 @@ pub fn create_router(state: SharedState) -> Router {
             "/api/v1/repos/{owner}/{repo}/mrs/{number}/diff",
             get(mr_diff_handler),
         )
+        // ── Phase 26B — Pré-diff entre branches (formulaire New MR) ────
+        .route(
+            "/api/v1/repos/{owner}/{repo}/diff-between",
+            get(diff_between_handler),
+        )
         // ── Métriques Prometheus ────────────────────
         .route(
             "/metrics",
@@ -607,20 +612,26 @@ impl From<domain::entities::repository::Repository> for RepositoryJson {
 }
 
 /// Créer un dépôt — `POST /api/v1/repos`
+///
+/// 🔒 **Authentification obligatoire** — le `owner_id` est extrait du JWT,
+/// jamais du body client (prévient l'usurpation d'identité).
 async fn create_repository_handler(
     State(state): State<SharedState>,
+    auth: AuthUser,
     Json(body): Json<CreateRepoBody>,
 ) -> Result<(axum::http::StatusCode, Json<RepositoryJson>), AppError> {
+    let owner_id = auth.claims.actor_id;
+
     info!(
-        owner_id = %body.owner_id,
+        owner_id = %owner_id,
         name = %body.name,
-        "REST: CreateRepository reçu (Forge Sociale)"
+        "REST: CreateRepository reçu (Forge Sociale — Auth)"
     );
 
     let visibility = Visibility::from_sql_str(&body.visibility).unwrap_or(Visibility::Public);
 
     let cmd = CreateRepositoryCommand {
-        owner_id: body.owner_id,
+        owner_id,
         name: body.name,
         display_name: body.display_name,
         description: body.description,
@@ -2064,6 +2075,50 @@ async fn mr_diff_handler(
     let repo_entity = state.resolve_repo.execute(&owner, &repo).await?;
 
     let files = state.mr_diff.execute(&repo_entity.id, number).await?;
+
+    let files_json: Vec<serde_json::Value> = files
+        .into_iter()
+        .map(|f| {
+            serde_json::json!({
+                "path": f.path,
+                "status": f.status,
+                "hunks": f.hunks,
+                "additions": f.additions,
+                "deletions": f.deletions,
+                "too_large": f.too_large,
+            })
+        })
+        .collect();
+
+    Ok(Json(serde_json::json!({
+        "files": files_json,
+        "total_files": files_json.len(),
+    })))
+}
+
+/// Query params pour le pré-diff entre branches.
+#[derive(Debug, Deserialize)]
+struct DiffBetweenQuery {
+    pub source: String,
+    pub target: String,
+}
+
+/// `GET /api/v1/repos/{owner}/{repo}/diff-between?source=X&target=Y`
+///
+/// Calcule le diff merge-base entre deux branches AVANT création d'une MR.
+/// Utilisé par le formulaire "New MR" pour prévisualiser les changements.
+async fn diff_between_handler(
+    State(state): State<SharedState>,
+    Path((owner, repo)): Path<(String, String)>,
+    _auth: MaybeAuth,
+    Query(query): Query<DiffBetweenQuery>,
+) -> Result<Json<serde_json::Value>, AppError> {
+    let repo_entity = state.resolve_repo.execute(&owner, &repo).await?;
+
+    let files = state
+        .vcs_engine
+        .diff_merge_base(&repo_entity.id, &query.source, &query.target)
+        .await?;
 
     let files_json: Vec<serde_json::Value> = files
         .into_iter()

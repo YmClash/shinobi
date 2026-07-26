@@ -3,12 +3,14 @@
 // ═══════════════════════════════════════════════════════════════
 // SHINOBI — Makimono · Server Action: Forge Repository
 // Creates a new repository via the Taijutsu backend
+//
+// 🔒 SECURITY: Le JWT est requis. L'owner_id est extrait côté
+// serveur depuis le token — jamais envoyé par le client.
 // ═══════════════════════════════════════════════════════════════
 
-const TAIJUTSU_URL = process.env.TAIJUTSU_URL || "http://localhost:3000";
+import { cookies } from "next/headers";
 
-// Default owner UUID — SYSTEM_ACTOR from migration 006
-const DEFAULT_OWNER_ID = "00000000-0000-0000-0000-000000000001";
+const TAIJUTSU_URL = process.env.TAIJUTSU_URL || "http://localhost:3000";
 
 export interface ForgeRepoResult {
   success: boolean;
@@ -22,17 +24,24 @@ export async function forgeRepository(formData: FormData): Promise<ForgeRepoResu
     const displayName = formData.get("display_name") as string;
     const description = formData.get("description") as string;
     const visibility = formData.get("visibility") as string;
-    const ownerId = (formData.get("owner_id") as string) || DEFAULT_OWNER_ID;
+    const token = formData.get("token") as string | null;
 
     if (!name?.trim() || !displayName?.trim()) {
       return { success: false, error: "Le nom et le nom d'affichage sont requis." };
     }
 
+    // 🔒 Le JWT est obligatoire — sans token, on refuse la création
+    if (!token) {
+      return { success: false, error: "Authentification requise pour créer un dépôt." };
+    }
+
     const response = await fetch(`${TAIJUTSU_URL}/api/v1/repos`, {
       method: "POST",
-      headers: { "Content-Type": "application/json" },
+      headers: {
+        "Content-Type": "application/json",
+        "Authorization": `Bearer ${token}`,
+      },
       body: JSON.stringify({
-        owner_id: ownerId,
         name: name.trim(),
         display_name: displayName.trim(),
         description: description?.trim() || null,
@@ -42,6 +51,10 @@ export async function forgeRepository(formData: FormData): Promise<ForgeRepoResu
 
     if (!response.ok) {
       const text = await response.text().catch(() => "Erreur inconnue");
+
+      if (response.status === 401) {
+        return { success: false, error: "Session expirée — veuillez vous reconnecter." };
+      }
 
       if (response.status === 409) {
         return { success: false, error: `Le dépôt "${name}" existe déjà. Choisissez un autre nom.` };
