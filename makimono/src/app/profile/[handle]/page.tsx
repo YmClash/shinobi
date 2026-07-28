@@ -80,12 +80,98 @@ export default function ProfilePage() {
   }
 
   const { actor, stats, parent } = profile;
+  const isSystem = profile.is_system === true;
   const isBot = actor.actor_type === "ai_agent";
   const isHuman = actor.actor_type === "human";
-  const memberSince = new Date(actor.created_at).toLocaleDateString("fr-FR", {
-    month: "long",
-    year: "numeric",
-  });
+  const memberSince = actor.created_at
+    ? new Date(actor.created_at).toLocaleDateString("fr-FR", {
+        month: "long",
+        year: "numeric",
+      })
+    : null;
+
+  // ── Phase 27-pre : Page dédiée Acteur Système ──────────
+  if (isSystem) {
+    return (
+      <div className="pf">
+        <div className="pf-hero pf-hero-system">
+          <div className="pf-hero-pattern" />
+          <div className="pf-hero-glow" />
+
+          <div className="pf-hero-content">
+            <div className="pf-avatar-wrap">
+              <div className="pf-avatar pf-avatar-gen pf-avatar-system">⚙️</div>
+              <div className="pf-avatar-ring pf-ring-system" />
+            </div>
+
+            <div className="pf-identity">
+              <div className="pf-name-row">
+                <h1 className="pf-name">{actor.display_name}</h1>
+                <span className="pf-badge pf-badge-sys">⚙️ SYSTEM</span>
+              </div>
+              <p className="pf-handle">@{actor.handle}</p>
+              {actor.bio && <p className="pf-bio">{actor.bio}</p>}
+            </div>
+          </div>
+        </div>
+
+        {/* Stats minimales */}
+        <div className="pf-stats">
+          <div className="pf-stat">
+            <span className="pf-stat-num">∞</span>
+            <span className="pf-stat-lbl">Uptime</span>
+          </div>
+          <div className="pf-stat-divider" />
+          <div className="pf-stat">
+            <span className="pf-stat-num">🔒</span>
+            <span className="pf-stat-lbl">Non-authentifiable</span>
+          </div>
+          <div className="pf-stat-divider" />
+          <div className="pf-stat">
+            <span className="pf-stat-num">🛡️</span>
+            <span className="pf-stat-lbl">Ghost User</span>
+          </div>
+        </div>
+
+        {/* Section responsabilités */}
+        <div className="pf-section">
+          <div className="pf-section-head">
+            <h2 className="pf-section-title">🔧 Responsabilités</h2>
+          </div>
+          <div className="pf-caps">
+            <div className="pf-cap">
+              <span className="pf-cap-icon">🔄</span>
+              <div>
+                <span className="pf-cap-title">Migrations</span>
+                <span className="pf-cap-desc">Rattachement automatique des données lors des mises à jour de schéma</span>
+              </div>
+            </div>
+            <div className="pf-cap">
+              <span className="pf-cap-icon">👻</span>
+              <div>
+                <span className="pf-cap-title">Ghost User</span>
+                <span className="pf-cap-desc">Réattribution des données orphelines (comptes supprimés)</span>
+              </div>
+            </div>
+            <div className="pf-cap">
+              <span className="pf-cap-icon">🌐</span>
+              <div>
+                <span className="pf-cap-title">Actions fédérées</span>
+                <span className="pf-cap-desc">Origine des requêtes ActivityPub entrantes (ForgeFed)</span>
+              </div>
+            </div>
+            <div className="pf-cap">
+              <span className="pf-cap-icon">🏗️</span>
+              <div>
+                <span className="pf-cap-title">Dépôt système</span>
+                <span className="pf-cap-desc">Propriétaire du dépôt par défaut et des opérations MVP</span>
+              </div>
+            </div>
+          </div>
+        </div>
+      </div>
+    );
+  }
 
   return (
     <div className="pf">

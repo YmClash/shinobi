@@ -65,6 +65,14 @@ impl LoginActorUseCase {
                 DomainError::Unauthorized("Identifiants invalides".to_string())
             })?;
 
+        // Phase 27-pre : Defense in Depth — l'acteur système ne peut jamais se connecter
+        if actor.is_system() {
+            warn!(actor_id = %actor.id, "🚫 Login rejeté — tentative de connexion sur l'acteur système");
+            return Err(DomainError::Unauthorized(
+                "Identifiants invalides".to_string(),
+            ));
+        }
+
         // 2. Retrouver le hash du mot de passe
         let password_hash = self
             .actor_repo

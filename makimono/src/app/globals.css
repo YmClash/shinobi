@@ -7332,3 +7332,74 @@ html * {
 [data-theme="scroll"] .pf-cap {
   background: oklch(0.97 0.005 260);
 }
+
+/* ── Phase 27-pre : System Actor Profile ─── */
+.pf-hero-system {
+  background: linear-gradient(165deg,
+    oklch(0.2 0.06 50) 0%,
+    oklch(0.18 0.03 260) 40%,
+    var(--card) 75%);
+}
+
+.pf-hero-system .pf-hero-glow {
+  background: radial-gradient(ellipse, oklch(0.6 0.15 50 / 12%) 0%, transparent 70%);
+}
+
+.pf-avatar-system {
+  background: linear-gradient(135deg, oklch(0.35 0.08 50), oklch(0.25 0.05 260)) !important;
+  font-size: 2.5rem !important;
+  border: 2px solid oklch(0.6 0.1 50 / 30%);
+}
+
+.pf-ring-system {
+  border-color: oklch(0.6 0.1 50 / 50%);
+  box-shadow: 0 0 20px oklch(0.6 0.1 50 / 20%);
+  animation: pf-ring-system-pulse 4s ease-in-out infinite;
+}
+
+@keyframes pf-ring-system-pulse {
+  0%, 100% { opacity: 0.5; transform: scale(1); box-shadow: 0 0 16px oklch(0.6 0.1 50 / 15%); }
+  50% { opacity: 1; transform: scale(1.04); box-shadow: 0 0 28px oklch(0.6 0.1 50 / 25%); }
+}
+
+/* System caps grid — 2 colonnes */
+.pf-hero-system ~ .pf-section .pf-caps {
+  grid-template-columns: repeat(2, 1fr);
+}
+
+@media (max-width: 640px) {
+  .pf-hero-system ~ .pf-section .pf-caps {
+    grid-template-columns: 1fr;
+  }
+}
+
+/* System cap hover — amber accent */
+.pf-hero-system ~ .pf-section .pf-cap:hover {
+  border-color: oklch(0.6 0.1 50 / 35%);
+  background: oklch(0.6 0.1 50 / 5%);
+}
+
+/* ── Theme Overrides — System ─────────── */
+[data-theme="cyberpunk"] .pf-hero-system {
+  background: linear-gradient(165deg, oklch(0.18 0.1 310) 0%, oklch(0.14 0.05 280) 40%, var(--card) 75%);
+}
+
+[data-theme="cyberpunk"] .pf-ring-system {
+  border-color: oklch(0.72 0.2 310 / 40%);
+  box-shadow: 0 0 24px oklch(0.72 0.2 310 / 20%);
+}
+
+[data-theme="cyberpunk"] .pf-badge-sys {
+  background: oklch(0.72 0.2 310 / 12%);
+  color: oklch(0.72 0.2 310);
+  border-color: oklch(0.72 0.2 310 / 25%);
+}
+
+[data-theme="scroll"] .pf-hero-system {
+  background: linear-gradient(165deg, oklch(0.92 0.04 50) 0%, oklch(0.97 0.005 260) 60%);
+}
+
+[data-theme="scroll"] .pf-ring-system {
+  border-color: oklch(0.5 0.1 50 / 40%);
+  box-shadow: 0 0 16px oklch(0.5 0.1 50 / 10%);
+}

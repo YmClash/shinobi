@@ -37,6 +37,9 @@ pub const RESERVED_HANDLES: &[&str] = &[
     "help", "support", "info", "contact",
     "null", "undefined", "none", "anonymous",
     "moderator", "mod", "staff",
+    // Phase 27-pre — Élargissement du bouclier
+    "noreply", "security", "administrator",
+    "abuse", "postmaster", "webmaster",
 ];
 
 /// Vérifie si un handle est réservé par le système.

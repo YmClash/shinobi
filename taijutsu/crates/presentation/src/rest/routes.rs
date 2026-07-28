@@ -1740,6 +1740,31 @@ async fn actor_profile_handler(
 ) -> Result<Json<serde_json::Value>, AppError> {
     info!(handle = %handle, "REST: GetActorProfile");
 
+    // Phase 27-pre : profil spécial pour l'acteur système
+    if handle.to_lowercase() == "system" {
+        return Ok(Json(serde_json::json!({
+            "actor": {
+                "id": domain::SYSTEM_ACTOR_ID,
+                "handle": "system",
+                "display_name": "SHINOBI System",
+                "actor_type": "system",
+                "bio": "Acteur système interne de la Forge Sociale SHINOBI. Responsable des opérations automatiques, migrations, rattachement des données orphelines et actions fédérées.",
+                "avatar_url": null,
+                "created_at": null,
+            },
+            "stats": { "public_repos": 0, "total_repos": 0, "bots_count": 0 },
+            "parent": null,
+            "is_system": true,
+        })));
+    }
+
+    // Phase 27-pre : bloquer les autres handles réservés qui n'existent pas
+    if domain::entities::actor::is_reserved_handle(&handle) {
+        return Err(AppError(DomainError::BusinessRule(
+            format!("Le handle '{}' est réservé par le système", handle),
+        )));
+    }
+
     let actor = state
         .actor_repo
         .find_by_handle(&handle)

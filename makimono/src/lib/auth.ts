@@ -371,6 +371,8 @@ export interface ActorProfile {
     display_name: string;
     avatar_url: string | null;
   } | null;
+  /** Phase 27-pre : true si c'est l'acteur système SHINOBI */
+  is_system?: boolean;
 }
 
 /** GET /api/v1/actors/{handle}/profile — Profil public d'un acteur. */

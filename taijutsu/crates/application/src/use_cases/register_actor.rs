@@ -11,7 +11,7 @@ use std::sync::Arc;
 
 use tracing::{info, instrument};
 
-use domain::entities::actor::{Actor, ActorType};
+use domain::entities::actor::{Actor, ActorType, is_reserved_handle};
 use domain::entities::session::AuthClaims;
 use domain::errors::DomainError;
 use domain::ports::actor_repository::ActorRepository;
@@ -125,6 +125,13 @@ impl RegisterActorUseCase {
 // ── Validation ────────────────────────────────────────────────────────
 
 fn validate_handle(handle: &str) -> Result<(), DomainError> {
+    // Phase 27-pre : Guard anti-usurpation — handles réservés au système
+    if is_reserved_handle(handle) {
+        return Err(DomainError::BusinessRule(
+            format!("Le handle '{}' est réservé par le système SHINOBI", handle),
+        ));
+    }
+
     if handle.is_empty() || handle.len() > 39 {
         return Err(DomainError::BusinessRule(
             "Le handle doit contenir entre 1 et 39 caractères".to_string(),
@@ -148,6 +155,64 @@ fn validate_handle(handle: &str) -> Result<(), DomainError> {
     }
 
     Ok(())
+}
+
+// ── Tests unitaires (Phase 27-pre) ────────────────────────────────────
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_reserved_handle_system_rejected() {
+        let result = validate_handle("system");
+        assert!(result.is_err());
+        let msg = result.unwrap_err().to_string();
+        assert!(msg.contains("réservé"), "Expected 'réservé' in: {msg}");
+    }
+
+    #[test]
+    fn test_reserved_handle_admin_rejected() {
+        let result = validate_handle("admin");
+        assert!(result.is_err());
+    }
+
+    #[test]
+    fn test_reserved_handle_oracle_case_insensitive() {
+        // is_reserved_handle fait .to_lowercase(), mais validate_handle
+        // rejette aussi les majuscules via la regex → double protection.
+        let result = validate_handle("oracle");
+        assert!(result.is_err());
+    }
+
+    #[test]
+    fn test_valid_handle_passes() {
+        assert!(validate_handle("ymclash").is_ok());
+        assert!(validate_handle("alice-dev").is_ok());
+        assert!(validate_handle("ninja_42").is_ok());
+    }
+
+    #[test]
+    fn test_handle_format_validation() {
+        // Trop long
+        assert!(validate_handle(&"a".repeat(40)).is_err());
+        // Vide
+        assert!(validate_handle("").is_err());
+        // Commence par tiret
+        assert!(validate_handle("-invalid").is_err());
+        // Finit par tiret
+        assert!(validate_handle("invalid-").is_err());
+    }
+
+    #[test]
+    fn test_new_reserved_handles_phase27() {
+        assert!(validate_handle("noreply").is_err());
+        assert!(validate_handle("security").is_err());
+        assert!(validate_handle("administrator").is_err());
+        assert!(validate_handle("abuse").is_err());
+        assert!(validate_handle("postmaster").is_err());
+        assert!(validate_handle("webmaster").is_err());
+    }
 }
 
 fn validate_email(email: &str) -> Result<(), DomainError> {
