@@ -1198,6 +1198,55 @@ html * {
   background: rgba(16, 185, 129, 0.2);
 }
 
+/* ── Clone Dropdown ─────────────────────────────────────────── */
+.clone-dropdown-wrapper { position: relative; }
+.clone-dropdown {
+  position: absolute; top: calc(100% + 6px); right: 0; z-index: 60;
+  width: 380px; padding: 0; border-radius: 12px;
+  background: var(--card); border: 1px solid var(--border);
+  box-shadow: 0 12px 32px oklch(0 0 0 / 25%);
+  overflow: hidden;
+}
+.clone-dropdown-header {
+  padding: 0.65rem 0.85rem; border-bottom: 1px solid var(--border);
+  background: var(--muted);
+}
+.clone-dropdown-title { font-size: 0.78rem; font-weight: 600; color: var(--foreground); }
+.clone-section { padding: 0.55rem 0.85rem; }
+.clone-section + .clone-section { border-top: 1px solid oklch(0 0 0 / 8%); }
+.clone-label {
+  display: block; font-size: 0.65rem; font-weight: 600; text-transform: uppercase;
+  letter-spacing: 0.05em; color: var(--muted-foreground); margin-bottom: 0.3rem;
+}
+.clone-url-row, .clone-cmd-row {
+  display: flex; align-items: center; gap: 0.35rem;
+}
+.clone-url-input {
+  flex: 1; padding: 0.4rem 0.55rem; border-radius: 6px; font-size: 0.72rem;
+  font-family: var(--font-mono); background: var(--muted); color: var(--foreground);
+  border: 1px solid var(--border); outline: none;
+}
+.clone-url-input:focus { border-color: var(--primary); }
+.clone-cmd {
+  flex: 1; display: block; padding: 0.4rem 0.55rem; border-radius: 6px;
+  font-size: 0.7rem; font-family: var(--font-mono); line-height: 1.4;
+  background: var(--muted); color: oklch(0.82 0.08 60); /* amber */
+  white-space: nowrap; overflow-x: auto;
+}
+.clone-copy-btn {
+  display: flex; align-items: center; justify-content: center;
+  width: 30px; height: 30px; border-radius: 6px; flex-shrink: 0;
+  background: none; border: 1px solid var(--border); color: var(--muted-foreground);
+  cursor: pointer; transition: all 0.2s ease;
+}
+.clone-copy-btn:hover { background: var(--muted); color: var(--foreground); border-color: var(--primary); }
+.clone-footer {
+  padding: 0.5rem 0.85rem; font-size: 0.68rem; color: var(--muted-foreground);
+  border-top: 1px solid var(--border); background: var(--muted);
+}
+.clone-footer-link { color: var(--primary); text-decoration: none; font-weight: 500; }
+.clone-footer-link:hover { text-decoration: underline; }
+
 /* ── Controls Bar ────────────────────────────────────────────── */
 .ex-controls-bar {
   display: flex;

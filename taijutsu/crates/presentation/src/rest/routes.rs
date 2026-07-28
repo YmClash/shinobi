@@ -26,7 +26,7 @@ use domain::ports::review_repository::OperationReview;
 use domain::ports::vcs_engine::{EntryKind, RefKind};
 
 use crate::errors::AppError;
-use crate::rest::auth_middleware::MaybeAuth;
+use crate::rest::auth_middleware::{AuthUser, MaybeAuth};
 use crate::state::SharedState;
 
 // ─── Types Request / Response ────────────────────
@@ -559,9 +559,10 @@ fn decode_base64(input: &str) -> Result<Vec<u8>, String> {
 // ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 
 /// Corps de la requête POST /api/v1/repos.
+///
+/// 🔒 `owner_id` n'est plus dans le body — il est extrait du JWT.
 #[derive(Debug, Deserialize)]
 pub struct CreateRepoBody {
-    pub owner_id: Uuid,
     pub name: String,
     pub display_name: String,
     #[serde(default)]
@@ -620,7 +621,7 @@ async fn create_repository_handler(
     auth: AuthUser,
     Json(body): Json<CreateRepoBody>,
 ) -> Result<(axum::http::StatusCode, Json<RepositoryJson>), AppError> {
-    let owner_id = auth.claims.actor_id;
+    let owner_id = auth.0.actor_id();
 
     info!(
         owner_id = %owner_id,

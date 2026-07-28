@@ -129,7 +129,29 @@ export function MrActionsBar({
       {/* ── Status Indicators ─────────────────────── */}
       {hasConflicts && isOpen && (
         <div className="mr-conflict-indicator animate-fade-in-up">
-          ⚠️ This branch has conflicts that must be resolved before merging
+          <div className="mr-conflict-title">
+            ⚠️ This branch has conflicts that must be resolved before merging
+          </div>
+          <div className="mr-conflict-guide">
+            <p className="mr-conflict-hint">Resolve locally with Jujutsu, then push to update this MR:</p>
+            <div className="mr-conflict-steps">
+              <code className="mr-conflict-cmd">
+                <span className="mr-conflict-step">1.</span> jj rebase -s {"<source>"} -d {"<target>"}
+              </code>
+              <code className="mr-conflict-cmd">
+                <span className="mr-conflict-step">2.</span> # Edit conflicted files, then:
+              </code>
+              <code className="mr-conflict-cmd">
+                <span className="mr-conflict-step">3.</span> jj describe -m &quot;resolve conflicts&quot;
+              </code>
+              <code className="mr-conflict-cmd">
+                <span className="mr-conflict-step">4.</span> jj git push
+              </code>
+            </div>
+            <p className="mr-conflict-footer">
+              Once pushed, this MR will refresh automatically and the merge button will become available.
+            </p>
+          </div>
         </div>
       )}
 

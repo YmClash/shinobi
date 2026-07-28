@@ -9,6 +9,7 @@ import { GitHubReposList } from "@/components/forge/github-repos-list";
 import { useRepositories, emitRepoCreated } from "@/hooks/use-api";
 import { useAuth } from "@/hooks/use-auth";
 import { TrashSection } from "@/components/forge/trash-section";
+import { getToken } from "@/lib/auth";
 
 import { forgeRepository } from "./actions";
 
@@ -59,20 +60,23 @@ export default function ForgePage() {
               {repos.length} dépôt{repos.length > 1 ? "s" : ""}
             </span>
           )}
-          <button
-            onClick={() => { setShowPanel(!showPanel); setActiveTab("create"); }}
-            className={`
-              inline-flex items-center gap-1.5 px-3 py-1.5 text-xs font-medium rounded-lg
-              transition-all cursor-pointer
-              ${showPanel
-                ? "bg-muted text-muted-foreground hover:bg-muted/80"
-                : "bg-primary text-primary-foreground hover:bg-primary/90 hover:shadow-lg hover:shadow-primary/20 hover:scale-105 active:scale-95"
-              }
-            `}
-          >
-            <span>{showPanel ? "✕" : "✦"}</span>
-            <span>{showPanel ? "Fermer" : "Nouveau"}</span>
-          </button>
+          {/* 🔒 Bouton visible uniquement si authentifié */}
+          {user && (
+            <button
+              onClick={() => { setShowPanel(!showPanel); setActiveTab("create"); }}
+              className={`
+                inline-flex items-center gap-1.5 px-3 py-1.5 text-xs font-medium rounded-lg
+                transition-all cursor-pointer
+                ${showPanel
+                  ? "bg-muted text-muted-foreground hover:bg-muted/80"
+                  : "bg-primary text-primary-foreground hover:bg-primary/90 hover:shadow-lg hover:shadow-primary/20 hover:scale-105 active:scale-95"
+                }
+              `}
+            >
+              <span>{showPanel ? "✕" : "✦"}</span>
+              <span>{showPanel ? "Fermer" : "Nouveau"}</span>
+            </button>
+          )}
         </div>
       </div>
 
@@ -118,7 +122,9 @@ export default function ForgePage() {
           {/* Tab Content */}
           {activeTab === "create" && (
             <CreateRepoForm onCreated={handleCreated} forgeAction={(formData: FormData) => {
-              if (user?.id) formData.set("owner_id", user.id);
+              // 🔒 Passer le JWT — le backend extrait l'owner_id du token
+              const jwt = getToken();
+              if (jwt) formData.set("token", jwt);
               return forgeRepository(formData);
             }} ownerHandle={ownerHandle ?? "system"} />
           )}

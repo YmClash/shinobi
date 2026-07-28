@@ -26,6 +26,7 @@ import BranchSelector from "@/components/explorer/BranchSelector";
 import FileBrowser from "@/components/explorer/FileBrowser";
 import ExplorerFileClient from "@/components/explorer/ExplorerFileClient";
 import DeleteRepoButton from "@/components/forge/delete-repo-button";
+import CloneDropdown from "@/components/explorer/CloneDropdown";
 
 // ── Route params ─────────────────────────────────────────────
 
@@ -322,10 +323,7 @@ git push -u origin main`}</pre>
               <Search size={14} />
               <span>Rechercher</span>
             </button>
-            <button className="ex-btn ex-btn-emerald">
-              <Download size={14} />
-              <span>Cloner</span>
-            </button>
+            <CloneDropdown owner={owner} repo={repo} />
             {repoMeta && (
               <DeleteRepoButton
                 owner={owner}
