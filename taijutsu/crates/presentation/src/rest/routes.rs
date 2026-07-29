@@ -4,6 +4,7 @@
 //! Les use cases sont injectés via `SharedState` (Axum State extractor).
 
 use axum::extract::{Path, Query, State};
+use axum::handler::Handler;
 use axum::response::sse::{Event, KeepAlive, Sse};
 use axum::{Json, Router, routing::get, routing::post};
 use chrono::{DateTime, Utc};
@@ -224,8 +225,16 @@ impl From<OperationReview> for ReviewJson {
 
 /// Construit le routeur Axum principal avec les use cases injectés.
 ///
-/// Intègre automatiquement le middleware Prometheus pour les métriques HTTP.
-/// La route `/metrics` expose les métriques au format Prometheus scrape.
+/// ## Architecture Bouclier Global (Phase 27-pre)
+///
+/// Le routeur est scindé en 3 couches :
+///
+/// 1. **Public** — Aucune authentification (`/health`, `/auth/login`, `/auth/register`, profil)
+/// 2. **Semi-public** — Auth optionnelle (`MaybeAuth`) pour enrichir les réponses
+///    (listing repos, tree, MR en lecture). Les routes mixtes (GET public + POST privé)
+///    utilisent `.route_layer()` pour protéger uniquement les POST.
+/// 3. **Privé** — Auth obligatoire via `require_auth_layer` middleware layer.
+///    Tout handler dans ce routeur est **protégé par défaut**.
 ///
 /// ## Routes Fédérées (Phase 10C)
 /// Les routes `/api/v1/repos/:owner/:repo/operations/...` résolvent le
@@ -235,31 +244,64 @@ pub fn create_router(state: SharedState) -> Router {
     // ── Prometheus Middleware ───────────────────────
     let (prometheus_layer, metric_handle) = axum_prometheus::PrometheusMetricLayer::pair();
 
-    Router::new()
-        // Health & status (sans état)
+    // Closure pour créer le route_layer auth (réutilisé sur routes mixtes)
+    let auth_layer = || {
+        axum::middleware::from_fn_with_state(
+            state.clone(),
+            crate::rest::auth_middleware::require_auth_layer,
+        )
+    };
+
+    // ═══════════════════════════════════════════════════════════
+    // COUCHE 1 : Routes Publiques — Aucune authentification
+    // ═══════════════════════════════════════════════════════════
+    let public = Router::new()
+        // Health & status
         .route("/health", get(health_check))
         .route("/api/v1/status", get(status))
-        // ━━━ Global Routes (cross-repo) ━━━
-        .route("/api/v1/chunks/search", get(search_chunks_handler))
+        // Auth (pré-authentification)
+        .route("/api/v1/auth/register", post(crate::rest::auth_routes::register_handler))
+        .route("/api/v1/auth/login", post(crate::rest::auth_routes::login_handler))
+        // GitHub OAuth (pré-authentification)
+        .route("/api/v1/auth/github", get(crate::rest::auth_routes::github_auth_url_handler))
+        .route("/api/v1/auth/github/callback", post(crate::rest::auth_routes::github_callback_handler))
+        // Profil public acteur (Phase 25B)
         .route(
-            "/api/v1/chunks/semantic-search",
-            post(semantic_search_handler),
+            "/api/v1/actors/{handle}/profile",
+            get(actor_profile_handler),
         )
-        .route("/api/v1/reviews/scores", get(get_score_history_handler))
-        // ━━━ Forge Sociale (Phase 10D — Big Bang) ━━━
-        .route("/api/v1/repos", post(create_repository_handler))
-        // ━━━ Actors → Repos (Préambule Makimono Phase 5) ━━━
+        // Métriques Prometheus
+        .route(
+            "/metrics",
+            get(move || async move { metric_handle.render() }),
+        );
+
+    // ═══════════════════════════════════════════════════════════
+    // COUCHE 2 : Routes Semi-publiques — MaybeAuth (auth optionnelle)
+    //
+    // Accessible sans JWT. Le handler utilise MaybeAuth pour enrichir
+    // la réponse si un JWT valide est présent (ex: repos privés visibles
+    // uniquement par le propriétaire).
+    //
+    // Les routes MIXTES (GET semi-public + POST privé) utilisent
+    // .route_layer() pour protéger uniquement les POST — évite le
+    // panic Axum sur .merge() avec chemins dupliqués.
+    // ═══════════════════════════════════════════════════════════
+    let semi_public = Router::new()
+        // Listing repos (filtrage visibilité selon auth)
         .route(
             "/api/v1/actors/{handle}/repos",
             get(list_repositories_handler),
         )
-        // ━━━ Repo Detail (Préambule Makimono Phase 5) ━━━
+        // Détail repo
         .route("/api/v1/repos/{owner}/{repo}", get(get_repository_handler))
-        // ━━━ Federated Routes (Phase 10C — /repos/:owner/:repo) ━━━
+        // ── Routes mixtes : Operations (GET=MaybeAuth, POST=AuthUser) ──
         .route(
             "/api/v1/repos/{owner}/{repo}/operations",
-            post(federated_create_operation).get(federated_list_operations),
+            get(federated_list_operations)
+                .post(federated_create_operation.layer(auth_layer())),
         )
+        // Opérations en lecture (détail, diff, reviews, ipfs, chunks)
         .route(
             "/api/v1/repos/{owner}/{repo}/operations/{id}",
             get(federated_get_operation),
@@ -280,12 +322,11 @@ pub fn create_router(state: SharedState) -> Router {
             "/api/v1/repos/{owner}/{repo}/operations/{id}/chunks",
             get(federated_get_chunks),
         )
-        // ── Phase 17 — Diff Colorisé (line-by-line) ─────────────────
         .route(
             "/api/v1/repos/{owner}/{repo}/operations/{id}/diff-content",
             get(federated_get_diff_content),
         )
-        // ── Phase 6 — Explorateur de Code (lecture seule) ───────────────
+        // Explorateur de Code (lecture seule)
         .route(
             "/api/v1/repos/{owner}/{repo}/tree/{revision}",
             get(explorer_tree_handler),
@@ -294,28 +335,50 @@ pub fn create_router(state: SharedState) -> Router {
             "/api/v1/repos/{owner}/{repo}/refs",
             get(explorer_refs_handler),
         )
-        // ── Phase 15 — Sensei Chat IA (SSE streaming) ───────────────
-        .route("/api/v1/sensei/chat", post(sensei_chat_handler))
-        .route("/api/v1/sensei/models", get(sensei_models_handler))
-        .route("/api/v1/sensei/warmup", post(sensei_warmup_handler))
-        // ── Phase 19A — Auth & RBAC ─────────────────────────────────
-        .route("/api/v1/auth/register", post(crate::rest::auth_routes::register_handler))
-        .route("/api/v1/auth/login", post(crate::rest::auth_routes::login_handler))
+        // ── Routes mixtes : Merge Requests (GET=MaybeAuth, POST=AuthUser) ──
+        .route(
+            "/api/v1/repos/{owner}/{repo}/mrs",
+            get(list_mrs_handler)
+                .post(create_mr_handler.layer(auth_layer())),
+        )
+        // MR en lecture
+        .route(
+            "/api/v1/repos/{owner}/{repo}/mrs/{number}",
+            get(get_mr_handler),
+        )
+        .route(
+            "/api/v1/repos/{owner}/{repo}/mrs/{number}/diff",
+            get(mr_diff_handler),
+        )
+        // Pré-diff entre branches (formulaire New MR)
+        .route(
+            "/api/v1/repos/{owner}/{repo}/diff-between",
+            get(diff_between_handler),
+        );
+
+    // ═══════════════════════════════════════════════════════════
+    // COUCHE 3 : Routes Privées — require_auth_layer (Bouclier Global)
+    //
+    // TOUTES les routes ici sont protégées par le middleware global.
+    // Même si un handler oublie AuthUser, la requête est déjà rejetée.
+    // ═══════════════════════════════════════════════════════════
+    let private = Router::new()
+        // Profil authentifié
         .route("/api/v1/auth/me", get(crate::rest::auth_routes::me_handler))
+        // Personal Access Tokens
         .route("/api/v1/auth/tokens",
             post(crate::rest::auth_routes::create_pat_handler)
                 .get(crate::rest::auth_routes::list_pats_handler),
         )
-        // ── Phase 19B — GitHub Import ─────────────────────────────
+        // Création de dépôt
+        .route("/api/v1/repos", post(create_repository_handler))
+        // GitHub Import
         .route("/api/v1/repos/import-github", post(import_github_handler))
         .route("/api/v1/github/preview", get(github_preview_handler))
-        // ── Phase 20 — GitHub OAuth ──────────────────────────────
-        .route("/api/v1/auth/github", get(crate::rest::auth_routes::github_auth_url_handler))
-        .route("/api/v1/auth/github/callback", post(crate::rest::auth_routes::github_callback_handler))
-        // ── Phase 20B — Le Clonage Massif ────────────────────────
+        // GitHub Bulk Import (Le Clonage Massif)
         .route("/api/v1/github/my-repos", get(list_github_repos_handler))
         .route("/api/v1/github/bulk-import", post(bulk_import_github_handler))
-        // ── Phase 24 — Soft Delete (Corbeille) ─────────────────
+        // Soft Delete (Corbeille)
         .route(
             "/api/v1/repos/{owner}/{repo}/archive",
             post(archive_repository_handler),
@@ -328,7 +391,7 @@ pub fn create_router(state: SharedState) -> Router {
             "/api/v1/actors/{handle}/trash",
             get(list_trash_handler),
         )
-        // ── Phase 25 — Service Accounts (L'Acte de Naissance) ────────
+        // Service Accounts
         .route(
             "/api/v1/auth/service-accounts",
             post(crate::rest::auth_routes::create_service_account_handler)
@@ -338,20 +401,7 @@ pub fn create_router(state: SharedState) -> Router {
             "/api/v1/auth/service-accounts/{id}",
             axum::routing::delete(crate::rest::auth_routes::delete_service_account_handler),
         )
-        // ── Phase 25B — Profil Public Acteur ─────────────────────
-        .route(
-            "/api/v1/actors/{handle}/profile",
-            get(actor_profile_handler),
-        )
-        // ── Phase 26A — Merge Requests (Le Katana Croisé) ─────────
-        .route(
-            "/api/v1/repos/{owner}/{repo}/mrs",
-            post(create_mr_handler).get(list_mrs_handler),
-        )
-        .route(
-            "/api/v1/repos/{owner}/{repo}/mrs/{number}",
-            get(get_mr_handler),
-        )
+        // MR mutations (review, merge, close)
         .route(
             "/api/v1/repos/{owner}/{repo}/mrs/{number}/reviews",
             post(review_mr_handler),
@@ -364,22 +414,27 @@ pub fn create_router(state: SharedState) -> Router {
             "/api/v1/repos/{owner}/{repo}/mrs/{number}/close",
             post(close_mr_handler),
         )
+        // Sensei Chat IA (🔒 verrouillé — coût GPU)
+        .route("/api/v1/sensei/chat", post(sensei_chat_handler))
+        .route("/api/v1/sensei/models", get(sensei_models_handler))
+        .route("/api/v1/sensei/warmup", post(sensei_warmup_handler))
+        // Chunks & Semantic Search (🔒 verrouillé — pgvector + ONNX)
+        .route("/api/v1/chunks/search", get(search_chunks_handler))
         .route(
-            "/api/v1/repos/{owner}/{repo}/mrs/{number}/diff",
-            get(mr_diff_handler),
+            "/api/v1/chunks/semantic-search",
+            post(semantic_search_handler),
         )
-        // ── Phase 26B — Pré-diff entre branches (formulaire New MR) ────
-        .route(
-            "/api/v1/repos/{owner}/{repo}/diff-between",
-            get(diff_between_handler),
-        )
-        // ── Métriques Prometheus ────────────────────
-        .route(
-            "/metrics",
-            get(move || async move { metric_handle.render() }),
-        )
+        .route("/api/v1/reviews/scores", get(get_score_history_handler))
+        // ── Bouclier Global : middleware auth sur TOUTES les routes privées ──
+        .layer(auth_layer());
+
+    // ═══════════════════════════════════════════════════════════
+    // ASSEMBLAGE — Les 3 couches fusionnées
+    // ═══════════════════════════════════════════════════════════
+    public
+        .merge(semi_public)
+        .merge(private)
         .with_state(state)
-        // Le layer doit être appliqué APRÈS .with_state() pour couvrir toutes les routes
         .layer(prometheus_layer)
 }
 

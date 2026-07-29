@@ -1,8 +1,9 @@
 //! Middleware Auth — Extracteurs Axum pour l'authentification (Phase 19A).
 //!
-//! Deux extracteurs :
+//! Deux extracteurs + un middleware layer :
 //! - `AuthUser` : **obligatoire** — rejette 401 si absent ou invalide
 //! - `MaybeAuth` : **optionnel** — retourne `None` si absent (repos publics)
+//! - `require_auth_layer` : **middleware global** — rejette 401 en amont (Bouclier Global)
 
 use axum::extract::FromRequestParts;
 use axum::http::request::Parts;
@@ -107,3 +108,65 @@ impl FromRequestParts<crate::state::SharedState> for MaybeAuth {
         }
     }
 }
+
+// ── Bouclier Global — require_auth_layer (Phase 27-pre) ──────────────
+
+/// Middleware Axum — Bouclier Global.
+///
+/// Rejette automatiquement toute requête sans JWT valide (401 Unauthorized).
+/// Appliqué comme `.layer()` sur le routeur privé et comme `.route_layer()`
+/// sur les méthodes protégées des routes mixtes.
+///
+/// ## Defense in Depth
+/// Ce middleware est le **filet de sécurité global**. Même si un handler
+/// oublie l'extracteur `AuthUser`, la requête est déjà rejetée en amont.
+/// Les handlers continuent d'utiliser `AuthUser` pour extraire les claims.
+pub async fn require_auth_layer(
+    axum::extract::State(state): axum::extract::State<crate::state::SharedState>,
+    request: axum::extract::Request,
+    next: axum::middleware::Next,
+) -> Result<Response, Response> {
+    let auth_header = request
+        .headers()
+        .get("authorization")
+        .and_then(|v| v.to_str().ok())
+        .map(|s| s.to_string());
+
+    let header = auth_header.ok_or_else(|| {
+        let body = serde_json::json!({
+            "error": {
+                "code": 401,
+                "message": "Authentification requise",
+            }
+        });
+        (StatusCode::UNAUTHORIZED, Json(body)).into_response()
+    })?;
+
+    let token = header
+        .strip_prefix("Bearer ")
+        .or_else(|| header.strip_prefix("bearer "))
+        .ok_or_else(|| {
+            let body = serde_json::json!({
+                "error": {
+                    "code": 401,
+                    "message": "Format Authorization invalide (expected Bearer)",
+                }
+            });
+            (StatusCode::UNAUTHORIZED, Json(body)).into_response()
+        })?;
+
+    // Vérifier le JWT
+    state.auth_service.verify_jwt(token).map_err(|e| {
+        let body = serde_json::json!({
+            "error": {
+                "code": 401,
+                "message": e.to_string(),
+            }
+        });
+        (StatusCode::UNAUTHORIZED, Json(body)).into_response()
+    })?;
+
+    // JWT valide → laisser passer (le handler extraira les claims via AuthUser)
+    Ok(next.run(request).await)
+}
+
