@@ -33,17 +33,47 @@ fn main() -> Result<()> {
     let config = AnbuConfig::load()?;
 
     match cli.command {
-        Commands::Checkpoint {
+        Some(Commands::Checkpoint {
             session,
             latest,
             message,
             attach,
             revision,
             no_tag,
-        } => cmd_checkpoint(config, session, latest, message, attach, revision, no_tag),
-        Commands::Log { limit } => cmd_log(config, limit),
-        Commands::Show { id, artifact } => cmd_show(config, id, artifact),
-        Commands::Sessions { limit, agent: _ } => cmd_sessions(config, limit),
+        }) => cmd_checkpoint(config, session, latest, message, attach, revision, no_tag),
+        Some(Commands::Log { limit }) => cmd_log(config, limit),
+        Some(Commands::Show { id, artifact }) => cmd_show(config, id, artifact),
+        Some(Commands::Sessions { limit, agent: _ }) => cmd_sessions(config, limit),
+        None => {
+            // Friendly welcome banner when no subcommand is given
+            println!();
+            println!(
+                "  {} v{}",
+                "🥷 ANBU 暗部".bold(),
+                env!("CARGO_PKG_VERSION")
+            );
+            println!(
+                "  {}",
+                "AI Context Capture for SHINOBI".dimmed()
+            );
+            println!();
+            println!("  {}", "Commands:".bold());
+            println!("    {}   Capture AI artifacts & tag commit", "checkpoint".cyan());
+            println!("    {}         List saved checkpoints", "log".cyan());
+            println!("    {}        Show checkpoint details", "show".cyan());
+            println!("    {}    List detected AI sessions", "sessions".cyan());
+            println!();
+            println!(
+                "  Quick start: {}",
+                "anbu sessions".cyan().bold()
+            );
+            println!(
+                "  Full help:   {}",
+                "anbu --help".dimmed()
+            );
+            println!();
+            Ok(())
+        }
     }
 }
 
