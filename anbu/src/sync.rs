@@ -1,13 +1,23 @@
 //! Module sync — Client HTTP pour synchroniser les checkpoints vers le serveur.
 //!
 //! Envoie les artifacts capturés localement vers le serveur Taijutsu
-//! via `POST /api/v1/repos/{owner}/{repo}/checkpoints`.
+//! via `POST /api/v1/repos/{owner}/{repo}/checkpoints` en multipart/form-data.
 //! Authentification par Personal Access Token (Basic Auth).
+//!
+//! ## Protocole Multipart (Phase 28C)
+//!
+//! Le payload multipart est structuré ainsi :
+//! 1. **Champ `metadata`** — JSON contenant id, agent, session_id, message, commit_id
+//! 2. **Champs `artifact_N`** — Fichiers binaires streamés depuis le disque
+//!
+//! Le serveur parse les métadonnées en premier, puis itère sur les artifacts
+//! pour les stocker sur IPFS (Genjutsu).
 
 use std::fs;
 use std::path::Path;
 
 use anyhow::{Context, Result, bail};
+use reqwest::blocking::multipart::{Form, Part};
 use serde::{Deserialize, Serialize};
 
 use crate::config::ServerSection;
@@ -22,22 +32,14 @@ pub struct SyncResponse {
     pub total_size: i64,
 }
 
-/// Un artifact encodé pour l'envoi au serveur.
+/// Métadonnées JSON envoyées dans le champ `metadata` du multipart.
 #[derive(Debug, Serialize)]
-struct ArtifactPayload {
-    filename: String,
-    content_b64: String,
-}
-
-/// Payload JSON envoyé au serveur.
-#[derive(Debug, Serialize)]
-struct CheckpointPayload {
+struct CheckpointMetadata {
     id: String,
     agent: String,
     session_id: String,
     message: Option<String>,
     commit_id: Option<String>,
-    artifacts: Vec<ArtifactPayload>,
 }
 
 /// Client HTTP pour la synchronisation ANBU → Taijutsu.
@@ -52,7 +54,7 @@ impl AnbuSyncClient {
     /// Crée un nouveau client de synchronisation.
     pub fn new(server: &ServerSection) -> Result<Self> {
         let client = reqwest::blocking::Client::builder()
-            .timeout(std::time::Duration::from_secs(60))
+            .timeout(std::time::Duration::from_secs(300)) // 5 min pour gros fichiers
             .build()
             .context("Failed to create HTTP client")?;
 
@@ -64,11 +66,11 @@ impl AnbuSyncClient {
         })
     }
 
-    /// Synchronise un checkpoint vers le serveur.
+    /// Synchronise un checkpoint vers le serveur via multipart/form-data.
     ///
     /// ## Flux
-    /// 1. Lit chaque artifact depuis le disque local
-    /// 2. Encode en base64
+    /// 1. Construit les métadonnées JSON (champ `metadata`)
+    /// 2. Ajoute chaque artifact comme champ `artifact_N` (streaming fichier)
     /// 3. POST vers `/api/v1/repos/{owner}/{repo}/checkpoints`
     /// 4. Retourne la réponse serveur (CID IPFS, etc.)
     pub fn sync_checkpoint(
@@ -77,30 +79,33 @@ impl AnbuSyncClient {
         repo: &str,
         checkpoint: &Checkpoint,
     ) -> Result<SyncResponse> {
-        // 1. Lire et encoder les artifacts
-        let mut artifacts = Vec::new();
-        for art in &checkpoint.artifacts {
-            let content = fs::read(&art.stored_path)
-                .with_context(|| format!("Failed to read artifact: {}", art.stored_path.display()))?;
-
-            // Encoder en base64 (inline, pas de crate externe)
-            let b64 = base64_encode(&content);
-
-            artifacts.push(ArtifactPayload {
-                filename: art.filename.clone(),
-                content_b64: b64,
-            });
-        }
-
-        // 2. Construire le payload
-        let payload = CheckpointPayload {
+        // 1. Métadonnées JSON (premier champ — le serveur le parse en premier)
+        let metadata = CheckpointMetadata {
             id: checkpoint.id.to_string(),
             agent: checkpoint.agent.to_string(),
             session_id: checkpoint.session_id.clone(),
             message: checkpoint.message.clone(),
             commit_id: checkpoint.commit_id.clone(),
-            artifacts,
         };
+
+        let metadata_json = serde_json::to_string(&metadata)
+            .context("Failed to serialize checkpoint metadata")?;
+
+        // 2. Construire le formulaire multipart
+        let mut form = Form::new()
+            .text("metadata", metadata_json);
+
+        for (i, art) in checkpoint.artifacts.iter().enumerate() {
+            let content = fs::read(&art.stored_path)
+                .with_context(|| format!("Failed to read artifact: {}", art.stored_path.display()))?;
+
+            let part = Part::bytes(content)
+                .file_name(art.filename.clone())
+                .mime_str("application/octet-stream")
+                .context("Failed to set MIME type")?;
+
+            form = form.part(format!("artifact_{i}"), part);
+        }
 
         // 3. POST vers le serveur
         let url = format!(
@@ -112,7 +117,7 @@ impl AnbuSyncClient {
             .client
             .post(&url)
             .basic_auth(&self.login, Some(&self.pat))
-            .json(&payload)
+            .multipart(form)
             .send()
             .with_context(|| format!("Failed to send checkpoint to {url}"))?;
 
@@ -144,60 +149,43 @@ pub fn purge_local_checkpoint(checkpoint_dir: &Path) -> Result<()> {
     Ok(())
 }
 
-// ── Base64 encoder (inline, pas de crate externe) ─────────────────────
-
-fn base64_encode(data: &[u8]) -> String {
-    const ENCODE_TABLE: &[u8; 64] =
-        b"ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/";
-
-    let mut result = String::with_capacity((data.len() + 2) / 3 * 4);
-
-    for chunk in data.chunks(3) {
-        let b0 = chunk[0] as u32;
-        let b1 = if chunk.len() > 1 { chunk[1] as u32 } else { 0 };
-        let b2 = if chunk.len() > 2 { chunk[2] as u32 } else { 0 };
-
-        let triple = (b0 << 16) | (b1 << 8) | b2;
-
-        result.push(ENCODE_TABLE[((triple >> 18) & 0x3F) as usize] as char);
-        result.push(ENCODE_TABLE[((triple >> 12) & 0x3F) as usize] as char);
-
-        if chunk.len() > 1 {
-            result.push(ENCODE_TABLE[((triple >> 6) & 0x3F) as usize] as char);
-        } else {
-            result.push('=');
-        }
-
-        if chunk.len() > 2 {
-            result.push(ENCODE_TABLE[(triple & 0x3F) as usize] as char);
-        } else {
-            result.push('=');
-        }
-    }
-
-    result
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
 
     #[test]
-    fn test_base64_encode_hello() {
-        assert_eq!(base64_encode(b"Hello"), "SGVsbG8=");
+    fn test_checkpoint_metadata_serialization() {
+        let metadata = CheckpointMetadata {
+            id: "550e8400-e29b-41d4-a716-446655440000".to_string(),
+            agent: "antigravity".to_string(),
+            session_id: "test-session-123".to_string(),
+            message: Some("Phase 28C test".to_string()),
+            commit_id: None,
+        };
+        let json = serde_json::to_string(&metadata).unwrap();
+        assert!(json.contains("antigravity"));
+        assert!(json.contains("550e8400"));
+        assert!(json.contains("Phase 28C test"));
     }
 
     #[test]
-    fn test_base64_encode_empty() {
-        assert_eq!(base64_encode(b""), "");
+    fn test_purge_nonexistent_dir() {
+        // Purge d'un répertoire inexistant ne doit pas échouer
+        let result = purge_local_checkpoint(std::path::Path::new("/nonexistent/path/anbu/test"));
+        assert!(result.is_ok());
     }
 
     #[test]
-    fn test_base64_encode_roundtrip_concept() {
-        let original = b"ANBU checkpoint test data 2026";
-        let encoded = base64_encode(original);
-        assert!(!encoded.is_empty());
-        // The encoded string should be ~33% longer
-        assert!(encoded.len() >= original.len());
+    fn test_sync_response_deserialization() {
+        let json = r#"{
+            "id": "test-id-123",
+            "ipfs_cid": "Qmb9rk4jyqdu...",
+            "artifact_count": 3,
+            "total_size": 12345
+        }"#;
+        let response: SyncResponse = serde_json::from_str(json).unwrap();
+        assert_eq!(response.id, "test-id-123");
+        assert_eq!(response.artifact_count, 3);
+        assert_eq!(response.total_size, 12345);
     }
 }

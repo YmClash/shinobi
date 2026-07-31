@@ -3,7 +3,7 @@
 //! Point d'entrée HTTP du système SHINOBI.
 //! Les use cases sont injectés via `SharedState` (Axum State extractor).
 
-use axum::extract::{Path, Query, State};
+use axum::extract::{DefaultBodyLimit, Multipart, Path, Query, State};
 use axum::handler::Handler;
 use axum::response::sse::{Event, KeepAlive, Sse};
 use axum::{Json, Router, routing::get, routing::post};
@@ -12,7 +12,6 @@ use futures_util::StreamExt;
 use serde::{Deserialize, Serialize};
 use tracing::{info, warn};
 use uuid::Uuid;
-use base64::Engine as _;
 
 use application::use_cases::create_operation::CreateOperationCommand;
 use application::use_cases::create_repository::CreateRepositoryCommand;
@@ -356,11 +355,12 @@ pub fn create_router(state: SharedState) -> Router {
             "/api/v1/repos/{owner}/{repo}/diff-between",
             get(diff_between_handler),
         )
-        // ── Phase 28B — ANBU Checkpoints (GET=MaybeAuth, POST=AuthUser) ──
+        // ── Phase 28C — ANBU Checkpoints (GET=MaybeAuth, POST=Multipart+AuthUser) ──
         .route(
             "/api/v1/repos/{owner}/{repo}/checkpoints",
             get(list_checkpoints_handler)
-                .post(create_checkpoint_handler),
+                .post(create_checkpoint_handler)
+                .layer(DefaultBodyLimit::max(250 * 1024 * 1024)), // 250 MB
         )
         .route(
             "/api/v1/repos/{owner}/{repo}/checkpoints/{checkpoint_id}",
@@ -2233,16 +2233,13 @@ async fn diff_between_handler(
 }
 
 // ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-// ─── Phase 28B — ANBU Checkpoint Handlers
+// ─── Phase 28C — ANBU Checkpoint Handlers (Multipart)
 // ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 
-/// Body JSON pour POST /api/v1/repos/{owner}/{repo}/checkpoints.
-///
-/// Les artifacts sont envoyés en base64 dans le JSON body.
-/// (Multipart serait optimal pour les gros fichiers, mais JSON
-/// simplifie le client CLI reqwest et les tests curl.)
+/// Métadonnées JSON envoyées dans le champ `metadata` du multipart.
+/// Parsé en premier avant les fichiers artifacts.
 #[derive(Debug, Deserialize)]
-struct CreateCheckpointBody {
+struct CheckpointMetadata {
     /// UUID du checkpoint (provient du CLI local).
     id: Uuid,
     /// Agent IA source (ex: "antigravity").
@@ -2255,62 +2252,95 @@ struct CreateCheckpointBody {
     /// Référence jj/git.
     #[serde(default)]
     commit_id: Option<String>,
-    /// Artifacts : liste de fichiers avec nom et contenu base64.
-    artifacts: Vec<CheckpointArtifactBody>,
-}
-
-/// Un artifact dans le body du checkpoint.
-#[derive(Debug, Deserialize)]
-struct CheckpointArtifactBody {
-    /// Nom du fichier (ex: "implementation_plan.md").
-    filename: String,
-    /// Contenu encodé en base64.
-    content_b64: String,
 }
 
 /// Créer un checkpoint ANBU — `POST /api/v1/repos/{owner}/{repo}/checkpoints`
 ///
 /// 🔒 Authentification obligatoire (PAT ou JWT).
+///
+/// ## Protocole Multipart (Phase 28C)
+///
+/// Le payload `multipart/form-data` est structuré ainsi :
+/// 1. **Champ `metadata`** — JSON contenant id, agent, session_id, message, commit_id
+/// 2. **Champs `artifact_N`** — Fichiers binaires avec filename dans Content-Disposition
+///
+/// Le serveur parse d'abord les métadonnées, puis itère sur les fichiers
+/// pour les stocker sur IPFS via le use case CreateCheckpoint.
 async fn create_checkpoint_handler(
     State(state): State<SharedState>,
     Path((owner, repo)): Path<(String, String)>,
     auth: AuthUser,
-    Json(body): Json<CreateCheckpointBody>,
+    mut multipart: Multipart,
 ) -> Result<(axum::http::StatusCode, Json<serde_json::Value>), AppError> {
     let actor_id = auth.0.actor_id();
+
+    // Résoudre le repo en premier (fail fast)
+    let repo_entity = state.resolve_repo.execute(&owner, &repo).await?;
+
+    // 1. Parser le multipart : métadonnées d'abord, puis artifacts
+    let mut metadata: Option<CheckpointMetadata> = None;
+    let mut artifacts: Vec<(String, Vec<u8>)> = Vec::new();
+
+    while let Some(field) = multipart.next_field().await.map_err(|e| {
+        AppError::from(DomainError::BusinessRule(format!("Multipart read error: {e}")))
+    })? {
+        let field_name = field.name().unwrap_or("").to_string();
+
+        if field_name == "metadata" {
+            // Champ métadonnées : parse JSON
+            let text = field.text().await.map_err(|e| {
+                AppError::from(DomainError::BusinessRule(format!(
+                    "Failed to read metadata field: {e}"
+                )))
+            })?;
+            let meta: CheckpointMetadata = serde_json::from_str(&text).map_err(|e| {
+                AppError::from(DomainError::BusinessRule(format!(
+                    "Invalid metadata JSON: {e}"
+                )))
+            })?;
+            metadata = Some(meta);
+        } else if field_name.starts_with("artifact_") {
+            // Champ artifact : lire le contenu binaire
+            let filename = field
+                .file_name()
+                .unwrap_or("unknown")
+                .to_string();
+            let data = field.bytes().await.map_err(|e| {
+                AppError::from(DomainError::BusinessRule(format!(
+                    "Failed to read artifact {filename}: {e}"
+                )))
+            })?;
+            artifacts.push((filename, data.to_vec()));
+        } else {
+            warn!(field = %field_name, "ANBU: Unknown multipart field — ignored");
+        }
+    }
+
+    // 2. Valider que les métadonnées ont été reçues
+    let meta = metadata.ok_or_else(|| {
+        AppError::from(DomainError::BusinessRule(
+            "Missing 'metadata' field in multipart body".to_string(),
+        ))
+    })?;
 
     info!(
         owner = %owner,
         repo = %repo,
-        checkpoint_id = %body.id,
-        agent = %body.agent,
-        artifact_count = body.artifacts.len(),
-        "REST: ANBU CreateCheckpoint reçu"
+        checkpoint_id = %meta.id,
+        agent = %meta.agent,
+        artifact_count = artifacts.len(),
+        "REST: ANBU CreateCheckpoint reçu (Multipart)"
     );
 
-    // Résoudre le repo
-    let repo_entity = state.resolve_repo.execute(&owner, &repo).await?;
-
-    // Décoder les artifacts base64
-    let mut artifacts: Vec<(String, Vec<u8>)> = Vec::with_capacity(body.artifacts.len());
-    for art in &body.artifacts {
-        let data = base64::engine::general_purpose::STANDARD
-            .decode(&art.content_b64)
-            .map_err(|e| AppError::from(DomainError::BusinessRule(
-                format!("Invalid base64 for {}: {e}", art.filename)
-            )))?;
-        artifacts.push((art.filename.clone(), data));
-    }
-
-    // Créer le checkpoint via le use case
+    // 3. Créer le checkpoint via le use case
     let cmd = application::use_cases::create_checkpoint::CreateCheckpointCommand {
-        id: body.id,
+        id: meta.id,
         repository_id: repo_entity.id,
         actor_id,
-        agent: body.agent,
-        session_id: body.session_id,
-        message: body.message,
-        commit_id: body.commit_id,
+        agent: meta.agent,
+        session_id: meta.session_id,
+        message: meta.message,
+        commit_id: meta.commit_id,
         artifacts,
     };
 

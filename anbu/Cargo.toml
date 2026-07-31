@@ -4,6 +4,10 @@ version = "0.1.0"
 edition = "2024"
 description = "ANBU 暗部 — AI Context Capture CLI for SHINOBI"
 license = "MIT"
+authors = ["YmClash"]
+repository = "https://github.com/YmClash/shinobi"
+keywords = ["ai", "context", "capture", "vcs"]
+categories = ["development-tools", "command-line-utilities"]
 
 [[bin]]
 name = "anbu"
@@ -13,6 +17,7 @@ path = "src/main.rs"
 # CLI
 clap = { version = "4", features = ["derive"] }
 colored = "3"
+dialoguer = "0.11"
 
 # Filesystem
 walkdir = "2"
@@ -33,7 +38,8 @@ hex = "0.4"
 rusqlite = { version = "0.34", features = ["bundled"] }
 
 # HTTP client (sync with server)
-reqwest = { version = "0.12", features = ["blocking", "json"] }
+reqwest = { version = "0.12", features = ["blocking", "json", "multipart"] }
 
 # Error handling
 anyhow = "1"
+

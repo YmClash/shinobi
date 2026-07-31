@@ -14,6 +14,7 @@ mod cli;
 mod collectors;
 mod config;
 mod models;
+mod setup;
 mod storage;
 mod sync;
 mod vcs;
@@ -24,6 +25,7 @@ use colored::Colorize;
 
 use crate::cli::{Cli, Commands};
 use crate::collectors::antigravity::AntigravityCollector;
+use crate::collectors::copilot::CopilotCollector;
 use crate::collectors::Collector;
 use crate::config::AnbuConfig;
 use crate::storage::artifact_store::ArtifactStore;
@@ -44,8 +46,9 @@ fn main() -> Result<()> {
         }) => cmd_checkpoint(config, session, latest, message, attach, revision, no_tag),
         Some(Commands::Log { limit }) => cmd_log(config, limit),
         Some(Commands::Show { id, artifact }) => cmd_show(config, id, artifact),
-        Some(Commands::Sessions { limit, agent: _ }) => cmd_sessions(config, limit),
+        Some(Commands::Sessions { limit, agent, all_workspaces }) => cmd_sessions(config, limit, agent, all_workspaces),
         Some(Commands::Sync { owner, repo, id }) => cmd_sync(config, owner, repo, id),
+        Some(Commands::Setup { server_url, login, pat }) => cmd_setup(server_url, login, pat),
         None => {
             // Friendly welcome banner when no subcommand is given
             println!();
@@ -64,6 +67,8 @@ fn main() -> Result<()> {
             println!("    {}         List saved checkpoints", "log".cyan());
             println!("    {}        Show checkpoint details", "show".cyan());
             println!("    {}    List detected AI sessions", "sessions".cyan());
+            println!("    {}        Sync checkpoints to server", "sync".cyan());
+            println!("    {}       Configure server connection", "setup".cyan());
             println!();
             println!(
                 "  Quick start: {}",
@@ -373,26 +378,59 @@ fn cmd_show(config: AnbuConfig, id: String, artifact_name: Option<String>) -> Re
     Ok(())
 }
 
-fn cmd_sessions(config: AnbuConfig, limit: usize) -> Result<()> {
-    let collector = AntigravityCollector::new(config.brain_path());
-    let sessions = collector.detect_sessions()?;
+fn cmd_sessions(config: AnbuConfig, limit: usize, agent_filter: Option<String>, all_workspaces: bool) -> Result<()> {
+    let mut all_sessions = Vec::new();
 
-    if sessions.is_empty() {
+    // Filtrer par agent si spécifié
+    let show_antigravity = agent_filter.as_ref().map_or(true, |a| {
+        a.eq_ignore_ascii_case("antigravity") || a.eq_ignore_ascii_case("gemini")
+    });
+    let show_copilot = agent_filter.as_ref().map_or(true, |a| {
+        a.eq_ignore_ascii_case("copilot") || a.eq_ignore_ascii_case("github-copilot")
+    });
+
+    // Scanner Antigravity
+    if show_antigravity {
+        let collector = AntigravityCollector::new(config.brain_path());
+        match collector.detect_sessions() {
+            Ok(sessions) => all_sessions.extend(sessions),
+            Err(e) => eprintln!("  {} Antigravity scan: {e}", "⚠".yellow()),
+        }
+    }
+
+    // Scanner Copilot
+    if show_copilot {
+        let collector = CopilotCollector::new(all_workspaces);
+        match collector.detect_sessions() {
+            Ok(sessions) => all_sessions.extend(sessions),
+            Err(e) => eprintln!("  {} Copilot scan: {e}", "⚠".yellow()),
+        }
+    }
+
+    // Trier par date décroissante (toutes sources confondues)
+    all_sessions.sort_by(|a, b| b.last_modified.cmp(&a.last_modified));
+
+    if all_sessions.is_empty() {
         println!(
-            "  {} No AI sessions detected at {}",
+            "  {} No AI sessions detected",
             "ℹ".blue(),
-            config.brain_path().display()
         );
+        if show_antigravity {
+            println!("    Antigravity brain: {}", config.brain_path().display());
+        }
+        if show_copilot {
+            println!("    Copilot: VS Code workspaceStorage");
+        }
         return Ok(());
     }
 
-    let display_count = limit.min(sessions.len());
+    let display_count = limit.min(all_sessions.len());
 
     println!();
     println!(
         " {} {} session(s) detected (showing {})",
-        "🧠 Antigravity Sessions".bold(),
-        sessions.len(),
+        "🧠 AI Sessions".bold(),
+        all_sessions.len(),
         display_count
     );
     println!(
@@ -400,7 +438,7 @@ fn cmd_sessions(config: AnbuConfig, limit: usize) -> Result<()> {
         "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━".dimmed()
     );
 
-    for session in sessions.iter().take(display_count) {
+    for session in all_sessions.iter().take(display_count) {
         let short_id = &session.id[..8.min(session.id.len())];
         let date = session.last_modified.format("%Y-%m-%d %H:%M");
         let summary = session
@@ -415,10 +453,11 @@ fn cmd_sessions(config: AnbuConfig, limit: usize) -> Result<()> {
         };
 
         println!(
-            "  {}  {}  {} artifact(s)  {}",
+            "  {}  {}  {} artifact(s)  {}  {}",
             short_id.cyan().bold(),
             date.to_string().dimmed(),
             session.artifact_count.to_string().green(),
+            session.agent.to_string().magenta(),
             truncated.white()
         );
     }
@@ -564,3 +603,17 @@ fn format_size(bytes: u64) -> String {
         format!("{:.1} MB", bytes as f64 / (1024.0 * 1024.0))
     }
 }
+
+// ── Setup Command ─────────────────────────────────────────────────────────
+
+/// Handler: `anbu setup`
+///
+/// Lance le wizard de configuration serveur (interactif ou silencieux).
+fn cmd_setup(
+    server_url: Option<String>,
+    login: Option<String>,
+    pat: Option<String>,
+) -> Result<()> {
+    setup::run_setup(server_url, login, pat)
+}
+

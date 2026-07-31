@@ -75,9 +75,10 @@ pub struct Artifact {
 pub enum AgentKind {
     /// Gemini / Antigravity (Google DeepMind).
     Antigravity,
+    /// GitHub Copilot (VS Code).
+    Copilot,
     // Future V2:
     // Cursor,
-    // Copilot,
     // Claude,
 }
 
@@ -85,6 +86,7 @@ impl fmt::Display for AgentKind {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
             AgentKind::Antigravity => write!(f, "antigravity"),
+            AgentKind::Copilot => write!(f, "copilot"),
         }
     }
 }
@@ -95,7 +97,8 @@ impl std::str::FromStr for AgentKind {
     fn from_str(s: &str) -> Result<Self, Self::Err> {
         match s.to_lowercase().as_str() {
             "antigravity" | "gemini" => Ok(AgentKind::Antigravity),
-            _ => Err(anyhow::anyhow!("Unknown agent: {s}. Supported: antigravity")),
+            "copilot" | "github-copilot" => Ok(AgentKind::Copilot),
+            _ => Err(anyhow::anyhow!("Unknown agent: {s}. Supported: antigravity, copilot")),
         }
     }
 }

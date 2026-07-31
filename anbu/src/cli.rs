@@ -92,9 +92,13 @@ pub enum Commands {
         #[arg(short = 'n', long, default_value = "10")]
         limit: usize,
 
-        /// Filter by agent type
+        /// Filter by agent type (antigravity, copilot)
         #[arg(long)]
         agent: Option<String>,
+
+        /// Show sessions from all VS Code workspaces (Copilot)
+        #[arg(long)]
+        all_workspaces: bool,
     },
 
     /// Sync local checkpoints to the SHINOBI server (IPFS + PostgreSQL)
@@ -115,5 +119,25 @@ pub enum Commands {
         /// Sync only a specific checkpoint (default: all unsynced)
         #[arg(long)]
         id: Option<String>,
+    },
+
+    /// Configure ANBU server connection (interactive wizard)
+    ///
+    /// Sets up the connection to your SHINOBI server by configuring
+    /// the server URL, login, and Personal Access Token (PAT).
+    /// By default, launches an interactive wizard. Use flags for
+    /// silent/scripted configuration.
+    Setup {
+        /// Server URL (ex: "http://localhost:3000")
+        #[arg(long)]
+        server_url: Option<String>,
+
+        /// Login username
+        #[arg(long)]
+        login: Option<String>,
+
+        /// Personal Access Token (will be masked in interactive mode)
+        #[arg(long)]
+        pat: Option<String>,
     },
 }

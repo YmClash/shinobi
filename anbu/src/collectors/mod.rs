@@ -4,6 +4,7 @@
 //! scanner ses répertoires de données et extraire les artifacts pertinents.
 
 pub mod antigravity;
+pub mod copilot;
 
 use std::path::Path;
 
