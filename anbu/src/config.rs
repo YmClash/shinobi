@@ -19,6 +19,10 @@ pub struct AnbuConfig {
     /// Section ANBU.
     #[serde(default)]
     pub anbu: AnbuSection,
+
+    /// Section serveur (Phase 28B — Sync).
+    #[serde(default)]
+    pub server: Option<ServerSection>,
 }
 
 /// Section `[anbu]` de la configuration.
@@ -35,6 +39,19 @@ pub struct AnbuSection {
     /// Attacher automatiquement les trailers jj aux commits ?
     #[serde(default = "default_true")]
     pub auto_trailers: bool,
+}
+
+/// Section `[server]` — Configuration du serveur SHINOBI (Phase 28B).
+///
+/// Nécessaire pour `anbu sync`. Si absent, `anbu sync` retourne une erreur.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ServerSection {
+    /// URL du serveur Taijutsu (ex: "http://localhost:3000").
+    pub url: String,
+    /// Personal Access Token pour l'authentification.
+    pub pat: String,
+    /// Login de l'utilisateur (pour Basic Auth).
+    pub login: String,
 }
 
 fn default_true() -> bool {
@@ -118,6 +135,7 @@ impl Default for AnbuConfig {
     fn default() -> Self {
         Self {
             anbu: AnbuSection::default(),
+            server: None,
         }
     }
 }

@@ -471,6 +471,21 @@ async fn main() -> anyhow::Result<()> {
 
     info!("⚔️ Merge Requests initialisé (Phase 26A — Le Katana Croisé)");
 
+    // ── Phase 28B — ANBU Checkpoints ──────────────────
+    let anbu_repo: Arc<dyn domain::ports::anbu_repository::AnbuRepository> = Arc::new(
+        infrastructure::persistence::anbu_repo::PostgresAnbuRepository::new(pg_pool.clone()),
+    );
+    let create_checkpoint = Arc::new(
+        application::use_cases::create_checkpoint::CreateCheckpointUseCase::new(
+            anbu_repo.clone(),
+            content_store.clone(),
+        ),
+    );
+    let list_checkpoints_uc = Arc::new(
+        application::use_cases::list_checkpoints::ListCheckpointsUseCase::new(anbu_repo.clone()),
+    );
+    info!("🥷 ANBU Checkpoints initialisé (Phase 28B)");
+
     let shared_state = SharedState {
         create_operation,
         get_operation,
@@ -524,6 +539,9 @@ async fn main() -> anyhow::Result<()> {
         merge_mr,
         close_mr,
         mr_diff,
+        // Phase 28B — ANBU Checkpoints
+        create_checkpoint,
+        list_checkpoints: list_checkpoints_uc,
     };
 
     // ── Git Bridge HTTP (Phase 12A) ────────────────────

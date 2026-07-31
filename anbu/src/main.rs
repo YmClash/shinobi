@@ -15,6 +15,7 @@ mod collectors;
 mod config;
 mod models;
 mod storage;
+mod sync;
 mod vcs;
 
 use anyhow::Result;
@@ -44,6 +45,7 @@ fn main() -> Result<()> {
         Some(Commands::Log { limit }) => cmd_log(config, limit),
         Some(Commands::Show { id, artifact }) => cmd_show(config, id, artifact),
         Some(Commands::Sessions { limit, agent: _ }) => cmd_sessions(config, limit),
+        Some(Commands::Sync { owner, repo, id }) => cmd_sync(config, owner, repo, id),
         None => {
             // Friendly welcome banner when no subcommand is given
             println!();
@@ -430,6 +432,122 @@ fn cmd_sessions(config: AnbuConfig, limit: usize) -> Result<()> {
         "  Capture with: {}",
         "anbu checkpoint --session <id>".cyan()
     );
+
+    Ok(())
+}
+
+// ── Sync Command ─────────────────────────────────────────────────────────
+
+/// Handler: `anbu sync --owner <owner> --repo <repo>`
+///
+/// Synchronise les checkpoints locaux non-synchro vers le serveur Taijutsu.
+/// Après succès (201 Created), purge les fichiers locaux.
+fn cmd_sync(
+    config: AnbuConfig,
+    owner: String,
+    repo: String,
+    specific_id: Option<String>,
+) -> Result<()> {
+    // 1. Vérifier la configuration serveur
+    let server_config = config.server.as_ref().ok_or_else(|| {
+        anyhow::anyhow!(
+            "Server not configured. Add [server] section to ~/.shinobi/config.toml:\n\n\
+             [server]\n\
+             url = \"http://localhost:3000\"\n\
+             login = \"naruto\"\n\
+             pat = \"shb_...\"\n"
+        )
+    })?;
+
+    // 2. Ouvrir l'index SQLite
+    let index = AnbuIndex::open(&config.database_path())?;
+
+    // 3. Récupérer les checkpoints à synchroniser
+    let checkpoints = if let Some(ref id_prefix) = specific_id {
+        vec![index.find_checkpoint(id_prefix)?]
+    } else {
+        index.list_unsynced()?
+    };
+
+    if checkpoints.is_empty() {
+        println!("\n  {} All checkpoints are already synced! 🎯\n", "✅".green());
+        return Ok(());
+    }
+
+    println!();
+    println!(
+        "  {} Syncing {} checkpoint(s) to {}/{}",
+        "🥷".bold(),
+        checkpoints.len(),
+        owner.cyan(),
+        repo.cyan()
+    );
+    println!(
+        "  Server: {}",
+        server_config.url.dimmed()
+    );
+    println!();
+
+    // 4. Créer le client HTTP
+    let client = sync::AnbuSyncClient::new(server_config)?;
+
+    // 5. Envoyer chaque checkpoint
+    let mut synced_count = 0;
+    let mut failed_count = 0;
+
+    for checkpoint in &checkpoints {
+        let short_id = &checkpoint.id.to_string()[..8];
+        print!("  {} {short_id}...", "→".blue());
+
+        match client.sync_checkpoint(&owner, &repo, checkpoint) {
+            Ok(response) => {
+                // Marquer comme synchronisé dans SQLite
+                index.mark_synced(
+                    &checkpoint.id.to_string(),
+                    &response.id,
+                )?;
+
+                // Purge locale (Alerte Vegapunk)
+                let checkpoint_dir = std::env::current_dir()?
+                    .join(".shinobi")
+                    .join("anbu")
+                    .join("checkpoints")
+                    .join(checkpoint.id.to_string());
+                if let Err(e) = sync::purge_local_checkpoint(&checkpoint_dir) {
+                    eprintln!(" ⚠️ purge failed: {e}");
+                }
+
+                println!(
+                    " {} (IPFS: {})",
+                    "✓ synced".green(),
+                    &response.ipfs_cid[..12.min(response.ipfs_cid.len())].dimmed()
+                );
+                synced_count += 1;
+            }
+            Err(e) => {
+                println!(" {} {e}", "✗ failed".red());
+                failed_count += 1;
+            }
+        }
+    }
+
+    // 6. Résumé
+    println!();
+    println!("━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━");
+    if failed_count == 0 {
+        println!(
+            "  {} {synced_count} checkpoint(s) synced to {owner}/{repo}",
+            "✅".green()
+        );
+    } else {
+        println!(
+            "  {} {synced_count} synced, {} failed",
+            "⚠️".yellow(),
+            failed_count.to_string().red()
+        );
+    }
+    println!("━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━");
+    println!();
 
     Ok(())
 }

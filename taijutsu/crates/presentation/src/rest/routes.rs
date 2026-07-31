@@ -12,6 +12,7 @@ use futures_util::StreamExt;
 use serde::{Deserialize, Serialize};
 use tracing::{info, warn};
 use uuid::Uuid;
+use base64::Engine as _;
 
 use application::use_cases::create_operation::CreateOperationCommand;
 use application::use_cases::create_repository::CreateRepositoryCommand;
@@ -354,6 +355,16 @@ pub fn create_router(state: SharedState) -> Router {
         .route(
             "/api/v1/repos/{owner}/{repo}/diff-between",
             get(diff_between_handler),
+        )
+        // ── Phase 28B — ANBU Checkpoints (GET=MaybeAuth, POST=AuthUser) ──
+        .route(
+            "/api/v1/repos/{owner}/{repo}/checkpoints",
+            get(list_checkpoints_handler)
+                .post(create_checkpoint_handler),
+        )
+        .route(
+            "/api/v1/repos/{owner}/{repo}/checkpoints/{checkpoint_id}",
+            get(get_checkpoint_handler),
         );
 
     // ═══════════════════════════════════════════════════════════
@@ -2218,5 +2229,180 @@ async fn diff_between_handler(
     Ok(Json(serde_json::json!({
         "files": files_json,
         "total_files": files_json.len(),
+    })))
+}
+
+// ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+// ─── Phase 28B — ANBU Checkpoint Handlers
+// ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+/// Body JSON pour POST /api/v1/repos/{owner}/{repo}/checkpoints.
+///
+/// Les artifacts sont envoyés en base64 dans le JSON body.
+/// (Multipart serait optimal pour les gros fichiers, mais JSON
+/// simplifie le client CLI reqwest et les tests curl.)
+#[derive(Debug, Deserialize)]
+struct CreateCheckpointBody {
+    /// UUID du checkpoint (provient du CLI local).
+    id: Uuid,
+    /// Agent IA source (ex: "antigravity").
+    agent: String,
+    /// Session ID de l'agent.
+    session_id: String,
+    /// Message utilisateur.
+    #[serde(default)]
+    message: Option<String>,
+    /// Référence jj/git.
+    #[serde(default)]
+    commit_id: Option<String>,
+    /// Artifacts : liste de fichiers avec nom et contenu base64.
+    artifacts: Vec<CheckpointArtifactBody>,
+}
+
+/// Un artifact dans le body du checkpoint.
+#[derive(Debug, Deserialize)]
+struct CheckpointArtifactBody {
+    /// Nom du fichier (ex: "implementation_plan.md").
+    filename: String,
+    /// Contenu encodé en base64.
+    content_b64: String,
+}
+
+/// Créer un checkpoint ANBU — `POST /api/v1/repos/{owner}/{repo}/checkpoints`
+///
+/// 🔒 Authentification obligatoire (PAT ou JWT).
+async fn create_checkpoint_handler(
+    State(state): State<SharedState>,
+    Path((owner, repo)): Path<(String, String)>,
+    auth: AuthUser,
+    Json(body): Json<CreateCheckpointBody>,
+) -> Result<(axum::http::StatusCode, Json<serde_json::Value>), AppError> {
+    let actor_id = auth.0.actor_id();
+
+    info!(
+        owner = %owner,
+        repo = %repo,
+        checkpoint_id = %body.id,
+        agent = %body.agent,
+        artifact_count = body.artifacts.len(),
+        "REST: ANBU CreateCheckpoint reçu"
+    );
+
+    // Résoudre le repo
+    let repo_entity = state.resolve_repo.execute(&owner, &repo).await?;
+
+    // Décoder les artifacts base64
+    let mut artifacts: Vec<(String, Vec<u8>)> = Vec::with_capacity(body.artifacts.len());
+    for art in &body.artifacts {
+        let data = base64::engine::general_purpose::STANDARD
+            .decode(&art.content_b64)
+            .map_err(|e| AppError::from(DomainError::BusinessRule(
+                format!("Invalid base64 for {}: {e}", art.filename)
+            )))?;
+        artifacts.push((art.filename.clone(), data));
+    }
+
+    // Créer le checkpoint via le use case
+    let cmd = application::use_cases::create_checkpoint::CreateCheckpointCommand {
+        id: body.id,
+        repository_id: repo_entity.id,
+        actor_id,
+        agent: body.agent,
+        session_id: body.session_id,
+        message: body.message,
+        commit_id: body.commit_id,
+        artifacts,
+    };
+
+    let checkpoint = state.create_checkpoint.execute(cmd).await?;
+
+    Ok((
+        axum::http::StatusCode::CREATED,
+        Json(serde_json::json!({
+            "id": checkpoint.id,
+            "ipfs_cid": checkpoint.ipfs_cid,
+            "artifact_count": checkpoint.artifact_count,
+            "total_size": checkpoint.total_size,
+            "created_at": checkpoint.created_at,
+        })),
+    ))
+}
+
+/// Lister les checkpoints ANBU — `GET /api/v1/repos/{owner}/{repo}/checkpoints`
+async fn list_checkpoints_handler(
+    State(state): State<SharedState>,
+    Path((owner, repo)): Path<(String, String)>,
+    auth: MaybeAuth,
+) -> Result<Json<serde_json::Value>, AppError> {
+    info!(owner = %owner, repo = %repo, "REST: ANBU ListCheckpoints reçu");
+
+    let repo_entity = resolve_repo_with_access_check(&state, &owner, &repo, &auth).await?;
+
+    let checkpoints = state
+        .list_checkpoints
+        .execute(&repo_entity.id, 50)
+        .await?;
+
+    let checkpoints_json: Vec<serde_json::Value> = checkpoints
+        .into_iter()
+        .map(|cp| {
+            serde_json::json!({
+                "id": cp.id,
+                "agent": cp.agent,
+                "session_id": cp.session_id,
+                "message": cp.message,
+                "commit_id": cp.commit_id,
+                "ipfs_cid": cp.ipfs_cid,
+                "artifact_count": cp.artifact_count,
+                "total_size": cp.total_size,
+                "created_at": cp.created_at,
+            })
+        })
+        .collect();
+
+    Ok(Json(serde_json::json!({
+        "owner": owner,
+        "repo": repo,
+        "checkpoints": checkpoints_json,
+        "count": checkpoints_json.len(),
+    })))
+}
+
+/// Détail d'un checkpoint ANBU — `GET /api/v1/repos/{owner}/{repo}/checkpoints/{id}`
+async fn get_checkpoint_handler(
+    State(state): State<SharedState>,
+    Path((owner, repo, checkpoint_id)): Path<(String, String, Uuid)>,
+    auth: MaybeAuth,
+) -> Result<Json<serde_json::Value>, AppError> {
+    info!(
+        owner = %owner,
+        repo = %repo,
+        checkpoint_id = %checkpoint_id,
+        "REST: ANBU GetCheckpoint reçu"
+    );
+
+    // Vérifier l'accès au repo
+    let _repo_entity = resolve_repo_with_access_check(&state, &owner, &repo, &auth).await?;
+
+    let checkpoint = state
+        .list_checkpoints
+        .find(&checkpoint_id)
+        .await?
+        .ok_or_else(|| {
+            AppError::from(DomainError::BusinessRule(format!(
+                "Checkpoint {checkpoint_id} not found"
+            )))
+        })?;
+
+    Ok(Json(serde_json::json!({
+        "id": checkpoint.id,
+        "agent": checkpoint.agent,
+        "session_id": checkpoint.session_id,
+        "message": checkpoint.message,
+        "commit_id": checkpoint.commit_id,
+        "ipfs_cid": checkpoint.ipfs_cid,
+        "artifact_count": checkpoint.artifact_count,
+        "total_size": checkpoint.total_size,
+        "created_at": checkpoint.created_at,
     })))
 }

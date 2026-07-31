@@ -5,6 +5,7 @@
 //! - Les adaptateurs primaires (presentation/) les **consomment** via les use cases.
 
 pub mod actor_repository;
+pub mod anbu_repository;
 pub mod auth_service;
 pub mod chunk_repository;
 pub mod content_store;

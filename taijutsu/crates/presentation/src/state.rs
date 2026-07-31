@@ -152,6 +152,12 @@ pub struct SharedState {
     pub close_mr: Arc<application::use_cases::close_mr::CloseMrUseCase>,
     /// Use case: calculer le diff d'une MR.
     pub mr_diff: Arc<application::use_cases::mr_diff::MrDiffUseCase>,
+
+    // ── Phase 28B — ANBU Checkpoints (Sync CLI → Serveur) ────────
+    /// Use case: créer un checkpoint ANBU (multipart → IPFS + PG).
+    pub create_checkpoint: Arc<application::use_cases::create_checkpoint::CreateCheckpointUseCase>,
+    /// Use case: lister les checkpoints ANBU d'un repo.
+    pub list_checkpoints: Arc<application::use_cases::list_checkpoints::ListCheckpointsUseCase>,
 }
 
 // ── Phase 12A — Git Bridge HTTP ──────────────────────────────────────

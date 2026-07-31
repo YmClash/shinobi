@@ -96,4 +96,24 @@ pub enum Commands {
         #[arg(long)]
         agent: Option<String>,
     },
+
+    /// Sync local checkpoints to the SHINOBI server (IPFS + PostgreSQL)
+    ///
+    /// Reads artifacts from .shinobi/anbu/checkpoints/ and uploads them
+    /// to the server. After successful upload, local files are purged
+    /// (the SQLite index retains the metadata).
+    #[command(alias = "push")]
+    Sync {
+        /// Owner of the target repository (ex: "naruto")
+        #[arg(long)]
+        owner: String,
+
+        /// Repository name (ex: "boruto")
+        #[arg(long)]
+        repo: String,
+
+        /// Sync only a specific checkpoint (default: all unsynced)
+        #[arg(long)]
+        id: Option<String>,
+    },
 }

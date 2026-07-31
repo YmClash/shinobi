@@ -1,6 +1,7 @@
 pub mod analyze_operation;
 pub mod bulk_import_github;
 pub mod close_mr;
+pub mod create_checkpoint;
 pub mod create_mr;
 pub mod create_operation;
 pub mod create_pat;
@@ -16,6 +17,7 @@ pub mod get_reviews;
 pub mod get_score_history;
 pub mod get_tree;
 pub mod import_github_repo;
+pub mod list_checkpoints;
 pub mod list_github_repos;
 pub mod list_mrs;
 pub mod list_operations;

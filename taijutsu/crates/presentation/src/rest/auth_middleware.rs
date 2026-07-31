@@ -9,6 +9,7 @@ use axum::extract::FromRequestParts;
 use axum::http::request::Parts;
 use axum::http::StatusCode;
 use axum::response::{IntoResponse, Response, Json};
+use base64::Engine as _;
 
 use domain::entities::session::AuthClaims;
 
@@ -49,6 +50,7 @@ impl FromRequestParts<crate::state::SharedState> for AuthUser {
         state: &crate::state::SharedState,
     ) -> impl std::future::Future<Output = Result<Self, Self::Rejection>> + Send {
         let auth_service = state.auth_service.clone();
+        let actor_repo = state.actor_repo.clone();
         let auth_header = parts
             .headers
             .get("authorization")
@@ -59,16 +61,52 @@ impl FromRequestParts<crate::state::SharedState> for AuthUser {
             let header = auth_header
                 .ok_or_else(|| AuthError("Missing Authorization header".to_string()))?;
 
-            let token = header
+            // Try Bearer JWT first
+            if let Some(token) = header
                 .strip_prefix("Bearer ")
                 .or_else(|| header.strip_prefix("bearer "))
-                .ok_or_else(|| AuthError("Invalid Authorization format (expected Bearer)".to_string()))?;
+            {
+                let claims = auth_service
+                    .verify_jwt(token)
+                    .map_err(|e| AuthError(e.to_string()))?;
+                return Ok(AuthUser(claims));
+            }
 
-            let claims = auth_service
-                .verify_jwt(token)
-                .map_err(|e| AuthError(e.to_string()))?;
+            // Try Basic Auth (PAT) — Phase 28B: ANBU CLI support
+            if let Some(encoded) = header
+                .strip_prefix("Basic ")
+                .or_else(|| header.strip_prefix("basic "))
+            {
+                let decoded = String::from_utf8(
+                    base64::engine::general_purpose::STANDARD
+                        .decode(encoded)
+                        .map_err(|_| AuthError("Invalid Basic Auth encoding".to_string()))?,
+                )
+                .map_err(|_| AuthError("Invalid Basic Auth UTF-8".to_string()))?;
 
-            Ok(AuthUser(claims))
+                let (_username, pat) = decoded
+                    .split_once(':')
+                    .ok_or_else(|| AuthError("Invalid Basic Auth format".to_string()))?;
+
+                // Hash the PAT and look up the actor
+                let pat_hash = auth_service.hash_pat_for_lookup(pat);
+                let actor = actor_repo
+                    .find_actor_by_credential_hash(&pat_hash, "api_key")
+                    .await
+                    .map_err(|e| AuthError(format!("Auth lookup error: {e}")))?
+                    .ok_or_else(|| AuthError("Invalid Personal Access Token".to_string()))?;
+
+                // Generate ephemeral claims (same as a JWT would contain)
+                let claims = domain::entities::session::AuthClaims::new(
+                    actor.id,
+                    actor.handle.clone(),
+                    actor.actor_type,
+                    3600, // 1 hour ephemeral validity
+                );
+                return Ok(AuthUser(claims));
+            }
+
+            Err(AuthError("Invalid Authorization format (expected Bearer or Basic)".to_string()))
         }
     }
 }

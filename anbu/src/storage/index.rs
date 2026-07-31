@@ -41,7 +41,9 @@ impl AnbuIndex {
                 message TEXT,
                 commit_id TEXT,
                 repo_path TEXT NOT NULL,
-                created_at TEXT NOT NULL
+                created_at TEXT NOT NULL,
+                synced_at TEXT,
+                server_checkpoint_id TEXT
             );
 
             CREATE TABLE IF NOT EXISTS artifacts (
@@ -62,6 +64,18 @@ impl AnbuIndex {
             CREATE INDEX IF NOT EXISTS idx_artifacts_hash ON artifacts(content_hash);
             CREATE INDEX IF NOT EXISTS idx_artifacts_checkpoint ON artifacts(checkpoint_id);",
         )?;
+
+        // Migration: ajouter les colonnes de sync si elles n'existent pas
+        // (pour les bases créées avant Phase 28B)
+        let has_synced = conn
+            .prepare("SELECT synced_at FROM checkpoints LIMIT 0")
+            .is_ok();
+        if !has_synced {
+            conn.execute_batch(
+                "ALTER TABLE checkpoints ADD COLUMN synced_at TEXT;
+                 ALTER TABLE checkpoints ADD COLUMN server_checkpoint_id TEXT;",
+            )?;
+        }
 
         Ok(Self { conn })
     }
@@ -237,6 +251,71 @@ impl AnbuIndex {
         }
 
         Ok(artifacts)
+    }
+
+    /// Marque un checkpoint comme synchronisé avec le serveur.
+    pub fn mark_synced(&self, checkpoint_id: &str, server_id: &str) -> Result<()> {
+        let now = chrono::Utc::now().to_rfc3339();
+        self.conn.execute(
+            "UPDATE checkpoints SET synced_at = ?1, server_checkpoint_id = ?2 WHERE id = ?3",
+            params![now, server_id, checkpoint_id],
+        )?;
+        Ok(())
+    }
+
+    /// Liste les checkpoints non encore synchronisés.
+    pub fn list_unsynced(&self) -> Result<Vec<Checkpoint>> {
+        let mut stmt = self.conn.prepare(
+            "SELECT id, agent, session_id, message, commit_id, repo_path, created_at
+             FROM checkpoints
+             WHERE synced_at IS NULL
+             ORDER BY created_at DESC",
+        )?;
+
+        let checkpoint_rows = stmt.query_map([], |row| {
+            Ok(CheckpointRow {
+                id: row.get(0)?,
+                agent: row.get(1)?,
+                session_id: row.get(2)?,
+                message: row.get(3)?,
+                commit_id: row.get(4)?,
+                repo_path: row.get(5)?,
+                created_at: row.get(6)?,
+            })
+        })?;
+
+        let mut checkpoints = Vec::new();
+        for row in checkpoint_rows {
+            let row = row?;
+            let artifacts = self.get_artifacts(&row.id)?;
+            let agent = row.agent.parse::<AgentKind>().unwrap_or(AgentKind::Antigravity);
+            let created_at = chrono::DateTime::parse_from_rfc3339(&row.created_at)
+                .map(|dt| dt.with_timezone(&chrono::Utc))
+                .unwrap_or_else(|_| chrono::Utc::now());
+
+            checkpoints.push(Checkpoint {
+                id: uuid::Uuid::parse_str(&row.id).unwrap_or_else(|_| uuid::Uuid::new_v4()),
+                agent,
+                session_id: row.session_id,
+                message: row.message,
+                commit_id: row.commit_id,
+                repo_path: row.repo_path,
+                artifacts,
+                created_at,
+            });
+        }
+
+        Ok(checkpoints)
+    }
+
+    /// Vérifie si un checkpoint est synchronisé.
+    pub fn is_synced(&self, checkpoint_id: &str) -> Result<bool> {
+        let synced: Option<String> = self.conn.query_row(
+            "SELECT synced_at FROM checkpoints WHERE id LIKE ?1",
+            params![format!("{checkpoint_id}%")],
+            |row| row.get(0),
+        ).unwrap_or(None);
+        Ok(synced.is_some())
     }
 }
 

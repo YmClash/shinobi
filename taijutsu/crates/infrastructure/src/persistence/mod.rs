@@ -1,5 +1,6 @@
 //! Fūinjutsu — Adaptateurs de persistence.
 
+pub mod anbu_repo;
 pub mod postgres_actor_repo;
 pub mod postgres_chunk_repo;
 pub mod postgres_mr_repo;
