@@ -5,8 +5,10 @@ import { useEffect, useState } from "react";
 import {
   buildRepoPrefix,
   listOperations,
+  listCheckpoints,
   type Operation,
   type OperationsResponse,
+  type Checkpoint,
 } from "@/lib/api";
 
 // ── Page des Commits — Style GitHub ────────────────────────────────
@@ -25,6 +27,35 @@ export default function CommitsPage() {
   const [error, setError] = useState<string | null>(null);
   const [page, setPage] = useState(1);
   const perPage = 30;
+
+  // ── Axe 3 : Map<content_id, Checkpoint> ──────────────────────
+  const [checkpointMap, setCheckpointMap] = useState<Map<string, Checkpoint>>(new Map());
+
+  useEffect(() => {
+    listCheckpoints(prefix)
+      .then((data) => {
+        const map = new Map<string, Checkpoint>();
+        for (const cp of data.checkpoints) {
+          if (cp.commit_id) map.set(cp.commit_id, cp);
+        }
+        setCheckpointMap(map);
+      })
+      .catch(() => {}); // Non-bloquant
+  }, [prefix]);
+
+  /** Trouve un checkpoint par content_id (supporte hash court via startsWith). */
+  function findCheckpoint(contentId: string): Checkpoint | undefined {
+    // Exact match d'abord
+    const exact = checkpointMap.get(contentId);
+    if (exact) return exact;
+    // startsWith match (hash court stocké par ANBU)
+    for (const [commitId, cp] of checkpointMap) {
+      if (contentId.startsWith(commitId) || commitId.startsWith(contentId)) {
+        return cp;
+      }
+    }
+    return undefined;
+  }
 
   useEffect(() => {
     async function load() {
@@ -144,10 +175,12 @@ export default function CommitsPage() {
                 <span>Commits on {date}</span>
               </div>
               <div className="commits-list">
-                {ops.map((op) => (
+                {ops.map((op) => {
+                  const aiCtx = findCheckpoint(op.content_id);
+                  return (
                   <div
                     key={op.id}
-                    className="commit-row"
+                    className={`commit-row ${aiCtx ? "commit-row-ai" : ""}`}
                     onClick={() =>
                       router.push(`/${owner}/${repo}/commits/${op.id}`)
                     }
@@ -162,6 +195,13 @@ export default function CommitsPage() {
                       <div className="commit-info">
                         <div className="commit-message">
                           {op.description || "No commit message"}
+                          {/* Axe 1 : Badge IA */}
+                          {aiCtx && (
+                            <span className="commit-ai-badge" title={`AI Context: ${aiCtx.agent} · Session ${aiCtx.session_id.substring(0, 8)} · ${aiCtx.artifact_count} artifact(s)`}>
+                              <span className="commit-ai-badge-icon">🧠</span>
+                              <span className="commit-ai-badge-label">{aiCtx.agent}</span>
+                            </span>
+                          )}
                         </div>
                         <div className="commit-meta">
                           <span className="commit-author">
@@ -199,7 +239,8 @@ export default function CommitsPage() {
                       </button>
                     </div>
                   </div>
-                ))}
+                  );
+                })}
               </div>
             </div>
           ))}

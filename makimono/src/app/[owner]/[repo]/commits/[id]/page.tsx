@@ -1,12 +1,19 @@
 "use client";
 
 import { useParams, useRouter } from "next/navigation";
-import { buildRepoPrefix } from "@/lib/api";
+import { useEffect, useState } from "react";
+import {
+  buildRepoPrefix,
+  listCheckpoints,
+  type Checkpoint,
+} from "@/lib/api";
 import { useOperation, useCommitDiff } from "@/hooks/use-api";
 import { UnifiedDiffViewer } from "@/components/operations/unified-diff-viewer";
 
-// ── Page de Détail d'un Commit — Diff Colorisé ────────────────────
+// ── Page de Détail d'un Commit — Diff + AI Context ────────────────
 // Route: /[owner]/[repo]/commits/[id]
+
+type TabKey = "diff" | "ai-context";
 
 export default function CommitDetailPage() {
   const params = useParams<{ owner: string; repo: string; id: string }>();
@@ -19,6 +26,31 @@ export default function CommitDetailPage() {
 
   const op = operation.data;
   const diffData = diff.data;
+
+  // ── AI Context ──────────────────────────────────────────────
+  const [activeTab, setActiveTab] = useState<TabKey>("diff");
+  const [checkpoint, setCheckpoint] = useState<Checkpoint | null>(null);
+  const [hasAiContext, setHasAiContext] = useState(false);
+
+  useEffect(() => {
+    if (!op) return;
+    listCheckpoints(prefix)
+      .then((data) => {
+        for (const cp of data.checkpoints) {
+          if (
+            cp.commit_id &&
+            (cp.commit_id === op.content_id ||
+              op.content_id.startsWith(cp.commit_id) ||
+              cp.commit_id.startsWith(op.content_id))
+          ) {
+            setCheckpoint(cp);
+            setHasAiContext(true);
+            return;
+          }
+        }
+      })
+      .catch(() => {});
+  }, [op, prefix]);
 
   function shortHash(hash: string): string {
     return hash.substring(0, 7);
@@ -35,6 +67,12 @@ export default function CommitDetailPage() {
       hour: "2-digit",
       minute: "2-digit",
     });
+  }
+
+  function formatSize(bytes: number): string {
+    if (bytes < 1024) return `${bytes} B`;
+    if (bytes < 1024 * 1024) return `${(bytes / 1024).toFixed(1)} KB`;
+    return `${(bytes / (1024 * 1024)).toFixed(1)} MB`;
   }
 
   return (
@@ -72,6 +110,13 @@ export default function CommitDetailPage() {
         <div className="commit-detail-info">
           <div className="commit-detail-message">
             {op.description || "No commit message"}
+            {/* AI Badge inline */}
+            {hasAiContext && checkpoint && (
+              <span className="commit-ai-badge" title={`AI Context: ${checkpoint.agent}`}>
+                <span className="commit-ai-badge-icon">🧠</span>
+                <span className="commit-ai-badge-label">{checkpoint.agent}</span>
+              </span>
+            )}
           </div>
           <div className="commit-detail-meta">
             <div className="commit-detail-meta-left">
@@ -110,12 +155,138 @@ export default function CommitDetailPage() {
         </div>
       )}
 
-      {/* Unified Diff Viewer (extracted component) */}
-      {diffData && (
+      {/* Tab Bar — Diff / AI Context */}
+      {op && (
+        <div className="commit-detail-tabs">
+          <button
+            className={`commit-detail-tab ${activeTab === "diff" ? "commit-detail-tab-active" : ""}`}
+            onClick={() => setActiveTab("diff")}
+          >
+            <span className="commit-detail-tab-icon">📝</span>
+            Diff
+            {diffData && (
+              <span style={{ opacity: 0.6, fontSize: "0.65rem" }}>
+                {diffData.stats.files_changed} file{diffData.stats.files_changed !== 1 ? "s" : ""}
+              </span>
+            )}
+          </button>
+          <button
+            className={`commit-detail-tab ${activeTab === "ai-context" ? "commit-detail-tab-active" : ""}`}
+            onClick={() => setActiveTab("ai-context")}
+          >
+            <span className="commit-detail-tab-icon">🧠</span>
+            AI Context
+            {hasAiContext && (
+              <span style={{
+                width: 6, height: 6, borderRadius: "50%",
+                background: "var(--cp-agent-antigravity)", display: "inline-block",
+                marginLeft: "0.25rem"
+              }} />
+            )}
+          </button>
+        </div>
+      )}
+
+      {/* Tab Content: Diff */}
+      {activeTab === "diff" && diffData && (
         <UnifiedDiffViewer
           files={diffData.files}
           stats={diffData.stats}
         />
+      )}
+
+      {/* Tab Content: AI Context */}
+      {activeTab === "ai-context" && (
+        <div className="ai-context-panel">
+          {checkpoint ? (
+            <>
+              {/* Metadata Grid */}
+              <div className="ai-context-meta">
+                <div className="ai-context-meta-item">
+                  <span className="ai-context-meta-label">Agent</span>
+                  <span className="ai-context-meta-value">
+                    {checkpoint.agent === "antigravity" ? "🤖" : "🐙"} {checkpoint.agent}
+                  </span>
+                </div>
+                <div className="ai-context-meta-item">
+                  <span className="ai-context-meta-label">Session ID</span>
+                  <code className="ai-context-meta-value ai-context-meta-mono">
+                    {checkpoint.session_id}
+                  </code>
+                </div>
+                <div className="ai-context-meta-item">
+                  <span className="ai-context-meta-label">Checkpoint ID</span>
+                  <code className="ai-context-meta-value ai-context-meta-mono">
+                    {checkpoint.id}
+                  </code>
+                </div>
+                <div className="ai-context-meta-item">
+                  <span className="ai-context-meta-label">Captured</span>
+                  <span className="ai-context-meta-value">
+                    {new Date(checkpoint.created_at).toLocaleString()}
+                  </span>
+                </div>
+                <div className="ai-context-meta-item">
+                  <span className="ai-context-meta-label">IPFS CID</span>
+                  <code className="ai-context-meta-value ai-context-meta-mono">
+                    {checkpoint.ipfs_cid}
+                  </code>
+                </div>
+                <div className="ai-context-meta-item">
+                  <span className="ai-context-meta-label">Total Size</span>
+                  <span className="ai-context-meta-value">
+                    {formatSize(checkpoint.total_size)} · {checkpoint.artifact_count} artifact{checkpoint.artifact_count !== 1 ? "s" : ""}
+                  </span>
+                </div>
+                {checkpoint.message && (
+                  <div className="ai-context-meta-item" style={{ gridColumn: "1 / -1" }}>
+                    <span className="ai-context-meta-label">Message</span>
+                    <span className="ai-context-meta-value">{checkpoint.message}</span>
+                  </div>
+                )}
+              </div>
+
+              {/* IPFS Quick Links */}
+              <div className="ai-artifacts-header">
+                <span className="ai-artifacts-header-icon">📦</span>
+                IPFS Content
+              </div>
+              <div className="ai-artifacts-list">
+                <div className="ai-artifact-row">
+                  <div className="ai-artifact-info">
+                    <span className="ai-artifact-icon">🗂️</span>
+                    <span className="ai-artifact-name">{checkpoint.ipfs_cid}</span>
+                  </div>
+                  <div style={{ display: "flex", gap: "0.35rem" }}>
+                    <a
+                      className="ai-artifact-view-btn"
+                      href={`/api/ipfs/${checkpoint.ipfs_cid}`}
+                      target="_blank"
+                      rel="noopener noreferrer"
+                      onClick={(e) => e.stopPropagation()}
+                    >
+                      View
+                    </a>
+                    <button
+                      className="ai-artifact-view-btn"
+                      onClick={() => navigator.clipboard.writeText(checkpoint.ipfs_cid)}
+                    >
+                      Copy CID
+                    </button>
+                  </div>
+                </div>
+              </div>
+            </>
+          ) : (
+            <div className="ai-context-empty">
+              <div className="ai-context-empty-icon">🥷</div>
+              <p className="ai-context-empty-text">
+                No AI context associated with this commit.<br />
+                Use <code>anbu checkpoint --latest</code> to capture context.
+              </p>
+            </div>
+          )}
+        </div>
       )}
     </div>
   );

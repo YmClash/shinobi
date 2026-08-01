@@ -7850,3 +7850,272 @@ html * {
 [data-theme="scroll"] .cp-card::before {
   background: linear-gradient(180deg, oklch(0.45 0.08 60), oklch(0.55 0.10 40));
 }
+
+/* ═══════════════════════════════════════════════════════════════
+   COMMIT AI BADGE — Indicateur Visuel (Phase 28C — Axe 1)
+   ═══════════════════════════════════════════════════════════════ */
+
+.commit-ai-badge {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.2rem;
+  margin-left: 0.5rem;
+  padding: 0.1rem 0.45rem;
+  border-radius: 9999px;
+  font-size: 0.6rem;
+  font-weight: 600;
+  background: color-mix(in oklch, var(--cp-agent-antigravity) 10%, transparent);
+  color: var(--cp-agent-antigravity);
+  border: 1px solid color-mix(in oklch, var(--cp-agent-antigravity) 20%, transparent);
+  vertical-align: middle;
+  cursor: help;
+  transition: background 0.2s, border-color 0.2s;
+  white-space: nowrap;
+}
+
+.commit-ai-badge:hover {
+  background: color-mix(in oklch, var(--cp-agent-antigravity) 18%, transparent);
+  border-color: color-mix(in oklch, var(--cp-agent-antigravity) 35%, transparent);
+}
+
+.commit-ai-badge-icon {
+  font-size: 0.7rem;
+  line-height: 1;
+}
+
+.commit-ai-badge-label {
+  text-transform: capitalize;
+  letter-spacing: 0.01em;
+}
+
+/* Subtle left accent on AI-tagged commit rows */
+.commit-row-ai {
+  position: relative;
+}
+
+.commit-row-ai::after {
+  content: "";
+  position: absolute;
+  left: 0;
+  top: 4px;
+  bottom: 4px;
+  width: 2px;
+  border-radius: 2px;
+  background: var(--cp-agent-antigravity);
+  opacity: 0.5;
+}
+
+/* Cyberpunk neon glow on AI badge */
+[data-theme="cyberpunk"] .commit-ai-badge {
+  text-shadow: 0 0 6px var(--cp-agent-antigravity);
+  box-shadow: 0 0 6px color-mix(in oklch, var(--cp-agent-antigravity) 15%, transparent);
+}
+
+/* ═══════════════════════════════════════════════════════════════
+   AI CONTEXT PANEL — Panneau d'Investigation (Phase 28C — Axe 2)
+   ═══════════════════════════════════════════════════════════════ */
+
+/* ── Tab Bar ───────────────────────────────────────────────── */
+.commit-detail-tabs {
+  display: flex;
+  gap: 0;
+  border-bottom: 1px solid var(--border);
+  margin-bottom: 1rem;
+}
+
+.commit-detail-tab {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.35rem;
+  padding: 0.6rem 1rem;
+  font-size: 0.78rem;
+  font-weight: 500;
+  color: var(--muted-foreground);
+  background: transparent;
+  border: none;
+  border-bottom: 2px solid transparent;
+  cursor: pointer;
+  transition: color 0.2s, border-color 0.2s;
+}
+
+.commit-detail-tab:hover {
+  color: var(--foreground);
+}
+
+.commit-detail-tab-active {
+  color: var(--foreground);
+  font-weight: 600;
+  border-bottom-color: var(--cp-agent-antigravity);
+}
+
+.commit-detail-tab-icon {
+  font-size: 0.85rem;
+}
+
+/* ── AI Context Content ────────────────────────────────────── */
+.ai-context-panel {
+  animation: fade-in-up 0.4s ease-out forwards;
+}
+
+.ai-context-meta {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(200px, 1fr));
+  gap: 0.85rem;
+  padding: 1rem;
+  border: 1px solid var(--border);
+  border-radius: 10px;
+  background: var(--card);
+  margin-bottom: 1rem;
+}
+
+.ai-context-meta-item {
+  display: flex;
+  flex-direction: column;
+  gap: 0.15rem;
+}
+
+.ai-context-meta-label {
+  font-size: 0.6rem;
+  font-weight: 600;
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+  color: var(--muted-foreground);
+}
+
+.ai-context-meta-value {
+  font-size: 0.8rem;
+  color: var(--foreground);
+}
+
+.ai-context-meta-mono {
+  font-family: var(--font-mono);
+  font-size: 0.72rem;
+  word-break: break-all;
+}
+
+/* ── Artifacts List ────────────────────────────────────────── */
+.ai-artifacts-header {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+  font-size: 0.82rem;
+  font-weight: 600;
+  color: var(--foreground);
+  margin-bottom: 0.5rem;
+}
+
+.ai-artifacts-header-icon {
+  font-size: 0.9rem;
+}
+
+.ai-artifacts-list {
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  overflow: hidden;
+}
+
+.ai-artifact-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 0.6rem 0.85rem;
+  font-size: 0.78rem;
+  border-bottom: 1px solid var(--border);
+  transition: background 0.15s;
+}
+
+.ai-artifact-row:last-child {
+  border-bottom: none;
+}
+
+.ai-artifact-row:hover {
+  background: var(--muted);
+}
+
+.ai-artifact-info {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+  min-width: 0;
+}
+
+.ai-artifact-icon {
+  font-size: 0.85rem;
+  flex-shrink: 0;
+}
+
+.ai-artifact-name {
+  font-family: var(--font-mono);
+  font-size: 0.72rem;
+  color: var(--foreground);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.ai-artifact-size {
+  font-size: 0.65rem;
+  color: var(--muted-foreground);
+  font-family: var(--font-mono);
+  flex-shrink: 0;
+}
+
+.ai-artifact-view-btn {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.25rem;
+  padding: 0.2rem 0.55rem;
+  border-radius: 6px;
+  font-size: 0.65rem;
+  font-weight: 500;
+  background: var(--muted);
+  color: var(--muted-foreground);
+  border: 1px solid var(--border);
+  cursor: pointer;
+  transition: background 0.15s, color 0.15s, border-color 0.15s;
+}
+
+.ai-artifact-view-btn:hover {
+  background: color-mix(in oklch, var(--cp-agent-antigravity) 12%, transparent);
+  color: var(--cp-agent-antigravity);
+  border-color: color-mix(in oklch, var(--cp-agent-antigravity) 30%, transparent);
+}
+
+/* ── No AI Context ─────────────────────────────────────────── */
+.ai-context-empty {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  padding: 2.5rem 1rem;
+  text-align: center;
+}
+
+.ai-context-empty-icon {
+  font-size: 2rem;
+  opacity: 0.3;
+  margin-bottom: 0.5rem;
+}
+
+.ai-context-empty-text {
+  font-size: 0.8rem;
+  color: var(--muted-foreground);
+}
+
+/* ── Theme: Cyberpunk ──────────────────────────────────────── */
+[data-theme="cyberpunk"] .ai-context-meta {
+  border-color: oklch(0.72 0.25 310 / 15%);
+  background: oklch(0.12 0.03 310 / 50%);
+}
+
+[data-theme="cyberpunk"] .commit-detail-tab-active {
+  border-bottom-color: oklch(0.72 0.25 310);
+  color: oklch(0.72 0.25 310);
+}
+
+/* ── Theme: Glass ──────────────────────────────────────────── */
+[data-theme="glass"] .ai-context-meta {
+  backdrop-filter: blur(12px) saturate(160%);
+  -webkit-backdrop-filter: blur(12px) saturate(160%);
+  background: oklch(0.2 0.02 260 / 50%);
+  border-color: oklch(0.5 0.03 260 / 20%);
+}
