@@ -34,19 +34,17 @@ export default function CommitDetailPage() {
 
   useEffect(() => {
     if (!op) return;
+    // Corrélation indestructible : regex sur le trailer AI-Checkpoint dans le message
+    const match = op.description.match(/AI-Checkpoint:\s*([a-f0-9-]+)/i);
+    if (!match) return;
+    const checkpointId = match[1];
+
     listCheckpoints(prefix)
       .then((data) => {
-        for (const cp of data.checkpoints) {
-          if (
-            cp.commit_id &&
-            (cp.commit_id === op.content_id ||
-              op.content_id.startsWith(cp.commit_id) ||
-              cp.commit_id.startsWith(op.content_id))
-          ) {
-            setCheckpoint(cp);
-            setHasAiContext(true);
-            return;
-          }
+        const found = data.checkpoints.find((cp) => cp.id === checkpointId);
+        if (found) {
+          setCheckpoint(found);
+          setHasAiContext(true);
         }
       })
       .catch(() => {});

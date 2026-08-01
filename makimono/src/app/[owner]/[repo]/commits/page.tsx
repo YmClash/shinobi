@@ -28,7 +28,8 @@ export default function CommitsPage() {
   const [page, setPage] = useState(1);
   const perPage = 30;
 
-  // ── Axe 3 : Map<content_id, Checkpoint> ──────────────────────
+  // ── Axe 3 : Map<checkpoint_id, Checkpoint> ─────────────────────
+  // Indexé par cp.id (UUID indestructible), pas par commit_id (hash volatile).
   const [checkpointMap, setCheckpointMap] = useState<Map<string, Checkpoint>>(new Map());
 
   useEffect(() => {
@@ -36,25 +37,21 @@ export default function CommitsPage() {
       .then((data) => {
         const map = new Map<string, Checkpoint>();
         for (const cp of data.checkpoints) {
-          if (cp.commit_id) map.set(cp.commit_id, cp);
+          map.set(cp.id, cp); // Clé = UUID du checkpoint, pas le hash Git
         }
         setCheckpointMap(map);
       })
       .catch(() => {}); // Non-bloquant
   }, [prefix]);
 
-  /** Trouve un checkpoint par content_id (supporte hash court via startsWith). */
-  function findCheckpoint(contentId: string): Checkpoint | undefined {
-    // Exact match d'abord
-    const exact = checkpointMap.get(contentId);
-    if (exact) return exact;
-    // startsWith match (hash court stocké par ANBU)
-    for (const [commitId, cp] of checkpointMap) {
-      if (contentId.startsWith(commitId) || commitId.startsWith(contentId)) {
-        return cp;
-      }
-    }
-    return undefined;
+  /**
+   * Corrélation indestructible : extrait AI-Checkpoint: <uuid> du message de commit.
+   * Survit aux rebases, cherry-picks et mutations jj car le message est préservé.
+   */
+  function findCheckpoint(description: string): Checkpoint | undefined {
+    const match = description.match(/AI-Checkpoint:\s*([a-f0-9-]+)/i);
+    if (!match) return undefined;
+    return checkpointMap.get(match[1]);
   }
 
   useEffect(() => {
@@ -176,7 +173,7 @@ export default function CommitsPage() {
               </div>
               <div className="commits-list">
                 {ops.map((op) => {
-                  const aiCtx = findCheckpoint(op.content_id);
+                  const aiCtx = findCheckpoint(op.description);
                   return (
                   <div
                     key={op.id}
