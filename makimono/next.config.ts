@@ -17,10 +17,15 @@ const nextConfig: NextConfig = {
 
   // Proxy API requests to the Taijutsu backend
   // En dev: localhost:3000 | En Docker: http://taijutsu:3000 (réseau shinobi)
+  //
+  // IMPORTANT: /api/ipfs/* est géré par le route handler Next.js local
+  // (app/api/ipfs/[cid]/route.ts — proxy IPFS anti-CORS).
+  // On utilise un regex source pour exclure /api/ipfs du proxy Taijutsu.
   async rewrites() {
     return [
       {
-        source: "/api/:path*",
+        // Match /api/* SAUF /api/ipfs/*
+        source: "/api/:path((?!ipfs).*)",
         destination: `${taijutsuUrl}/api/:path*`,
       },
       {
