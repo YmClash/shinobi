@@ -7403,3 +7403,450 @@ html * {
   border-color: oklch(0.5 0.1 50 / 40%);
   box-shadow: 0 0 16px oklch(0.5 0.1 50 / 10%);
 }
+
+/* ═══════════════════════════════════════════════════════════════
+   ANBU CHECKPOINTS — AI Context Snapshots (Phase 28C)
+   ═══════════════════════════════════════════════════════════════ */
+
+/* ── CSS Variables ─────────────────────────────────────────── */
+:root {
+  --cp-agent-antigravity: oklch(0.72 0.18 200);
+  --cp-agent-copilot: oklch(0.68 0.22 280);
+  --cp-agent-default: oklch(0.65 0.12 150);
+}
+
+/* ── Page Container ────────────────────────────────────────── */
+.cp-page {
+  max-width: 960px;
+  margin: 0 auto;
+  padding: 1.5rem 1.25rem;
+}
+
+/* ── Header ────────────────────────────────────────────────── */
+.cp-header {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 1rem;
+  margin-bottom: 1.5rem;
+}
+
+.cp-header-left {
+  display: flex;
+  flex-direction: column;
+  gap: 0.25rem;
+}
+
+.cp-title {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+  font-size: 1.25rem;
+  font-weight: 700;
+  color: var(--foreground);
+  margin: 0;
+}
+
+.cp-title-icon {
+  font-size: 1.3rem;
+}
+
+.cp-subtitle {
+  font-size: 0.78rem;
+  color: var(--muted-foreground);
+}
+
+.cp-count-badge {
+  display: inline-flex;
+  align-items: center;
+  padding: 0.25rem 0.75rem;
+  border-radius: 9999px;
+  font-size: 0.72rem;
+  font-weight: 600;
+  background: var(--muted);
+  color: var(--muted-foreground);
+  white-space: nowrap;
+}
+
+/* ── Loading ───────────────────────────────────────────────── */
+.cp-loading {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 0.75rem;
+  padding: 3rem 1rem;
+  font-size: 0.85rem;
+  color: var(--muted-foreground);
+}
+
+.cp-spinner {
+  width: 18px;
+  height: 18px;
+  border: 2px solid var(--muted);
+  border-top-color: var(--cp-agent-antigravity);
+  border-radius: 50%;
+  animation: oracle-spinner 0.8s linear infinite;
+}
+
+/* ── Error ─────────────────────────────────────────────────── */
+.cp-error {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+  padding: 0.85rem 1rem;
+  border-radius: 8px;
+  background: oklch(0.60 0.25 25 / 8%);
+  color: oklch(0.60 0.25 25);
+  font-size: 0.82rem;
+  border: 1px solid oklch(0.60 0.25 25 / 20%);
+}
+
+/* ── Card List ─────────────────────────────────────────────── */
+.cp-list {
+  display: flex;
+  flex-direction: column;
+  gap: 0.5rem;
+}
+
+/* ── Card ──────────────────────────────────────────────────── */
+.cp-card {
+  position: relative;
+  border: 1px solid var(--border);
+  border-radius: 10px;
+  background: var(--card);
+  cursor: pointer;
+  transition: border-color 0.2s ease, box-shadow 0.2s ease, background 0.2s ease;
+  overflow: hidden;
+  animation: fade-in-up 0.4s ease-out forwards;
+  opacity: 0;
+}
+
+.cp-card:nth-child(1) { animation-delay: 0.03s; }
+.cp-card:nth-child(2) { animation-delay: 0.06s; }
+.cp-card:nth-child(3) { animation-delay: 0.09s; }
+.cp-card:nth-child(4) { animation-delay: 0.12s; }
+.cp-card:nth-child(5) { animation-delay: 0.15s; }
+.cp-card:nth-child(n+6) { animation-delay: 0.18s; }
+
+.cp-card::before {
+  content: "";
+  position: absolute;
+  left: 0;
+  top: 0;
+  bottom: 0;
+  width: 3px;
+  background: linear-gradient(180deg, var(--cp-agent-antigravity), var(--cp-agent-copilot));
+  border-radius: 3px 0 0 3px;
+  opacity: 0;
+  transition: opacity 0.3s ease;
+}
+
+.cp-card:hover {
+  border-color: var(--cp-agent-antigravity);
+  box-shadow: 0 2px 12px oklch(0 0 0 / 8%);
+}
+
+.cp-card:hover::before {
+  opacity: 1;
+}
+
+.cp-card-expanded {
+  border-color: var(--cp-agent-antigravity);
+}
+
+.cp-card-expanded::before {
+  opacity: 1;
+}
+
+/* ── Card Header ───────────────────────────────────────────── */
+.cp-card-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 0.85rem 1rem;
+  gap: 0.75rem;
+}
+
+.cp-card-left {
+  display: flex;
+  align-items: center;
+  gap: 0.75rem;
+  min-width: 0;
+  flex: 1;
+}
+
+.cp-card-right {
+  display: flex;
+  align-items: center;
+  gap: 0.65rem;
+  flex-shrink: 0;
+}
+
+/* ── Agent Badge ───────────────────────────────────────────── */
+.cp-agent-badge {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.3rem;
+  padding: 0.2rem 0.6rem;
+  border-radius: 9999px;
+  font-size: 0.65rem;
+  font-weight: 600;
+  background: color-mix(in oklch, var(--agent-color) 12%, transparent);
+  color: var(--agent-color);
+  border: 1px solid color-mix(in oklch, var(--agent-color) 25%, transparent);
+  white-space: nowrap;
+  flex-shrink: 0;
+}
+
+.cp-agent-icon {
+  font-size: 0.75rem;
+}
+
+/* ── Card Info ─────────────────────────────────────────────── */
+.cp-card-info {
+  display: flex;
+  flex-direction: column;
+  gap: 0.15rem;
+  min-width: 0;
+}
+
+.cp-card-message {
+  font-size: 0.82rem;
+  font-weight: 500;
+  color: var(--foreground);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.cp-card-meta {
+  display: flex;
+  align-items: center;
+  gap: 0.35rem;
+  font-size: 0.68rem;
+  color: var(--muted-foreground);
+  flex-wrap: wrap;
+}
+
+.cp-meta-sep {
+  color: var(--border);
+}
+
+.cp-session-id {
+  font-family: var(--font-mono);
+  font-size: 0.65rem;
+  padding: 0.05rem 0.3rem;
+  border-radius: 4px;
+  background: var(--muted);
+  color: var(--muted-foreground);
+}
+
+.cp-artifact-count {
+  color: var(--cp-agent-antigravity);
+  font-weight: 500;
+}
+
+.cp-size {
+  font-family: var(--font-mono);
+  font-size: 0.65rem;
+}
+
+.cp-card-date {
+  font-size: 0.68rem;
+}
+
+/* ── IPFS Badge ────────────────────────────────────────────── */
+.cp-ipfs-badge {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.3rem;
+  padding: 0.15rem 0.5rem;
+  border-radius: 6px;
+  background: var(--muted);
+  font-size: 0.6rem;
+  color: var(--muted-foreground);
+}
+
+.cp-ipfs-badge code {
+  font-family: var(--font-mono);
+  font-size: 0.6rem;
+}
+
+/* ── Expand Icon ───────────────────────────────────────────── */
+.cp-expand-icon {
+  color: var(--muted-foreground);
+  transition: transform 0.2s ease;
+  flex-shrink: 0;
+}
+
+.cp-expand-open {
+  transform: rotate(180deg);
+}
+
+/* ── Detail Panel ──────────────────────────────────────────── */
+.cp-detail {
+  padding: 0 1rem 1rem;
+  border-top: 1px solid var(--border);
+  animation: fade-in-up 0.3s ease-out forwards;
+}
+
+.cp-detail-grid {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 0.75rem 1.5rem;
+  padding-top: 0.85rem;
+}
+
+@media (max-width: 640px) {
+  .cp-detail-grid {
+    grid-template-columns: 1fr;
+  }
+}
+
+.cp-detail-item {
+  display: flex;
+  flex-direction: column;
+  gap: 0.15rem;
+}
+
+.cp-detail-label {
+  font-size: 0.62rem;
+  font-weight: 600;
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+  color: var(--muted-foreground);
+}
+
+.cp-detail-value {
+  font-size: 0.78rem;
+  color: var(--foreground);
+  word-break: break-all;
+}
+
+.cp-detail-mono {
+  font-family: var(--font-mono);
+  font-size: 0.7rem;
+  padding: 0.1rem 0;
+}
+
+.cp-detail-cid-row {
+  display: flex;
+  align-items: center;
+  gap: 0.35rem;
+}
+
+.cp-copy-btn {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  padding: 0.25rem;
+  border: none;
+  background: transparent;
+  color: var(--muted-foreground);
+  cursor: pointer;
+  border-radius: 4px;
+  transition: color 0.2s, background 0.2s;
+}
+
+.cp-copy-btn:hover {
+  color: var(--foreground);
+  background: var(--muted);
+}
+
+/* ── Empty State ───────────────────────────────────────────── */
+.cp-empty {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  padding: 4rem 2rem;
+  text-align: center;
+  animation: fade-in-up 0.5s ease-out forwards;
+}
+
+.cp-empty-icon {
+  font-size: 3.5rem;
+  margin-bottom: 1rem;
+  opacity: 0.4;
+}
+
+.cp-empty-title {
+  font-size: 1.1rem;
+  font-weight: 600;
+  color: var(--foreground);
+  margin: 0 0 0.5rem;
+}
+
+.cp-empty-text {
+  font-size: 0.82rem;
+  color: var(--muted-foreground);
+  margin: 0 0 1.25rem;
+  max-width: 360px;
+}
+
+.cp-empty-code {
+  padding: 0.75rem 1.25rem;
+  border-radius: 8px;
+  background: var(--muted);
+  font-family: var(--font-mono);
+  font-size: 0.72rem;
+  color: var(--muted-foreground);
+  line-height: 1.8;
+  text-align: left;
+}
+
+.cp-empty-code code {
+  color: var(--cp-agent-antigravity);
+}
+
+/* ── Theme Overrides — Cyberpunk ──────────────────────────── */
+[data-theme="cyberpunk"] .cp-card {
+  border-color: oklch(0.72 0.25 310 / 15%);
+}
+
+[data-theme="cyberpunk"] .cp-card:hover {
+  border-color: oklch(0.72 0.25 310 / 40%);
+  box-shadow: 0 0 16px oklch(0.72 0.25 310 / 10%),
+    inset 0 0 20px oklch(0.72 0.25 310 / 3%);
+}
+
+[data-theme="cyberpunk"] .cp-card::before {
+  background: linear-gradient(180deg, oklch(0.72 0.25 310), oklch(0.65 0.30 280));
+  box-shadow: 0 0 8px oklch(0.72 0.25 310 / 40%);
+}
+
+[data-theme="cyberpunk"] .cp-agent-badge {
+  text-shadow: 0 0 6px var(--agent-color);
+}
+
+/* ── Theme Overrides — Glass ─────────────────────────────── */
+[data-theme="glass"] .cp-card {
+  backdrop-filter: blur(12px) saturate(160%);
+  -webkit-backdrop-filter: blur(12px) saturate(160%);
+  background: oklch(0.2 0.02 260 / 50%);
+  border-color: oklch(0.5 0.03 260 / 20%);
+}
+
+[data-theme="glass"] .cp-card:hover {
+  background: oklch(0.22 0.03 260 / 60%);
+  border-color: oklch(0.5 0.03 260 / 35%);
+}
+
+[data-theme="glass"] .cp-detail {
+  border-top-color: oklch(0.5 0.03 260 / 15%);
+}
+
+/* ── Theme Overrides — Scroll ────────────────────────────── */
+[data-theme="scroll"] .cp-card {
+  border-color: oklch(0.55 0.05 60 / 25%);
+  background: oklch(0.97 0.01 80 / 85%);
+}
+
+[data-theme="scroll"] .cp-card:hover {
+  border-color: oklch(0.55 0.08 60 / 40%);
+  box-shadow: 0 2px 8px oklch(0.3 0.05 60 / 8%);
+}
+
+[data-theme="scroll"] .cp-card::before {
+  background: linear-gradient(180deg, oklch(0.45 0.08 60), oklch(0.55 0.10 40));
+}

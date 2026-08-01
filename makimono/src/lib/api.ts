@@ -653,3 +653,40 @@ export function senseiChatStream(
 
   return controller;
 }
+
+// ── ANBU Checkpoints (Phase 28C) ─────────────────────────────
+
+/** An AI checkpoint synced from the ANBU CLI. */
+export interface Checkpoint {
+  id: string;
+  agent: string;
+  session_id: string;
+  message: string | null;
+  commit_id: string | null;
+  ipfs_cid: string;
+  artifact_count: number;
+  total_size: number;
+  created_at: string;
+}
+
+export interface CheckpointsResponse {
+  owner: string;
+  repo: string;
+  checkpoints: Checkpoint[];
+  count: number;
+}
+
+/** Liste les checkpoints ANBU d'un dépôt. */
+export async function listCheckpoints(
+  repoPrefix: string,
+): Promise<CheckpointsResponse> {
+  return apiFetch<CheckpointsResponse>(`${repoPrefix}/checkpoints`);
+}
+
+/** Récupère le détail d'un checkpoint ANBU. */
+export async function getCheckpoint(
+  repoPrefix: string,
+  id: string,
+): Promise<Checkpoint> {
+  return apiFetch<Checkpoint>(`${repoPrefix}/checkpoints/${id}`);
+}

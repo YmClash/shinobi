@@ -14,11 +14,12 @@ interface RepoTabBarProps {
 }
 
 const tabs = [
-  { key: "code",    label: "Code",             icon: "📄", match: (p: string) => p.includes("/tree/") || /^\/[^/]+\/[^/]+$/.test(p) },
-  { key: "commits", label: "Commits",          icon: "📝", match: (p: string) => p.includes("/commits") },
-  { key: "mrs",     label: "Merge Requests",   icon: "⚔️", match: (p: string) => p.includes("/mrs") },
-  { key: "ops",     label: "Operations",       icon: "⚡", match: (p: string) => /\/operations(?!\/)/.test(p) || /\/operations\//.test(p) },
-  { key: "refs",    label: "Bookmarks",        icon: "🔖", match: (p: string) => p.includes("/bookmarks") },
+  { key: "code",        label: "Code",             icon: "📄", match: (p: string) => p.includes("/tree/") || /^\/[^/]+\/[^/]+$/.test(p) },
+  { key: "commits",     label: "Commits",          icon: "📝", match: (p: string) => p.includes("/commits") },
+  { key: "mrs",         label: "Merge Requests",   icon: "⚔️", match: (p: string) => p.includes("/mrs") },
+  { key: "ops",         label: "Operations",       icon: "⚡", match: (p: string) => /\/operations(?!\/)/.test(p) || /\/operations\//.test(p) },
+  { key: "refs",        label: "Bookmarks",        icon: "🔖", match: (p: string) => p.includes("/bookmarks") },
+  { key: "checkpoints", label: "AI Checkpoints",   icon: "🧠", match: (p: string) => p.includes("/checkpoints") },
 ];
 
 function buildHref(owner: string, repo: string, key: string): string {
@@ -29,6 +30,7 @@ function buildHref(owner: string, repo: string, key: string): string {
     case "mrs":     return `${base}/mrs`;
     case "ops":     return `${base}/operations`;
     case "refs":    return `${base}/bookmarks`;
+    case "checkpoints": return `${base}/checkpoints`;
     default:        return base;
   }
 }
