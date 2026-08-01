@@ -95,20 +95,23 @@ fn cmd_checkpoint(
     revision: String,
     no_tag: bool,
 ) -> Result<()> {
-    let collector = AntigravityCollector::new(config.brain_path());
-
-    // Résoudre la session
-    let session_id = if let Some(sid) = session {
-        sid
-    } else if latest {
-        let sessions = collector.detect_sessions()?;
-        if sessions.is_empty() {
-            anyhow::bail!("No AI sessions detected. Check your Antigravity brain path.");
+    // Résoudre la session + agent source
+    let (session_id, agent_kind, collected) = if let Some(sid) = session {
+        // Session explicite → tenter Antigravity d'abord, puis Copilot
+        let ag = AntigravityCollector::new(config.brain_path());
+        if let Ok(arts) = ag.collect_session(&sid) {
+            (sid, models::AgentKind::Antigravity, arts)
+        } else {
+            let cp = CopilotCollector::new(false);
+            let arts = cp.collect_session(&sid)?;
+            (sid, models::AgentKind::Copilot, arts)
         }
-        sessions[0].id.clone()
+    } else if latest {
+        // --latest : scanner les deux collecteurs, prendre le plus récent
+        resolve_latest_session(&config)?
     } else if !attach.is_empty() {
         // Mode --attach sans session : crée un checkpoint manuel
-        "manual".to_string()
+        ("manual".to_string(), models::AgentKind::Antigravity, Vec::new())
     } else {
         anyhow::bail!(
             "Specify --session <id> or --latest to select a session.\n\
@@ -117,19 +120,14 @@ fn cmd_checkpoint(
     };
 
     println!(
-        "{} Capturing session {}...",
+        "{} Capturing session {} [{}]...",
         "🥷".bold(),
-        session_id[..8.min(session_id.len())].cyan()
+        session_id[..8.min(session_id.len())].cyan(),
+        agent_kind.to_string().magenta()
     );
 
-    // Collecter les artifacts
-    let mut collected = if session_id != "manual" {
-        collector.collect_session(&session_id)?
-    } else {
-        Vec::new()
-    };
-
     // Ajouter les fichiers manuels --attach
+    let mut collected = collected;
     for path in &attach {
         if path.exists() {
             let artifact = collectors::create_manual_artifact(path)?;
@@ -161,7 +159,7 @@ fn cmd_checkpoint(
     store.ensure_gitignore()?;
 
     let checkpoint = store.create_checkpoint(
-        models::AgentKind::Antigravity,
+        agent_kind,
         &session_id,
         message.as_deref(),
         collected,
@@ -602,6 +600,83 @@ fn format_size(bytes: u64) -> String {
     } else {
         format!("{:.1} MB", bytes as f64 / (1024.0 * 1024.0))
     }
+}
+
+// ── Smart --latest Resolution ─────────────────────────────────────────────
+
+/// Résout la session la plus récente parmi tous les collecteurs.
+///
+/// ## Logique du "Duel Final"
+///
+/// 1. Scanne Antigravity (brain/) → prend la session la plus récente
+/// 2. Scanne Copilot (workspaceStorage/) filtré au **workspace courant** uniquement
+/// 3. Compare les timestamps et prend la gagnante
+/// 4. Collecte les artifacts de la session gagnante
+///
+/// Retourne `(session_id, agent_kind, collected_artifacts)`.
+fn resolve_latest_session(
+    config: &AnbuConfig,
+) -> Result<(String, models::AgentKind, Vec<collectors::CollectedArtifact>)> {
+    let mut candidates: Vec<models::SessionInfo> = Vec::new();
+
+    // 1. Antigravity sessions
+    let ag = AntigravityCollector::new(config.brain_path());
+    match ag.detect_sessions() {
+        Ok(sessions) => {
+            if let Some(latest) = sessions.into_iter().next() {
+                candidates.push(latest);
+            }
+        }
+        Err(e) => eprintln!("  {} Antigravity scan: {e}", "⚠".yellow()),
+    }
+
+    // 2. Copilot sessions — filtré au workspace courant (all_workspaces = false)
+    let cp = CopilotCollector::new(false);
+    match cp.detect_sessions() {
+        Ok(sessions) => {
+            if let Some(latest) = sessions.into_iter().next() {
+                candidates.push(latest);
+            }
+        }
+        Err(e) => eprintln!("  {} Copilot scan: {e}", "⚠".yellow()),
+    }
+
+    if candidates.is_empty() {
+        anyhow::bail!(
+            "No AI sessions detected.\n\
+             • Antigravity brain: {}\n\
+             • Copilot: current workspace only\n\
+             Use `anbu sessions` to list all sessions.",
+            config.brain_path().display()
+        );
+    }
+
+    // 3. Le Duel Final — la session la plus récente gagne
+    candidates.sort_by(|a, b| b.last_modified.cmp(&a.last_modified));
+    let winner = &candidates[0];
+
+    let winner_id = winner.id.clone();
+    let winner_agent = winner.agent.clone();
+
+    println!(
+        "  {} Latest session: {} [{}] ({})",
+        "→".blue(),
+        winner_id[..8.min(winner_id.len())].cyan(),
+        winner_agent.to_string().magenta(),
+        winner.last_modified.format("%Y-%m-%d %H:%M").to_string().dimmed()
+    );
+
+    // 4. Collecter les artifacts de la gagnante
+    let collected = match winner_agent {
+        models::AgentKind::Antigravity => {
+            ag.collect_session(&winner_id)?
+        }
+        models::AgentKind::Copilot => {
+            cp.collect_session(&winner_id)?
+        }
+    };
+
+    Ok((winner_id, winner_agent, collected))
 }
 
 // ── Setup Command ─────────────────────────────────────────────────────────

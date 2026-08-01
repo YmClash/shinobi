@@ -309,6 +309,7 @@ impl AnbuIndex {
     }
 
     /// Vérifie si un checkpoint est synchronisé.
+    #[allow(dead_code)]
     pub fn is_synced(&self, checkpoint_id: &str) -> Result<bool> {
         let synced: Option<String> = self.conn.query_row(
             "SELECT synced_at FROM checkpoints WHERE id LIKE ?1",

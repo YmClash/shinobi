@@ -25,6 +25,7 @@ use crate::models::Checkpoint;
 
 /// Réponse du serveur après création d'un checkpoint.
 #[derive(Debug, Deserialize)]
+#[allow(dead_code)]
 pub struct SyncResponse {
     pub id: String,
     pub ipfs_cid: String,
