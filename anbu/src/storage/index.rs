@@ -120,6 +120,19 @@ impl AnbuIndex {
         Ok(())
     }
 
+    /// Met à jour le commit_id d'un checkpoint existant.
+    ///
+    /// Appelé après `jj describe` qui mute le commit et change son hash.
+    /// La "Ceinture-Bretelles" : on relit le nouveau hash post-mutation
+    /// et on le synchronise dans l'index SQLite.
+    pub fn update_commit_id(&self, checkpoint_id: &str, commit_id: &str) -> Result<()> {
+        self.conn.execute(
+            "UPDATE checkpoints SET commit_id = ?1 WHERE id = ?2",
+            params![commit_id, checkpoint_id],
+        )?;
+        Ok(())
+    }
+
     /// Liste les checkpoints les plus récents.
     pub fn list_checkpoints(&self, limit: usize) -> Result<Vec<Checkpoint>> {
         let mut stmt = self.conn.prepare(

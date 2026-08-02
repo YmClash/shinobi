@@ -179,12 +179,28 @@ fn cmd_checkpoint(
     // Attacher les trailers jj (sauf --no-tag)
     if !no_tag {
         match vcs::jj_integration::attach_trailers(&revision, &checkpoint) {
-            Ok(()) => {
+            Ok(new_commit_id) => {
                 println!(
                     "  {} Trailers attached to revision {}",
                     "✓".green(),
                     revision.cyan()
                 );
+                // Ceinture-Bretelles: synchroniser le commit_id muté dans SQLite
+                if let Err(e) = index.update_commit_id(
+                    &checkpoint.id.to_string(),
+                    &new_commit_id,
+                ) {
+                    eprintln!(
+                        "  {} Failed to update commit_id in index: {e}",
+                        "⚠".yellow()
+                    );
+                } else {
+                    println!(
+                        "  {} Commit ID synced: {}",
+                        "✓".green(),
+                        new_commit_id[..12.min(new_commit_id.len())].dimmed()
+                    );
+                }
             }
             Err(e) => {
                 eprintln!(

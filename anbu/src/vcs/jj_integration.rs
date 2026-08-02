@@ -29,7 +29,7 @@ use crate::models::Checkpoint;
 ///
 /// ## Safeguard anti-duplication
 /// Parse la description existante et remplace les trailers AI-* existants.
-pub fn attach_trailers(revision: &str, checkpoint: &Checkpoint) -> Result<()> {
+pub fn attach_trailers(revision: &str, checkpoint: &Checkpoint) -> Result<String> {
     // Vérifier que jj est disponible
     check_jj_available()?;
 
@@ -65,7 +65,12 @@ pub fn attach_trailers(revision: &str, checkpoint: &Checkpoint) -> Result<()> {
         anyhow::bail!("jj describe failed: {stderr}");
     }
 
-    Ok(())
+    // 5. Ceinture-Bretelles: relire le commit_id post-mutation
+    //    jj describe mute le commit → le hash change.
+    //    On récupère le nouveau hash pour synchroniser l'index SQLite.
+    let new_commit_id = read_commit_id(revision)?;
+
+    Ok(new_commit_id)
 }
 
 /// Lit la description actuelle d'un commit jj.
@@ -84,6 +89,25 @@ fn read_description(revision: &str) -> Result<String> {
     }
 
     Ok(String::from_utf8_lossy(&output.stdout).to_string())
+}
+
+/// Lit le commit_id (hash SHA) d'une révision jj.
+///
+/// Utilisé après `jj describe` pour récupérer le hash muté
+/// (car `jj describe` crée un nouveau commit avec un hash différent).
+fn read_commit_id(revision: &str) -> Result<String> {
+    let output = Command::new("jj")
+        .args(["log", "--no-graph", "-r", revision, "-T", "commit_id"])
+        .output()
+        .context("Failed to execute `jj log` for commit_id")?;
+
+    if !output.status.success() {
+        let stderr = String::from_utf8_lossy(&output.stderr);
+        anyhow::bail!("jj log (commit_id) failed: {stderr}");
+    }
+
+    let commit_id = String::from_utf8_lossy(&output.stdout).trim().to_string();
+    Ok(commit_id)
 }
 
 /// Supprime tous les trailers AI-* d'une description de commit.
