@@ -148,7 +148,10 @@ nen/logs/
 
 # Codex & Documentation locale
 CODEX_BOARD.md
+CODEX_BOARD_1.md
+logo/
 Docs/
+
 
 # ── Workspace JJ ────────────────────────────
 taijutsu/workspace
@@ -166,3 +169,4 @@ CODEX_BOARD_1.md
 anbu_test_ground/
 boruto/
 
+logo/Shinobi_logo_0.jfif

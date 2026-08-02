@@ -258,7 +258,7 @@ export default function CommitDetailPage() {
                   <div style={{ display: "flex", gap: "0.35rem" }}>
                     <a
                       className="ai-artifact-view-btn"
-                      href={`/api/ipfs/${checkpoint.ipfs_cid}`}
+                      href={`/ipfs/view/${checkpoint.ipfs_cid}`}
                       target="_blank"
                       rel="noopener noreferrer"
                       onClick={(e) => e.stopPropagation()}
