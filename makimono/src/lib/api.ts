@@ -498,18 +498,22 @@ export interface SenseiModelsResponse {
   active: string;
 }
 
-/** Récupère la liste des modèles installés sur Ollama #2 (Sensei). */
-export async function getSenseiModels(): Promise<SenseiModelsResponse> {
-  const res = await fetch(`${getBaseUrl()}/api/v1/sensei/models`);
+/** Récupère la liste des modèles installés sur Ollama #2 (Sensei). 🔒 Auth requise. */
+export async function getSenseiModels(token?: string | null): Promise<SenseiModelsResponse> {
+  const headers: Record<string, string> = {};
+  if (token) headers["Authorization"] = `Bearer ${token}`;
+  const res = await fetch(`${getBaseUrl()}/api/v1/sensei/models`, { headers });
   if (!res.ok) throw new Error(`Models fetch failed: ${res.status}`);
   return res.json();
 }
 
-/** Pré-charge un modèle dans la RAM d'Ollama (élimine le cold-start ~30s). */
-export async function warmupSenseiModel(model: string): Promise<void> {
+/** Pré-charge un modèle dans la RAM d'Ollama (élimine le cold-start ~30s). 🔒 Auth requise. */
+export async function warmupSenseiModel(model: string, token?: string | null): Promise<void> {
+  const headers: Record<string, string> = { "Content-Type": "application/json" };
+  if (token) headers["Authorization"] = `Bearer ${token}`;
   const res = await fetch(`${getBaseUrl()}/api/v1/sensei/warmup`, {
     method: "POST",
-    headers: { "Content-Type": "application/json" },
+    headers,
     body: JSON.stringify({ model }),
   });
   if (!res.ok) {
@@ -576,12 +580,15 @@ export interface SenseiStreamCallbacks {
 export function senseiChatStream(
   body: SenseiChatRequest,
   callbacks: SenseiStreamCallbacks,
+  token?: string | null,
 ): AbortController {
   const controller = new AbortController();
+  const headers: Record<string, string> = { "Content-Type": "application/json" };
+  if (token) headers["Authorization"] = `Bearer ${token}`;
 
   fetch(`${getBaseUrl()}/api/v1/sensei/chat`, {
     method: "POST",
-    headers: { "Content-Type": "application/json" },
+    headers,
     body: JSON.stringify(body),
     signal: controller.signal,
   })

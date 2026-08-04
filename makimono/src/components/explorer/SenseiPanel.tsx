@@ -38,6 +38,7 @@ import {
   type SenseiSource,
   type SenseiModelInfo,
 } from "@/lib/api";
+import { getToken } from "@/lib/auth";
 
 interface SenseiPanelProps {
   isOpen: boolean;
@@ -87,8 +88,9 @@ export default function SenseiPanel({
   useEffect(() => {
     if (isOpen) {
       setTimeout(() => inputRef.current?.focus(), 200);
+      const token = getToken();
       // Charger la liste des modèles et déclencher le warmup du modèle actif
-      getSenseiModels()
+      getSenseiModels(token)
         .then((data) => {
           setAvailableModels(data.models);
           if (!activeModel && data.active) {
@@ -98,7 +100,7 @@ export default function SenseiPanel({
           const modelToWarm = activeModel || data.active;
           if (modelToWarm) {
             setIsWarmingUp(true);
-            warmupSenseiModel(modelToWarm)
+            warmupSenseiModel(modelToWarm, token)
               .catch(() => {}) // silencieux
               .finally(() => setIsWarmingUp(false));
           }
@@ -112,7 +114,7 @@ export default function SenseiPanel({
     setActiveModel(modelName);
     setIsWarmingUp(true);
     try {
-      await warmupSenseiModel(modelName);
+      await warmupSenseiModel(modelName, getToken());
     } catch {
       // silencieux
     } finally {
@@ -266,6 +268,7 @@ export default function SenseiPanel({
             );
           },
         },
+        getToken(),
       );
 
       abortControllerRef.current = controller;
