@@ -260,6 +260,7 @@ export default function CommitDetailPage() {
         <UnifiedDiffViewer
           files={diffData.files}
           stats={diffData.stats}
+          aiContext={checkpoint ? { agent: checkpoint.agent } : null}
         />
       )}
 

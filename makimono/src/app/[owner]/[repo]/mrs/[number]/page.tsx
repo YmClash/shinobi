@@ -18,6 +18,7 @@ import { MrStatusBadge } from "@/components/mr/mr-status-badge";
 import { MrTimeline } from "@/components/mr/mr-timeline";
 import { MrReviewCard } from "@/components/mr/mr-review-card";
 import { MrActionsBar } from "@/components/mr/mr-actions-bar";
+import { UnifiedDiffViewer } from "@/components/operations/unified-diff-viewer";
 
 type DetailTab = "conversation" | "diff";
 
@@ -214,73 +215,16 @@ export default function MrDetailPage() {
             </div>
           )}
 
-          {diffData &&
-            diffData.files.map((file) => (
-              <div key={file.path} className="mr-diff-file">
-                <div className="mr-diff-file-header">
-                  <span
-                    className={`mr-diff-status mr-diff-status-${file.status}`}
-                  >
-                    {file.status === "added"
-                      ? "A"
-                      : file.status === "deleted"
-                        ? "D"
-                        : "M"}
-                  </span>
-                  <span className="mr-diff-file-path">{file.path}</span>
-                  <span className="mr-diff-stats">
-                    {file.additions > 0 && (
-                      <span className="mr-diff-additions">
-                        +{file.additions}
-                      </span>
-                    )}
-                    {file.deletions > 0 && (
-                      <span className="mr-diff-deletions">
-                        -{file.deletions}
-                      </span>
-                    )}
-                  </span>
-                </div>
-
-                {file.too_large ? (
-                  <div className="mr-diff-too-large">
-                    File too large to display
-                  </div>
-                ) : (
-                  file.hunks.map((hunk, hIdx) => (
-                    <div key={hIdx} className="mr-diff-hunk">
-                      <div className="mr-diff-hunk-header">
-                        @@ -{hunk.old_start},{hunk.old_count} +{hunk.new_start},
-                        {hunk.new_count} @@
-                      </div>
-                      <div className="mr-diff-lines">
-                        {hunk.lines.map((line, lIdx) => (
-                          <div
-                            key={lIdx}
-                            className={`mr-diff-line mr-diff-line-${line.kind}`}
-                          >
-                            <span className="mr-diff-line-old">
-                              {line.old_line ?? " "}
-                            </span>
-                            <span className="mr-diff-line-new">
-                              {line.new_line ?? " "}
-                            </span>
-                            <span className="mr-diff-line-content">
-                              {line.kind === "add"
-                                ? "+"
-                                : line.kind === "remove"
-                                  ? "-"
-                                  : " "}
-                              {line.content}
-                            </span>
-                          </div>
-                        ))}
-                      </div>
-                    </div>
-                  ))
-                )}
-              </div>
-            ))}
+          {diffData && diffData.files.length > 0 && (
+            <UnifiedDiffViewer
+              files={diffData.files}
+              stats={{
+                files_changed: diffData.total_files,
+                additions: diffData.files.reduce((s, f) => s + f.additions, 0),
+                deletions: diffData.files.reduce((s, f) => s + f.deletions, 0),
+              }}
+            />
+          )}
         </div>
       )}
     </div>

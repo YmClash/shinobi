@@ -56,28 +56,8 @@ export interface MrListResponse {
   total: number;
 }
 
-export interface MrDiffFile {
-  path: string;
-  status: string;
-  hunks: Array<{
-    old_start: number;
-    old_count: number;
-    new_start: number;
-    new_count: number;
-    lines: Array<{
-      kind: string;
-      content: string;
-      old_line: number | null;
-      new_line: number | null;
-    }>;
-  }>;
-  additions: number;
-  deletions: number;
-  too_large: boolean;
-}
-
 export interface MrDiffResponse {
-  files: MrDiffFile[];
+  files: import("./api").FileDiff[];
   total_files: number;
 }
 

@@ -1087,6 +1087,9 @@ html * {
   --n400: #6b6b80;
   --n300: #9898b0;
   --n100: #e5e5f0;
+  /* Phase 30 — AI Agent Provenance Colors */
+  --cp-agent-antigravity: oklch(0.65 0.22 275);
+  --cp-agent-copilot: oklch(0.60 0.20 150);
 }
 
 /* ── Page racine ─────────────────────────────────────────────── */
@@ -4500,6 +4503,152 @@ html * {
 /* ── Line hover ────────────────────────────────────────────── */
 .diff-line:hover .diff-line-num {
   opacity: 1;
+}
+
+/* ═══════════════════════════════════════════════════════════════
+   PHASE 30 — AI Provenance Gutter (Line-Level)
+   ═══════════════════════════════════════════════════════════════ */
+
+/* ── AI-Authored Line Gutter (border-left on line number cell) ── */
+.diff-line-num-ai {
+  border-left: 3px solid var(--cp-agent-antigravity) !important;
+}
+
+/* Agent-specific gutter colors */
+.diff-line-ai[data-agent="antigravity"] .diff-line-num-ai {
+  border-left-color: var(--cp-agent-antigravity) !important;
+}
+
+.diff-line-ai[data-agent="copilot"] .diff-line-num-ai {
+  border-left-color: var(--cp-agent-copilot, oklch(0.60 0.20 150)) !important;
+}
+
+/* Split view — AI gutter on the right cell's line-num */
+.diff-split-cell.diff-line-ai .diff-line-num-ai {
+  border-left: 3px solid var(--cp-agent-antigravity) !important;
+}
+
+.diff-split-cell.diff-line-ai[data-agent="copilot"] .diff-line-num-ai {
+  border-left-color: var(--cp-agent-copilot, oklch(0.60 0.20 150)) !important;
+}
+
+/* ── AI Toggle Button ──────────────────────────────────────── */
+.diff-ai-toggle-btn {
+  gap: 0.25rem;
+}
+
+.diff-ai-toggle-icon {
+  font-size: 0.8rem;
+  line-height: 1;
+}
+
+.diff-ai-toggle-active {
+  background: color-mix(in oklch, var(--cp-agent-antigravity) 12%, transparent) !important;
+  color: var(--cp-agent-antigravity) !important;
+  border-color: color-mix(in oklch, var(--cp-agent-antigravity) 25%, transparent) !important;
+}
+
+/* ── AI Provenance Banner ──────────────────────────────────── */
+.diff-ai-banner {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+  padding: 0.45rem 0.85rem;
+  font-size: 0.7rem;
+  border: 1px solid color-mix(in oklch, var(--cp-agent-antigravity) 20%, transparent);
+  border-radius: 6px;
+  background: color-mix(in oklch, var(--cp-agent-antigravity) 6%, var(--card));
+  color: var(--muted-foreground);
+  margin-bottom: 0.5rem;
+  animation: fade-in-up 0.25s ease-out forwards;
+}
+
+.diff-ai-banner-icon { font-size: 1rem; }
+.diff-ai-banner-text { flex: 1; }
+.diff-ai-banner-text strong { color: var(--cp-agent-antigravity); }
+
+.diff-ai-banner-legend {
+  display: flex;
+  align-items: center;
+  gap: 0.35rem;
+  font-size: 0.62rem;
+  color: var(--muted-foreground);
+  opacity: 0.7;
+}
+
+.diff-ai-legend-bar {
+  display: inline-block;
+  width: 3px;
+  height: 14px;
+  border-radius: 1px;
+  background: var(--cp-agent-antigravity);
+}
+
+.diff-ai-legend-bar[data-agent="copilot"] {
+  background: var(--cp-agent-copilot, oklch(0.60 0.20 150));
+}
+
+/* ── Per-File AI Badge ─────────────────────────────────────── */
+.diff-file-ai-badge {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.2rem;
+  font-size: 0.58rem;
+  font-weight: 500;
+  padding: 0.1rem 0.4rem;
+  border-radius: 999px;
+  background: color-mix(in oklch, var(--cp-agent-antigravity) 12%, transparent);
+  color: var(--cp-agent-antigravity);
+  margin-left: 0.4rem;
+}
+
+.diff-file-ai-badge[data-agent="copilot"] {
+  background: color-mix(in oklch, var(--cp-agent-copilot, oklch(0.60 0.20 150)) 12%, transparent);
+  color: var(--cp-agent-copilot, oklch(0.60 0.20 150));
+}
+
+/* ── Theme: Cyberpunk AI Gutter ────────────────────────────── */
+[data-theme="cyberpunk"] .diff-line-num-ai {
+  border-left-color: oklch(0.72 0.25 310) !important;
+}
+
+[data-theme="cyberpunk"] .diff-ai-toggle-active {
+  background: oklch(0.72 0.25 310 / 15%) !important;
+  color: oklch(0.72 0.25 310) !important;
+  text-shadow: 0 0 6px oklch(0.72 0.25 310 / 50%);
+}
+
+[data-theme="cyberpunk"] .diff-ai-banner {
+  border-color: oklch(0.72 0.25 310 / 15%);
+  background: oklch(0.12 0.04 310 / 40%);
+}
+
+[data-theme="cyberpunk"] .diff-ai-legend-bar {
+  background: oklch(0.72 0.25 310);
+  box-shadow: 0 0 4px oklch(0.72 0.25 310 / 60%);
+}
+
+[data-theme="cyberpunk"] .diff-file-ai-badge {
+  background: oklch(0.72 0.25 310 / 15%);
+  color: oklch(0.72 0.25 310);
+}
+
+/* ── Theme: Glass AI Gutter ───────────────────────────────── */
+[data-theme="glass"] .diff-ai-banner {
+  backdrop-filter: blur(8px);
+  background: oklch(0.2 0.02 260 / 40%);
+  border-color: oklch(0.5 0.03 260 / 15%);
+}
+
+/* ── Theme: Scroll AI Gutter ──────────────────────────────── */
+[data-theme="scroll"] .diff-ai-banner {
+  background: oklch(0.95 0.01 80 / 70%);
+  border-color: oklch(0.55 0.05 60 / 20%);
+}
+
+[data-theme="scroll"] .diff-file-ai-badge {
+  background: oklch(0.45 0.08 60 / 15%);
+  color: oklch(0.45 0.08 60);
 }
 
 /* ═══════════════════════════════════════════════════════════════
