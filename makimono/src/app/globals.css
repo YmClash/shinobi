@@ -8119,6 +8119,237 @@ html * {
   background: oklch(0.2 0.02 260 / 50%);
   border-color: oklch(0.5 0.03 260 / 20%);
 }
+
+/* ═══════════════════════════════════════════════════════════════
+   AI EXPLORER — Split View Artifact Viewer (Phase 28F)
+   ═══════════════════════════════════════════════════════════════ */
+
+.ai-explorer {
+  display: grid;
+  grid-template-columns: 280px 1fr;
+  border: 1px solid var(--border);
+  border-radius: 10px;
+  overflow: hidden;
+  min-height: 500px;
+  max-height: 75vh;
+  background: var(--card);
+  animation: fade-in-up 0.35s ease-out forwards;
+}
+
+/* ── Sidebar (Fichiers) ───────────────────────────────────── */
+.ai-explorer-sidebar {
+  border-right: 1px solid var(--border);
+  overflow-y: auto;
+  background: color-mix(in oklch, var(--card) 95%, var(--muted));
+}
+
+.ai-explorer-sidebar-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 0.7rem 0.85rem;
+  font-size: 0.7rem;
+  font-weight: 600;
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+  color: var(--muted-foreground);
+  border-bottom: 1px solid var(--border);
+  position: sticky;
+  top: 0;
+  background: inherit;
+  z-index: 2;
+}
+
+.ai-explorer-sidebar-count {
+  font-size: 0.6rem;
+  font-weight: 500;
+  padding: 0.1rem 0.4rem;
+  border-radius: 999px;
+  background: color-mix(in oklch, var(--cp-agent-antigravity) 12%, transparent);
+  color: var(--cp-agent-antigravity);
+}
+
+.ai-explorer-file-btn {
+  display: flex;
+  align-items: center;
+  gap: 0.55rem;
+  width: 100%;
+  padding: 0.6rem 0.85rem;
+  background: none;
+  border: none;
+  border-bottom: 1px solid color-mix(in oklch, var(--border) 50%, transparent);
+  color: var(--foreground);
+  cursor: pointer;
+  text-align: left;
+  transition: background 0.15s, box-shadow 0.15s;
+  font-size: 0.78rem;
+}
+
+.ai-explorer-file-btn:last-child { border-bottom: none; }
+
+.ai-explorer-file-btn:hover {
+  background: color-mix(in oklch, var(--muted) 80%, transparent);
+}
+
+.ai-explorer-file-btn.active {
+  background: color-mix(in oklch, var(--cp-agent-antigravity) 8%, transparent);
+  box-shadow: inset 3px 0 0 var(--cp-agent-antigravity);
+}
+
+.ai-explorer-file-icon { font-size: 1rem; flex-shrink: 0; }
+
+.ai-explorer-file-info {
+  display: flex;
+  flex-direction: column;
+  min-width: 0;
+  gap: 0.05rem;
+}
+
+.ai-explorer-file-name {
+  font-size: 0.76rem;
+  font-weight: 500;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.ai-explorer-file-size {
+  font-size: 0.62rem;
+  color: var(--muted-foreground);
+  font-family: var(--font-mono);
+}
+
+/* ── Content Panel ────────────────────────────────────────── */
+.ai-explorer-content {
+  overflow-y: auto;
+  overflow-x: hidden;
+  display: flex;
+  flex-direction: column;
+}
+
+.ai-explorer-placeholder {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  height: 100%;
+  min-height: 400px;
+  gap: 0.6rem;
+  color: var(--muted-foreground);
+}
+
+.ai-explorer-placeholder-icon { font-size: 2.5rem; opacity: 0.35; }
+.ai-explorer-placeholder p { font-size: 0.82rem; margin: 0; }
+
+.ai-explorer-loading {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  height: 100%;
+  min-height: 300px;
+  gap: 0.6rem;
+  color: var(--muted-foreground);
+}
+
+.ai-explorer-spinner {
+  width: 24px;
+  height: 24px;
+  border: 3px solid var(--border);
+  border-top-color: var(--cp-agent-antigravity);
+  border-radius: 50%;
+  animation: ipfs-spin 0.8s linear infinite;
+}
+
+/* ── Full Page Link ───────────────────────────────────────── */
+.ai-explorer-fullpage-link {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.3rem;
+  font-size: 0.65rem;
+  color: var(--muted-foreground);
+  text-decoration: none;
+  padding: 0.25rem 0.5rem;
+  border-radius: 5px;
+  transition: color 0.15s, background 0.15s;
+}
+
+.ai-explorer-fullpage-link:hover {
+  color: var(--cp-agent-antigravity);
+  background: color-mix(in oklch, var(--cp-agent-antigravity) 8%, transparent);
+}
+
+/* ── Responsive ───────────────────────────────────────────── */
+@media (max-width: 768px) {
+  .ai-explorer {
+    grid-template-columns: 1fr;
+    max-height: none;
+  }
+
+  .ai-explorer-sidebar {
+    border-right: none;
+    border-bottom: 1px solid var(--border);
+    max-height: 200px;
+  }
+}
+
+/* ── Theme: Cyberpunk ─────────────────────────────────────── */
+[data-theme="cyberpunk"] .ai-explorer {
+  border-color: oklch(0.72 0.25 310 / 15%);
+}
+
+[data-theme="cyberpunk"] .ai-explorer-sidebar {
+  background: oklch(0.1 0.03 310 / 40%);
+}
+
+[data-theme="cyberpunk"] .ai-explorer-file-btn.active {
+  background: oklch(0.15 0.06 310 / 30%);
+  box-shadow: inset 3px 0 0 oklch(0.72 0.25 310);
+}
+
+[data-theme="cyberpunk"] .ai-explorer-file-btn:hover {
+  background: oklch(0.18 0.05 310 / 20%);
+}
+
+[data-theme="cyberpunk"] .ai-explorer-sidebar-count {
+  background: oklch(0.72 0.25 310 / 15%);
+  color: oklch(0.72 0.25 310);
+  text-shadow: 0 0 6px oklch(0.72 0.25 310 / 50%);
+}
+
+/* ── Theme: Glass ─────────────────────────────────────────── */
+[data-theme="glass"] .ai-explorer {
+  backdrop-filter: blur(12px) saturate(160%);
+  -webkit-backdrop-filter: blur(12px) saturate(160%);
+  background: oklch(0.2 0.02 260 / 50%);
+  border-color: oklch(0.5 0.03 260 / 20%);
+}
+
+[data-theme="glass"] .ai-explorer-sidebar {
+  background: oklch(0.18 0.02 260 / 40%);
+  border-right-color: oklch(0.5 0.03 260 / 15%);
+}
+
+/* ── Theme: Scroll ────────────────────────────────────────── */
+[data-theme="scroll"] .ai-explorer {
+  background: oklch(0.97 0.01 80 / 85%);
+  border-color: oklch(0.55 0.05 60 / 25%);
+}
+
+[data-theme="scroll"] .ai-explorer-sidebar {
+  background: oklch(0.95 0.01 80 / 70%);
+  border-right-color: oklch(0.55 0.05 60 / 20%);
+}
+
+[data-theme="scroll"] .ai-explorer-file-btn.active {
+  background: oklch(0.92 0.02 60 / 50%);
+  box-shadow: inset 3px 0 0 oklch(0.45 0.08 60);
+}
+
+[data-theme="scroll"] .ai-explorer-file-btn:hover {
+  background: oklch(0.93 0.01 60 / 60%);
+}
+
 /* =================================================================
    IPFS ARTIFACT VIEWER - Smart Content Renderer (Phase 28D)
    ================================================================= */
