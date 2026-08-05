@@ -18,7 +18,7 @@ use serde::Deserialize;
 use tracing::{info, warn};
 use uuid::Uuid;
 
-use domain::entities::federation::FederationFollow;
+use domain::entities::federation::{FederationActivity, FederationFollow};
 use domain::errors::DomainError;
 
 use crate::errors::AppError;
@@ -191,15 +191,44 @@ pub async fn actor_ap_handler(
     let domain = &state.federation_domain;
     let actor_uri = format!("https://{}/actors/{}", domain, actor.handle);
 
-    // Récupérer la clé publique si elle existe
-    let public_key_section = if let Ok(Some(keypair)) = state.federation_repo.get_keypair(&actor.id).await {
-        serde_json::json!({
-            "id": keypair.key_id,
-            "owner": actor_uri,
-            "publicKeyPem": keypair.public_key_pem,
-        })
-    } else {
-        serde_json::json!(null)
+    // Récupérer ou générer la clé publique (Lazy Keygen — Phase 27-bis-C)
+    let public_key_section = match state.federation_repo.get_keypair(&actor.id).await {
+        Ok(Some(keypair)) => {
+            serde_json::json!({
+                "id": keypair.key_id,
+                "owner": actor_uri,
+                "publicKeyPem": keypair.public_key_pem,
+            })
+        }
+        _ => {
+            // Lazy keygen : générer une keypair RSA si elle n'existe pas
+            match infrastructure::federation::crypto::generate_rsa_keypair() {
+                Ok(kp) => {
+                    let key_id = format!("{}#main-key", actor_uri);
+                    let fed_kp = domain::entities::federation::FederationKeypair {
+                        actor_id: actor.id,
+                        public_key_pem: kp.public_key_pem.clone(),
+                        private_key_pem: kp.private_key_pem,
+                        key_id: key_id.clone(),
+                        created_at: Utc::now(),
+                    };
+                    if let Err(e) = state.federation_repo.save_keypair(&fed_kp).await {
+                        warn!(actor_id = %actor.id, error = %e, "⚠️ Failed to save lazy-generated keypair");
+                    } else {
+                        info!(actor_id = %actor.id, handle = %actor.handle, "🔑 Lazy keygen — keypair generated on first AP fetch");
+                    }
+                    serde_json::json!({
+                        "id": key_id,
+                        "owner": actor_uri,
+                        "publicKeyPem": kp.public_key_pem,
+                    })
+                }
+                Err(e) => {
+                    warn!(error = %e, "⚠️ Lazy keygen failed — publicKey will be null");
+                    serde_json::json!(null)
+                }
+            }
+        }
     };
 
     // Mapper ActorType → ActivityPub type
@@ -249,14 +278,16 @@ pub async fn actor_ap_handler(
 
 /// Inbox ActivityPub — `POST /actors/{handle}/inbox`
 ///
-/// Reçoit les activités fédérées entrantes. Pour Phase 27 :
-/// - `Follow` → persiste le follower + répond `Accept` (202)
+/// Reçoit les activités fédérées entrantes.
+/// - `Follow` → persiste le follower + répond `Accept` signé (tokio::spawn)
 /// - `Undo(Follow)` → supprime le follower
-/// - Autres → log + ignore (202 Accepted, stub Phase 27-bis)
+/// - Autres → log + ignore (202 Accepted)
 ///
-/// ## Sécurité
-/// - Vérifie le clock skew (< 30s) pour prévenir les replay attacks
-/// - La vérification de signature HTTP sera renforcée en Phase 27-bis
+/// ## Sécurité (Phase 27-bis-A)
+/// 1. Vérifie le clock skew (< 30s) — anti-replay
+/// 2. Exige le header `Signature` — Draft-Cavage-12
+/// 3. Fetch la clé publique du signataire distant (cache 5 min)
+/// 4. Vérifie la signature RSA
 pub async fn inbox_handler(
     State(state): State<SharedState>,
     Path(handle): Path<String>,
@@ -275,6 +306,47 @@ pub async fn inbox_handler(
             ).into_response());
         }
     }
+
+    // ── Phase 27-bis-A : Vérification de la signature HTTP ──
+    let signature_header = headers.get("signature")
+        .and_then(|v| v.to_str().ok())
+        .ok_or_else(|| AppError(DomainError::Unauthorized(
+            "Missing Signature header — federation requires HTTP Signatures (Draft-Cavage-12)".into()
+        )))?;
+
+    // Parser le header pour extraire le keyId
+    let parsed_sig = infrastructure::federation::http_signature::parse_signature_header(signature_header)
+        .map_err(|e| AppError(DomainError::Unauthorized(format!("Invalid Signature header: {}", e))))?;
+
+    // Fetch la clé publique distante (avec cache SSRF-guarded)
+    let fetcher = infrastructure::federation::remote_actor::RemoteActorFetcher::new();
+    let remote_actor = fetcher.fetch(&parsed_sig.key_id.split('#').next().unwrap_or(&parsed_sig.key_id)).await
+        .map_err(|e| {
+            warn!(key_id = %parsed_sig.key_id, error = %e, "❌ Failed to fetch remote actor for signature verification");
+            AppError(DomainError::Unauthorized(format!("Cannot fetch remote signing key: {}", e)))
+        })?;
+
+    // Reconstruire la map des headers pour la vérification
+    let mut request_headers = std::collections::HashMap::new();
+    for (name, value) in headers.iter() {
+        if let Ok(v) = value.to_str() {
+            request_headers.insert(name.as_str().to_lowercase(), v.to_string());
+        }
+    }
+
+    // Vérifier la signature RSA
+    infrastructure::federation::http_signature::verify_signature(
+        &remote_actor.public_key_pem,
+        signature_header,
+        "POST",
+        &format!("/actors/{}/inbox", handle),
+        &request_headers,
+    ).map_err(|e| {
+        warn!(key_id = %parsed_sig.key_id, error = %e, "🛡️ Signature verification failed");
+        AppError(DomainError::Unauthorized(format!("Invalid HTTP Signature: {}", e)))
+    })?;
+
+    info!(key_id = %parsed_sig.key_id, "✅ HTTP Signature verified");
 
     // Résoudre l'acteur local
     let actor = state
@@ -319,7 +391,65 @@ pub async fn inbox_handler(
             };
             state.federation_repo.save_follow(&follow).await?;
 
-            // TODO Phase 27-bis : envoyer un Accept signé vers l'inbox du follower
+            // ── Phase 27-bis-B : Envoyer un Accept signé (Le Facteur) ──
+            let domain = state.federation_domain.clone();
+            let actor_uri = format!("https://{}/actors/{}", domain, actor.handle);
+            let federation_repo = state.federation_repo.clone();
+            let actor_id = actor.id;
+            let follow_body = body.clone();
+            let remote_inbox = remote_actor.inbox.clone();
+
+            tokio::spawn(async move {
+                // Récupérer la keypair de l'acteur local
+                let keypair = match federation_repo.get_keypair(&actor_id).await {
+                    Ok(Some(kp)) => kp,
+                    _ => {
+                        warn!(actor_id = %actor_id, "⚠️ No keypair for Accept delivery — skipping");
+                        return;
+                    }
+                };
+
+                // Construire l'Accept activity
+                let accept = serde_json::json!({
+                    "@context": "https://www.w3.org/ns/activitystreams",
+                    "id": format!("{}/activities/{}", actor_uri, Uuid::new_v4()),
+                    "type": "Accept",
+                    "actor": actor_uri,
+                    "object": follow_body,
+                });
+
+                // Déterminer l'inbox cible
+                let target_inbox = if remote_inbox.is_empty() {
+                    // Fallback: dériver de l'URI du follower
+                    format!("{}/inbox", follower_uri)
+                } else {
+                    remote_inbox
+                };
+
+                // Livrer l'Accept signé
+                if let Err(e) = infrastructure::federation::delivery::deliver_activity(
+                    accept.clone(),
+                    &target_inbox,
+                    &keypair.private_key_pem,
+                    &keypair.key_id,
+                ).await {
+                    warn!(target = %target_inbox, error = %e, "⚠️ Accept delivery failed (non-fatal)");
+                }
+
+                // Enregistrer l'Accept dans l'outbox (Phase 27-bis-D)
+                let activity = FederationActivity {
+                    id: Uuid::new_v4(),
+                    actor_id,
+                    activity_type: "Accept".into(),
+                    object_type: "Follow".into(),
+                    object_id: follower_uri.clone(),
+                    activity_json: accept,
+                    published_at: Utc::now(),
+                };
+                if let Err(e) = federation_repo.save_activity(&activity).await {
+                    warn!(error = %e, "⚠️ Failed to save Accept activity to outbox");
+                }
+            });
 
             Ok((StatusCode::ACCEPTED, Json(serde_json::json!({
                 "status": "accepted",
@@ -348,7 +478,7 @@ pub async fn inbox_handler(
             }))).into_response())
         }
         _ => {
-            // Phase 27 : on accepte poliment et on archive (202 Accepted)
+            // On accepte poliment et on archive (202 Accepted)
             info!(
                 activity_type = %activity_type,
                 "📋 Activité fédérée non gérée — archivée (stub)"
@@ -356,7 +486,7 @@ pub async fn inbox_handler(
             Ok((StatusCode::ACCEPTED, Json(serde_json::json!({
                 "status": "accepted",
                 "type": activity_type,
-                "note": "Activity logged but not processed (Phase 27 stub)"
+                "note": "Activity logged but not processed"
             }))).into_response())
         }
     }
@@ -365,7 +495,7 @@ pub async fn inbox_handler(
 /// Outbox ActivityPub — `GET /actors/{handle}/outbox`
 ///
 /// Retourne une OrderedCollection des activités récentes.
-/// Phase 27 : collection vide (lecture seule, pas de Client-to-Server).
+/// Phase 27-bis-D : activités réelles depuis PostgreSQL.
 pub async fn outbox_handler(
     State(state): State<SharedState>,
     Path(handle): Path<String>,
@@ -378,7 +508,7 @@ pub async fn outbox_handler(
     }
 
     // Vérifier que l'acteur existe
-    let _actor = state
+    let actor = state
         .actor_repo
         .find_by_handle(&handle)
         .await?
@@ -389,6 +519,11 @@ pub async fn outbox_handler(
     let domain = &state.federation_domain;
     let outbox_uri = format!("https://{}/actors/{}/outbox", domain, handle);
 
+    // Phase 27-bis-D : activités réelles
+    let activities = state.federation_repo.list_activities(&actor.id, 50).await?;
+    let total = state.federation_repo.count_activities(&actor.id).await?;
+    let items: Vec<serde_json::Value> = activities.into_iter().map(|a| a.activity_json).collect();
+
     Ok((
         StatusCode::OK,
         [(header::CONTENT_TYPE, "application/activity+json; charset=utf-8")],
@@ -396,8 +531,8 @@ pub async fn outbox_handler(
             "@context": "https://www.w3.org/ns/activitystreams",
             "id": outbox_uri,
             "type": "OrderedCollection",
-            "totalItems": 0,
-            "orderedItems": [],
+            "totalItems": total,
+            "orderedItems": items,
         })),
     ).into_response())
 }

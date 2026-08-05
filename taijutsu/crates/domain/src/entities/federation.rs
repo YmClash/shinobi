@@ -59,6 +59,36 @@ pub struct FederationFollow {
     pub created_at: DateTime<Utc>,
 }
 
+// ── Activité fédérée (Outbox) ────────────────────────────────────────
+
+/// Activité ActivityPub stockée pour l'Outbox.
+///
+/// Phase 27-bis-D — Le corps de l'activité est stocké en JSONB
+/// pour le polymorphisme natif d'ActivityPub (Create, Update, Delete, Accept).
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct FederationActivity {
+    /// Identifiant unique de l'activité.
+    pub id: Uuid,
+
+    /// ID de l'acteur local auteur de l'activité.
+    pub actor_id: Uuid,
+
+    /// Type d'activité ActivityPub (ex: "Create", "Accept", "Update", "Delete").
+    pub activity_type: String,
+
+    /// Type de l'objet (ex: "Repository", "Follow", "Note").
+    pub object_type: String,
+
+    /// URI de l'objet référencé.
+    pub object_id: String,
+
+    /// Activité AP complète en JSON (polymorphique).
+    pub activity_json: serde_json::Value,
+
+    /// Date de publication.
+    pub published_at: DateTime<Utc>,
+}
+
 // ── Tests ─────────────────────────────────────────────────────────────
 
 #[cfg(test)]
@@ -87,5 +117,20 @@ mod tests {
             created_at: Utc::now(),
         };
         assert!(!follow.accepted);
+    }
+
+    #[test]
+    fn test_federation_activity_creation() {
+        let activity = FederationActivity {
+            id: Uuid::new_v4(),
+            actor_id: Uuid::new_v4(),
+            activity_type: "Create".into(),
+            object_type: "Repository".into(),
+            object_id: "https://shinobi.dev/repos/ymclash/my-repo".into(),
+            activity_json: serde_json::json!({"type": "Create"}),
+            published_at: Utc::now(),
+        };
+        assert_eq!(activity.activity_type, "Create");
+        assert_eq!(activity.object_type, "Repository");
     }
 }

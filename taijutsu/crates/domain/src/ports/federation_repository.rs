@@ -6,7 +6,7 @@
 use async_trait::async_trait;
 use uuid::Uuid;
 
-use crate::entities::federation::{FederationKeypair, FederationFollow};
+use crate::entities::federation::{FederationKeypair, FederationFollow, FederationActivity};
 use crate::errors::DomainError;
 
 /// Contrat de persistence pour les données de fédération.
@@ -35,6 +35,17 @@ pub trait FederationRepository: Send + Sync {
 
     /// Compte les followers fédérés d'un acteur local.
     async fn count_followers(&self, actor_id: &Uuid) -> Result<i64, DomainError>;
+
+    // ── Activities (Outbox) — Phase 27-bis-D ─────────────────
+
+    /// Enregistre une activité sortante dans l'outbox.
+    async fn save_activity(&self, activity: &FederationActivity) -> Result<(), DomainError>;
+
+    /// Liste les activités récentes d'un acteur (outbox paginé).
+    async fn list_activities(&self, actor_id: &Uuid, limit: i64) -> Result<Vec<FederationActivity>, DomainError>;
+
+    /// Compte les activités d'un acteur.
+    async fn count_activities(&self, actor_id: &Uuid) -> Result<i64, DomainError>;
 
     // ── Stats (NodeInfo) ─────────────────────────────────────
 

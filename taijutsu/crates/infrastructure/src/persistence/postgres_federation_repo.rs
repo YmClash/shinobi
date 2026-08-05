@@ -7,7 +7,7 @@ use sqlx::PgPool;
 use tracing::info;
 use uuid::Uuid;
 
-use domain::entities::federation::{FederationFollow, FederationKeypair};
+use domain::entities::federation::{FederationActivity, FederationFollow, FederationKeypair};
 use domain::errors::DomainError;
 use domain::ports::federation_repository::FederationRepository;
 
@@ -134,6 +134,66 @@ impl FederationRepository for PostgresFederationRepository {
         Ok(row.0)
     }
 
+    // ── Activities (Outbox) — Phase 27-bis-D ──────────────────
+
+    async fn save_activity(&self, activity: &FederationActivity) -> Result<(), DomainError> {
+        sqlx::query(
+            "INSERT INTO federation_activities (id, actor_id, activity_type, object_type, object_id, activity_json, published_at)
+             VALUES ($1, $2, $3, $4, $5, $6, $7)"
+        )
+        .bind(&activity.id)
+        .bind(&activity.actor_id)
+        .bind(&activity.activity_type)
+        .bind(&activity.object_type)
+        .bind(&activity.object_id)
+        .bind(&activity.activity_json)
+        .bind(&activity.published_at)
+        .execute(&self.pool)
+        .await
+        .map_err(|e| DomainError::Persistence(e.to_string()))?;
+
+        Ok(())
+    }
+
+    async fn list_activities(&self, actor_id: &Uuid, limit: i64) -> Result<Vec<FederationActivity>, DomainError> {
+        let rows = sqlx::query_as::<_, ActivityRow>(
+            "SELECT id, actor_id, activity_type, object_type, object_id, activity_json, published_at
+             FROM federation_activities
+             WHERE actor_id = $1
+             ORDER BY published_at DESC
+             LIMIT $2"
+        )
+        .bind(actor_id)
+        .bind(limit)
+        .fetch_all(&self.pool)
+        .await
+        .map_err(|e| DomainError::Persistence(e.to_string()))?;
+
+        Ok(rows.into_iter().map(|r| FederationActivity {
+            id: r.id,
+            actor_id: r.actor_id,
+            activity_type: r.activity_type,
+            object_type: r.object_type,
+            object_id: r.object_id,
+            activity_json: r.activity_json,
+            published_at: r.published_at,
+        }).collect())
+    }
+
+    async fn count_activities(&self, actor_id: &Uuid) -> Result<i64, DomainError> {
+        let row: (i64,) = sqlx::query_as(
+            "SELECT COUNT(*) FROM federation_activities WHERE actor_id = $1"
+        )
+        .bind(actor_id)
+        .fetch_one(&self.pool)
+        .await
+        .map_err(|e| DomainError::Persistence(e.to_string()))?;
+
+        Ok(row.0)
+    }
+
+    // ── Stats (NodeInfo) ─────────────────────────────────────
+
     async fn count_local_users(&self) -> Result<i64, DomainError> {
         let row: (i64,) = sqlx::query_as(
             "SELECT COUNT(*) FROM actors WHERE actor_type = 'human'"
@@ -175,4 +235,15 @@ struct FollowRow {
     following_actor_id: Uuid,
     accepted: bool,
     created_at: chrono::DateTime<chrono::Utc>,
+}
+
+#[derive(sqlx::FromRow)]
+struct ActivityRow {
+    id: Uuid,
+    actor_id: Uuid,
+    activity_type: String,
+    object_type: String,
+    object_id: String,
+    activity_json: serde_json::Value,
+    published_at: chrono::DateTime<chrono::Utc>,
 }
