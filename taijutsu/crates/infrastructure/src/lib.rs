@@ -16,6 +16,7 @@ pub mod cache;
 pub mod content;
 pub mod embeddings;
 pub mod events;
+pub mod federation;
 pub mod github;
 pub mod llm;
 pub mod persistence;

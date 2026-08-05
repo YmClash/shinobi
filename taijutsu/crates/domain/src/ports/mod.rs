@@ -11,6 +11,7 @@ pub mod chunk_repository;
 pub mod content_store;
 pub mod embedding_service;
 pub mod event_consumer;
+pub mod federation_repository;
 pub mod event_publisher;
 pub mod github_service;
 pub mod llm_service;

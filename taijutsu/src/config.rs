@@ -92,6 +92,16 @@ pub struct Config {
 
     /// GitHub OAuth Application Client Secret (optionnel).
     pub github_client_secret: Option<String>,
+
+    // ── Phase 27 — ForgeFed (Fédération) ──────────────────────
+
+    /// Domaine public de l'instance pour la fédération ActivityPub.
+    /// Utilisé pour construire les URIs ActivityPub (ex: `https://{domain}/actors/{handle}`).
+    /// Défaut: "localhost:3000" (dev).
+    pub federation_domain: String,
+
+    /// Activer/désactiver la fédération ActivityPub. Défaut: false.
+    pub federation_enabled: bool,
 }
 
 impl Config {
@@ -162,6 +172,12 @@ impl Config {
             // ── Phase 20 — GitHub OAuth ────────────────────
             github_client_id: env::var("GITHUB_CLIENT_ID").ok(),
             github_client_secret: env::var("GITHUB_CLIENT_SECRET").ok(),
+            // ── Phase 27 — ForgeFed ────────────────────────
+            federation_domain: env::var("FEDERATION_DOMAIN")
+                .unwrap_or_else(|_| "localhost:3000".to_string()),
+            federation_enabled: env::var("FEDERATION_ENABLED")
+                .map(|v| v != "false" && v != "0")
+                .unwrap_or(false),
         }
     }
 }

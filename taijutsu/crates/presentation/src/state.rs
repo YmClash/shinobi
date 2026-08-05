@@ -158,6 +158,14 @@ pub struct SharedState {
     pub create_checkpoint: Arc<application::use_cases::create_checkpoint::CreateCheckpointUseCase>,
     /// Use case: lister les checkpoints ANBU d'un repo.
     pub list_checkpoints: Arc<application::use_cases::list_checkpoints::ListCheckpointsUseCase>,
+
+    // ── Phase 27 — ForgeFed (Fédération ActivityPub) ────────
+    /// Domaine public de l'instance (ex: "shinobi.example.com").
+    pub federation_domain: String,
+    /// Indique si la fédération est activée.
+    pub federation_enabled: bool,
+    /// Repository de fédération (keypairs, follows, stats).
+    pub federation_repo: Arc<dyn domain::ports::federation_repository::FederationRepository>,
 }
 
 // ── Phase 12A — Git Bridge HTTP ──────────────────────────────────────

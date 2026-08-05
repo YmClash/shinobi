@@ -37,6 +37,7 @@ uuid        = { workspace = true }
 chrono      = { workspace = true }
 async-trait = { workspace = true }
 anyhow      = { workspace = true }
+thiserror   = { workspace = true }
 
 # — Événementiel (Nen / Kafka) —
 rdkafka = { workspace = true }
@@ -64,6 +65,12 @@ jsonwebtoken = { workspace = true }
 rand = { workspace = true }
 sha2 = { workspace = true }
 hex = { workspace = true }
+
+# — Fédération (Phase 27 — ForgeFed) —
+rsa = { workspace = true }
+pkcs8 = { workspace = true }
+base64 = { workspace = true }
+
 [dev-dependencies]
 tempfile = { workspace = true }
 tokio = { workspace = true }

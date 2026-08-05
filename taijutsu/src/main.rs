@@ -56,6 +56,7 @@ use infrastructure::events::oracle_consumer::OracleKafkaConsumer;
 use infrastructure::github::github_client::GitHubClient;
 use infrastructure::llm::ollama_service::OllamaService;
 use infrastructure::persistence::postgres_actor_repo::PostgresActorRepository;
+use infrastructure::persistence::postgres_federation_repo::PostgresFederationRepository;
 use infrastructure::persistence::postgres_chunk_repo::PostgresChunkRepository;
 use infrastructure::persistence::postgres_repo::PostgresOperationRepository;
 use infrastructure::persistence::postgres_repo_repo::PostgresRepoRepository;
@@ -486,6 +487,36 @@ async fn main() -> anyhow::Result<()> {
     );
     info!("🥷 ANBU Checkpoints initialisé (Phase 28B)");
 
+    // ── Phase 27 — ForgeFed (Fédération ActivityPub) ──────────────────
+    let federation_repo: Arc<dyn domain::ports::federation_repository::FederationRepository> =
+        Arc::new(PostgresFederationRepository::new(pg_pool.clone()));
+
+    // Auto-generate instance keypair (SYSTEM_ACTOR_ID) si absente
+    if config.federation_enabled {
+        if federation_repo.get_keypair(&SYSTEM_ACTOR_ID).await?.is_none() {
+            let keypair = infrastructure::federation::crypto::generate_rsa_keypair()
+                .map_err(|e| anyhow::anyhow!("Federation keygen failed: {e}"))?;
+            let key_id = format!("https://{}/actors/system#main-key", config.federation_domain);
+            let fed_kp = domain::entities::federation::FederationKeypair {
+                actor_id: SYSTEM_ACTOR_ID,
+                public_key_pem: keypair.public_key_pem,
+                private_key_pem: keypair.private_key_pem,
+                key_id,
+                created_at: chrono::Utc::now(),
+            };
+            federation_repo.save_keypair(&fed_kp).await?;
+            info!("🔑 Federation keypair generated for SYSTEM_ACTOR_ID");
+        } else {
+            info!("🔑 Federation keypair exists for SYSTEM_ACTOR_ID");
+        }
+        info!(
+            domain = %config.federation_domain,
+            "🌐 ForgeFed Federation — Activée (Phase 27)"
+        );
+    } else {
+        info!("ℹ️ ForgeFed Federation désactivée (FEDERATION_ENABLED=false)");
+    }
+
     let shared_state = SharedState {
         create_operation,
         get_operation,
@@ -542,6 +573,10 @@ async fn main() -> anyhow::Result<()> {
         // Phase 28B — ANBU Checkpoints
         create_checkpoint,
         list_checkpoints: list_checkpoints_uc,
+        // Phase 27 — ForgeFed (Fédération ActivityPub)
+        federation_domain: config.federation_domain.clone(),
+        federation_enabled: config.federation_enabled,
+        federation_repo,
     };
 
     // ── Git Bridge HTTP (Phase 12A) ────────────────────

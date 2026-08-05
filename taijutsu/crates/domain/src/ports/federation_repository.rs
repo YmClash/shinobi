@@ -1,0 +1,46 @@
+//! Port: FederationRepository — Contrat de persistence pour la fédération.
+//!
+//! Ce trait définit le contrat pour stocker et récupérer les données
+//! nécessaires à la fédération ActivityPub / ForgeFed (Phase 27).
+
+use async_trait::async_trait;
+use uuid::Uuid;
+
+use crate::entities::federation::{FederationKeypair, FederationFollow};
+use crate::errors::DomainError;
+
+/// Contrat de persistence pour les données de fédération.
+///
+/// Implémenté par `PostgresFederationRepository` dans la couche infrastructure.
+#[async_trait]
+pub trait FederationRepository: Send + Sync {
+    // ── Keypairs ─────────────────────────────────────────────
+
+    /// Récupère la keypair d'un acteur pour la signature HTTP.
+    async fn get_keypair(&self, actor_id: &Uuid) -> Result<Option<FederationKeypair>, DomainError>;
+
+    /// Persiste une nouvelle keypair pour un acteur.
+    async fn save_keypair(&self, keypair: &FederationKeypair) -> Result<(), DomainError>;
+
+    // ── Follows ──────────────────────────────────────────────
+
+    /// Enregistre un follow fédéré entrant.
+    async fn save_follow(&self, follow: &FederationFollow) -> Result<(), DomainError>;
+
+    /// Supprime un follow fédéré (Undo Follow).
+    async fn delete_follow(&self, follower_uri: &str, following_actor_id: &Uuid) -> Result<bool, DomainError>;
+
+    /// Liste les followers fédérés d'un acteur local.
+    async fn list_followers(&self, actor_id: &Uuid) -> Result<Vec<FederationFollow>, DomainError>;
+
+    /// Compte les followers fédérés d'un acteur local.
+    async fn count_followers(&self, actor_id: &Uuid) -> Result<i64, DomainError>;
+
+    // ── Stats (NodeInfo) ─────────────────────────────────────
+
+    /// Compte le nombre total d'utilisateurs locaux (acteurs humains).
+    async fn count_local_users(&self) -> Result<i64, DomainError>;
+
+    /// Compte le nombre total de dépôts publics locaux.
+    async fn count_local_repos(&self) -> Result<i64, DomainError>;
+}

@@ -37,6 +37,7 @@ tracing-subscriber = { workspace = true }
 anyhow = { workspace = true }
 dotenvy = { workspace = true }
 sqlx = { workspace = true }
+chrono = { workspace = true }
 tokio-util = { workspace = true }
 futures = { workspace = true }
 
@@ -130,3 +131,8 @@ jsonwebtoken = { version = "9" }
 rand = { version = "0.9" }
 sha2 = { version = "0.10" }
 hex = { version = "0.4" }
+
+# — Fédération (Phase 27 — ForgeFed / ActivityPub) —
+rsa = { version = "0.9", features = ["pem", "sha2"] }
+pkcs8 = { version = "0.10", features = ["pem"] }
+base64 = { version = "0.22" }

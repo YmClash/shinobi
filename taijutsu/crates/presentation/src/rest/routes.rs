@@ -274,7 +274,19 @@ pub fn create_router(state: SharedState) -> Router {
         .route(
             "/metrics",
             get(move || async move { metric_handle.render() }),
-        );
+        )
+        // ── Phase 27 — ForgeFed Discovery ────────────────────
+        .route("/.well-known/webfinger", get(crate::rest::federation::webfinger_handler))
+        .route("/.well-known/nodeinfo", get(crate::rest::federation::nodeinfo_wellknown_handler))
+        .route("/nodeinfo/2.1", get(crate::rest::federation::nodeinfo_handler))
+        // ActivityPub Actor (content negotiation)
+        .route("/actors/{handle}", get(crate::rest::federation::actor_ap_handler))
+        // ActivityPub Inbox (POST — signature HTTP, pas JWT)
+        .route("/actors/{handle}/inbox", post(crate::rest::federation::inbox_handler))
+        // ActivityPub Outbox, Followers, Following (GET — lecture publique)
+        .route("/actors/{handle}/outbox", get(crate::rest::federation::outbox_handler))
+        .route("/actors/{handle}/followers", get(crate::rest::federation::followers_handler))
+        .route("/actors/{handle}/following", get(crate::rest::federation::following_handler));
 
     // ═══════════════════════════════════════════════════════════
     // COUCHE 2 : Routes Semi-publiques — MaybeAuth (auth optionnelle)
