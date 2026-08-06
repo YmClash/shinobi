@@ -618,6 +618,82 @@ pub async fn following_handler(
 }
 
 // ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+// ── Phase 27-ter — Repository AP Profile
+// ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+/// Profil ActivityPub d'un dépôt — `GET /repos/{owner}/{repo}`
+///
+/// Rend le `object.id` des activités Create { Repository } et Push
+/// résolvable par les forges distantes.
+///
+/// ## Content Negotiation
+/// - `Accept: application/activity+json` → JSON-LD ForgeFed Repository
+/// - Autre → 406 Not Acceptable
+///
+/// ## Route
+/// Dédiée sous `/repos/` (hors `/api/v1/`), cohérent avec `/actors/`.
+pub async fn repo_ap_handler(
+    State(state): State<SharedState>,
+    Path((owner, repo_name)): Path<(String, String)>,
+    headers: HeaderMap,
+) -> Result<Response, AppError> {
+    if !accepts_activitypub(&headers) {
+        return Ok((
+            StatusCode::NOT_ACCEPTABLE,
+            Json(serde_json::json!({
+                "error": "Not Acceptable",
+                "message": "This endpoint requires Accept: application/activity+json",
+            })),
+        ).into_response());
+    }
+
+    info!(owner = %owner, repo = %repo_name, "🌐 ForgeFed Repository profile fetch");
+
+    // Résoudre le repo
+    let actor = state
+        .actor_repo
+        .find_by_handle(&owner)
+        .await?
+        .ok_or_else(|| AppError(DomainError::BusinessRule(
+            format!("Acteur '{}' introuvable", owner),
+        )))?;
+
+    let repository = state
+        .repo_repo
+        .find_by_owner_and_name(&actor.id, &repo_name)
+        .await?
+        .ok_or_else(|| AppError(DomainError::BusinessRule(
+            format!("Dépôt '{}/{}' introuvable", owner, repo_name),
+        )))?;
+
+    let domain = &state.federation_domain;
+    let scheme = if domain.contains("localhost") { "http" } else { "https" };
+    let repo_uri = format!("{}://{}/repos/{}/{}", scheme, domain, owner, repo_name);
+    let actor_uri = format!("{}://{}/actors/{}", scheme, domain, owner);
+
+    let ap_repo = serde_json::json!({
+        "@context": [
+            "https://www.w3.org/ns/activitystreams",
+            "https://forgefed.org/ns",
+        ],
+        "type": "Repository",
+        "id": repo_uri,
+        "name": repository.display_name,
+        "summary": repository.description.clone().unwrap_or_default(),
+        "attributedTo": actor_uri,
+        "published": repository.created_at.to_rfc3339(),
+        "url": format!("{}://{}/{}/{}", scheme, domain, owner, repo_name),
+        "forkedFrom": serde_json::Value::Null,  // Phase 27-quater
+    });
+
+    Ok((
+        StatusCode::OK,
+        [(header::CONTENT_TYPE, "application/activity+json; charset=utf-8")],
+        Json(ap_repo),
+    ).into_response())
+}
+
+// ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 // ── Helpers
 // ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 

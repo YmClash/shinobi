@@ -212,4 +212,11 @@ pub struct GitHttpState {
 
     /// Repository des dépôts (ownership check pour push).
     pub repo_repo: Arc<dyn domain::ports::repo_repository::RepoRepository>,
+
+    // ── Phase 27-ter — Fédération ActivityPub ──────────────────────
+    /// Service de fédération pour le fanout Push (optionnel).
+    pub federation_service: Option<Arc<dyn domain::ports::federation_service::FederationService>>,
+
+    /// Domaine fédéré de l'instance (ex: "forge.shinobi.dev").
+    pub federation_domain: String,
 }

@@ -492,30 +492,58 @@ async fn main() -> anyhow::Result<()> {
         Arc::new(PostgresFederationRepository::new(pg_pool.clone()));
 
     // Auto-generate instance keypair (SYSTEM_ACTOR_ID) si absente
-    if config.federation_enabled {
-        if federation_repo.get_keypair(&SYSTEM_ACTOR_ID).await?.is_none() {
-            let keypair = infrastructure::federation::crypto::generate_rsa_keypair()
-                .map_err(|e| anyhow::anyhow!("Federation keygen failed: {e}"))?;
-            let key_id = format!("https://{}/actors/system#main-key", config.federation_domain);
-            let fed_kp = domain::entities::federation::FederationKeypair {
-                actor_id: SYSTEM_ACTOR_ID,
-                public_key_pem: keypair.public_key_pem,
-                private_key_pem: keypair.private_key_pem,
-                key_id,
-                created_at: chrono::Utc::now(),
-            };
-            federation_repo.save_keypair(&fed_kp).await?;
-            info!("🔑 Federation keypair generated for SYSTEM_ACTOR_ID");
+    let federation_service: Option<Arc<dyn domain::ports::federation_service::FederationService>> =
+        if config.federation_enabled {
+            if federation_repo.get_keypair(&SYSTEM_ACTOR_ID).await?.is_none() {
+                let keypair = infrastructure::federation::crypto::generate_rsa_keypair()
+                    .map_err(|e| anyhow::anyhow!("Federation keygen failed: {e}"))?;
+                let key_id = format!("https://{}/actors/system#main-key", config.federation_domain);
+                let fed_kp = domain::entities::federation::FederationKeypair {
+                    actor_id: SYSTEM_ACTOR_ID,
+                    public_key_pem: keypair.public_key_pem,
+                    private_key_pem: keypair.private_key_pem,
+                    key_id,
+                    created_at: chrono::Utc::now(),
+                };
+                federation_repo.save_keypair(&fed_kp).await?;
+                info!("🔑 Federation keypair generated for SYSTEM_ACTOR_ID");
+            } else {
+                info!("🔑 Federation keypair exists for SYSTEM_ACTOR_ID");
+            }
+            info!(
+                domain = %config.federation_domain,
+                "🌐 ForgeFed Federation — Activée (Phase 27 + 27-ter)"
+            );
+
+            // Phase 27-ter : Instancier le FanoutService
+            let remote_fetcher = Arc::new(
+                infrastructure::federation::remote_actor::RemoteActorFetcher::new(),
+            );
+            let fanout = Arc::new(
+                infrastructure::federation::fanout_service::FanoutService::new(
+                    federation_repo.clone(),
+                    remote_fetcher,
+                ),
+            );
+            info!("📤 FanoutService initialisé (Phase 27-ter)");
+            Some(fanout as Arc<dyn domain::ports::federation_service::FederationService>)
         } else {
-            info!("🔑 Federation keypair exists for SYSTEM_ACTOR_ID");
-        }
-        info!(
-            domain = %config.federation_domain,
-            "🌐 ForgeFed Federation — Activée (Phase 27)"
-        );
+            info!("ℹ️ ForgeFed Federation désactivée (FEDERATION_ENABLED=false)");
+            None
+        };
+
+    // Phase 27-ter: Réassigner create_repository avec fédération si activée
+    let create_repository = if let Some(ref fed_svc) = federation_service {
+        Arc::new(CreateRepositoryUseCase::with_federation(
+            actor_repo.clone(),
+            repo_repo.clone(),
+            vcs.clone(),
+            fed_svc.clone(),
+            config.federation_domain.clone(),
+        ))
     } else {
-        info!("ℹ️ ForgeFed Federation désactivée (FEDERATION_ENABLED=false)");
-    }
+        create_repository
+    };
 
     let shared_state = SharedState {
         create_operation,
@@ -606,6 +634,9 @@ async fn main() -> anyhow::Result<()> {
             auth_service: auth_service.clone(),
             actor_repo: actor_repo.clone(),
             repo_repo: repo_repo.clone(),
+            // Phase 27-ter — Federation Push fanout
+            federation_service: federation_service.clone(),
+            federation_domain: config.federation_domain.clone(),
         };
         create_router(shared_state.clone()).merge(create_git_router(git_state))
     } else {

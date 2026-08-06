@@ -286,7 +286,9 @@ pub fn create_router(state: SharedState) -> Router {
         // ActivityPub Outbox, Followers, Following (GET — lecture publique)
         .route("/actors/{handle}/outbox", get(crate::rest::federation::outbox_handler))
         .route("/actors/{handle}/followers", get(crate::rest::federation::followers_handler))
-        .route("/actors/{handle}/following", get(crate::rest::federation::following_handler));
+        .route("/actors/{handle}/following", get(crate::rest::federation::following_handler))
+        // ForgeFed Repository Profile (Phase 27-ter)
+        .route("/repos/{owner}/{repo}", get(crate::rest::federation::repo_ap_handler));
 
     // ═══════════════════════════════════════════════════════════
     // COUCHE 2 : Routes Semi-publiques — MaybeAuth (auth optionnelle)

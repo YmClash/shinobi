@@ -6,6 +6,7 @@
 //! 3. Persistence dans PostgreSQL
 //! 4. Initialisation du workspace VCS (Jujutsu)
 //! 5. Ajout du propriétaire comme collaborateur Owner
+//! 6. Publier l'activité fédérée Create { Repository } (Phase 27-ter)
 //!
 //! ## Erreurs
 //! - `NotFound` si le owner n'existe pas
@@ -14,12 +15,13 @@
 
 use std::sync::Arc;
 
-use tracing::{info, instrument};
+use tracing::{info, instrument, warn};
 use uuid::Uuid;
 
 use domain::entities::repository::{Repository, Visibility};
 use domain::errors::DomainError;
 use domain::ports::actor_repository::ActorRepository;
+use domain::ports::federation_service::FederationService;
 use domain::ports::repo_repository::RepoRepository;
 use domain::ports::vcs_engine::VcsEngine;
 
@@ -48,6 +50,10 @@ pub struct CreateRepositoryUseCase {
     actor_repo: Arc<dyn ActorRepository>,
     repo_repo: Arc<dyn RepoRepository>,
     vcs: Arc<dyn VcsEngine>,
+    /// Service de fédération (Phase 27-ter). `None` si fédération désactivée.
+    federation_service: Option<Arc<dyn FederationService>>,
+    /// Domaine fédéré de l'instance (ex: "forge.shinobi.dev").
+    federation_domain: String,
 }
 
 impl CreateRepositoryUseCase {
@@ -61,6 +67,25 @@ impl CreateRepositoryUseCase {
             actor_repo,
             repo_repo,
             vcs,
+            federation_service: None,
+            federation_domain: "localhost:3000".to_string(),
+        }
+    }
+
+    /// Construit le use case avec fédération activée (Phase 27-ter).
+    pub fn with_federation(
+        actor_repo: Arc<dyn ActorRepository>,
+        repo_repo: Arc<dyn RepoRepository>,
+        vcs: Arc<dyn VcsEngine>,
+        federation_service: Arc<dyn FederationService>,
+        federation_domain: String,
+    ) -> Self {
+        Self {
+            actor_repo,
+            repo_repo,
+            vcs,
+            federation_service: Some(federation_service),
+            federation_domain,
         }
     }
 
@@ -84,7 +109,7 @@ impl CreateRepositoryUseCase {
         validate_slug(&cmd.name)?;
 
         // Étape 2 : Vérifier que le owner existe
-        let _actor = self
+        let actor = self
             .actor_repo
             .find_by_id(&cmd.owner_id)
             .await?
@@ -126,6 +151,41 @@ impl CreateRepositoryUseCase {
             owner_id = %cmd.owner_id,
             "✅ Collaborateur Owner ajouté — Dépôt opérationnel"
         );
+
+        // Étape 7 : Publier l'activité fédérée Create { Repository } (Phase 27-ter)
+        if let Some(federation) = &self.federation_service {
+            let activity = infrastructure::federation::activity_builder::create_repository_activity(
+                &self.federation_domain,
+                &actor.handle,
+                &repo,
+            );
+
+            let scheme = if self.federation_domain.contains("localhost") { "http" } else { "https" };
+            let repo_uri = format!("{}://{}/repos/{}/{}", scheme, self.federation_domain, actor.handle, repo.name);
+            let fed = federation.clone();
+            let owner_id = cmd.owner_id;
+
+            tokio::spawn(async move {
+                if let Err(e) = fed.publish_activity(
+                    &owner_id,
+                    "Create",
+                    "Repository",
+                    &repo_uri,
+                    activity,
+                ).await {
+                    warn!(
+                        error = %e,
+                        repo_uri = %repo_uri,
+                        "⚠️ Federation: Create Repository fanout failed (non-fatal)"
+                    );
+                }
+            });
+
+            info!(
+                repo_id = %repo.id,
+                "📤 Federation: Create Repository activity queued for fanout"
+            );
+        }
 
         Ok(repo)
     }

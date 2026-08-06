@@ -841,10 +841,65 @@ async fn sync_hook_post_push(
         });
     }
 
+    // 8. Publier l'activite federee Push (Phase 27-ter — fire-and-forget)
+    if let Some(federation) = &state.federation_service {
+        // Resoudre le handle du owner pour les URIs AP
+        let owner_handle = match state.actor_repo.find_by_id(&repository.owner_id).await {
+            Ok(Some(actor)) => actor.handle,
+            _ => {
+                warn!(
+                    repo_id = %repo_id,
+                    "Sync Hook: cannot resolve owner handle for federation — skipping Push activity"
+                );
+                return Ok(());
+            }
+        };
+
+        let commit_info = infrastructure::federation::activity_builder::CommitInfo {
+            sha: operation.content_id.to_string(),
+            message: description.clone(),
+        };
+
+        let activity = infrastructure::federation::activity_builder::push_activity(
+            &state.federation_domain,
+            &owner_handle,
+            repository,
+            "main", // V1: on assume la branche main
+            &operation.content_id.to_string(),
+            &[commit_info],
+        );
+
+        let scheme = if state.federation_domain.contains("localhost") { "http" } else { "https" };
+        let repo_uri = format!(
+            "{}://{}/repos/{}/{}",
+            scheme, state.federation_domain, owner_handle, repository.name
+        );
+
+        let fed = federation.clone();
+        let owner_id = repository.owner_id;
+
+        tokio::spawn(async move {
+            if let Err(e) = fed
+                .publish_activity(&owner_id, "Push", "Repository", &repo_uri, activity)
+                .await
+            {
+                warn!(
+                    error = %e,
+                    "Sync Hook: Federation Push fanout failed (non-fatal)"
+                );
+            }
+        });
+
+        info!(
+            repo_id = %repo_id,
+            "📤 Federation: Push activity queued for fanout"
+        );
+    }
+
     info!(
         repo_id = %repo_id,
         operation_id = %operation.id,
-        "Sync Hook: Phase 12A complete (PG + IPFS + Kafka)"
+        "Sync Hook: Phase 12A complete (PG + IPFS + Kafka + Federation)"
     );
 
     Ok(())
