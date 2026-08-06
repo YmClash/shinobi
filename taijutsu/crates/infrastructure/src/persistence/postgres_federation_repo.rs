@@ -1,13 +1,13 @@
-//! PostgreSQL implementation du FederationRepository — Phase 27.
+//! PostgreSQL implementation du FederationRepository — Phase 27 + 27-quater.
 //!
-//! Persiste les keypairs RSA et les follows fédérés dans PostgreSQL.
+//! Persiste les keypairs RSA, follows fédérés, outbox et inbox dans PostgreSQL.
 
 use async_trait::async_trait;
 use sqlx::PgPool;
 use tracing::info;
 use uuid::Uuid;
 
-use domain::entities::federation::{FederationActivity, FederationFollow, FederationKeypair};
+use domain::entities::federation::{FederationActivity, FederationFollow, FederationKeypair, InboxActivity};
 use domain::errors::DomainError;
 use domain::ports::federation_repository::FederationRepository;
 
@@ -192,6 +192,87 @@ impl FederationRepository for PostgresFederationRepository {
         Ok(row.0)
     }
 
+    // ── Inbox (Phase 27-quater) — Transactional Inbox ─────────
+
+    async fn save_inbox_activity(&self, activity: &InboxActivity) -> Result<(), DomainError> {
+        // ON CONFLICT DO NOTHING : si l'activité a déjà été reçue (même ID AP),
+        // PostgreSQL rejette silencieusement le doublon grâce à l'index UNIQUE
+        // sur (activity_json->>'id').
+        sqlx::query(
+            "INSERT INTO federation_inbox
+                (id, recipient_actor_id, remote_actor_uri, activity_type, object_type, object_uri, activity_json, processed, received_at)
+             VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)
+             ON CONFLICT DO NOTHING"
+        )
+        .bind(&activity.id)
+        .bind(&activity.recipient_actor_id)
+        .bind(&activity.remote_actor_uri)
+        .bind(&activity.activity_type)
+        .bind(&activity.object_type)
+        .bind(&activity.object_uri)
+        .bind(&activity.activity_json)
+        .bind(&activity.processed)
+        .bind(&activity.received_at)
+        .execute(&self.pool)
+        .await
+        .map_err(|e| DomainError::Persistence(e.to_string()))?;
+
+        Ok(())
+    }
+
+    async fn list_inbox_activities(&self, recipient_id: &Uuid, limit: i64) -> Result<Vec<InboxActivity>, DomainError> {
+        let rows = sqlx::query_as::<_, InboxRow>(
+            "SELECT id, recipient_actor_id, remote_actor_uri, activity_type, object_type, object_uri,
+                    activity_json, processed, received_at, processed_at
+             FROM federation_inbox
+             WHERE recipient_actor_id = $1
+             ORDER BY received_at DESC
+             LIMIT $2"
+        )
+        .bind(recipient_id)
+        .bind(limit)
+        .fetch_all(&self.pool)
+        .await
+        .map_err(|e| DomainError::Persistence(e.to_string()))?;
+
+        Ok(rows.into_iter().map(|r| InboxActivity {
+            id: r.id,
+            recipient_actor_id: r.recipient_actor_id,
+            remote_actor_uri: r.remote_actor_uri,
+            activity_type: r.activity_type,
+            object_type: r.object_type,
+            object_uri: r.object_uri,
+            activity_json: r.activity_json,
+            processed: r.processed,
+            received_at: r.received_at,
+            processed_at: r.processed_at,
+        }).collect())
+    }
+
+    async fn count_inbox_activities(&self, recipient_id: &Uuid) -> Result<i64, DomainError> {
+        let row: (i64,) = sqlx::query_as(
+            "SELECT COUNT(*) FROM federation_inbox WHERE recipient_actor_id = $1"
+        )
+        .bind(recipient_id)
+        .fetch_one(&self.pool)
+        .await
+        .map_err(|e| DomainError::Persistence(e.to_string()))?;
+
+        Ok(row.0)
+    }
+
+    async fn mark_inbox_processed(&self, activity_id: &Uuid) -> Result<(), DomainError> {
+        sqlx::query(
+            "UPDATE federation_inbox SET processed = TRUE, processed_at = NOW() WHERE id = $1"
+        )
+        .bind(activity_id)
+        .execute(&self.pool)
+        .await
+        .map_err(|e| DomainError::Persistence(e.to_string()))?;
+
+        Ok(())
+    }
+
     // ── Stats (NodeInfo) ─────────────────────────────────────
 
     async fn count_local_users(&self) -> Result<i64, DomainError> {
@@ -247,3 +328,20 @@ struct ActivityRow {
     activity_json: serde_json::Value,
     published_at: chrono::DateTime<chrono::Utc>,
 }
+
+#[derive(sqlx::FromRow)]
+struct InboxRow {
+    id: Uuid,
+    recipient_actor_id: Uuid,
+    remote_actor_uri: String,
+    activity_type: String,
+    object_type: String,
+    object_uri: String,
+    activity_json: serde_json::Value,
+    processed: bool,
+    received_at: chrono::DateTime<chrono::Utc>,
+    processed_at: Option<chrono::DateTime<chrono::Utc>>,
+}
+
+
+

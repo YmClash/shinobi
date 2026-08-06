@@ -1,12 +1,12 @@
 //! Port: FederationRepository — Contrat de persistence pour la fédération.
 //!
 //! Ce trait définit le contrat pour stocker et récupérer les données
-//! nécessaires à la fédération ActivityPub / ForgeFed (Phase 27).
+//! nécessaires à la fédération ActivityPub / ForgeFed (Phase 27 + 27-quater).
 
 use async_trait::async_trait;
 use uuid::Uuid;
 
-use crate::entities::federation::{FederationKeypair, FederationFollow, FederationActivity};
+use crate::entities::federation::{FederationKeypair, FederationFollow, FederationActivity, InboxActivity};
 use crate::errors::DomainError;
 
 /// Contrat de persistence pour les données de fédération.
@@ -47,6 +47,21 @@ pub trait FederationRepository: Send + Sync {
     /// Compte les activités d'un acteur.
     async fn count_activities(&self, actor_id: &Uuid) -> Result<i64, DomainError>;
 
+    // ── Inbox (Phase 27-quater) — Transactional Inbox ────────
+
+    /// Enregistre une activité entrante dans l'inbox.
+    /// Utilise ON CONFLICT DO NOTHING pour la déduplication par activity ID.
+    async fn save_inbox_activity(&self, activity: &InboxActivity) -> Result<(), DomainError>;
+
+    /// Liste les activités entrantes d'un acteur (paginé, tri chronologique desc).
+    async fn list_inbox_activities(&self, recipient_id: &Uuid, limit: i64) -> Result<Vec<InboxActivity>, DomainError>;
+
+    /// Compte les activités entrantes d'un acteur.
+    async fn count_inbox_activities(&self, recipient_id: &Uuid) -> Result<i64, DomainError>;
+
+    /// Marque une activité inbox comme traitée (processed = true).
+    async fn mark_inbox_processed(&self, activity_id: &Uuid) -> Result<(), DomainError>;
+
     // ── Stats (NodeInfo) ─────────────────────────────────────
 
     /// Compte le nombre total d'utilisateurs locaux (acteurs humains).
@@ -55,3 +70,4 @@ pub trait FederationRepository: Send + Sync {
     /// Compte le nombre total de dépôts publics locaux.
     async fn count_local_repos(&self) -> Result<i64, DomainError>;
 }
+

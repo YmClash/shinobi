@@ -416,6 +416,11 @@ pub fn create_router(state: SharedState) -> Router {
             "/api/v1/actors/{handle}/trash",
             get(list_trash_handler),
         )
+        // Phase 27-quater — Inbox Activities (Private: JWT required)
+        .route(
+            "/api/v1/actors/{handle}/inbox/activities",
+            get(crate::rest::federation::inbox_list_handler),
+        )
         // Service Accounts
         .route(
             "/api/v1/auth/service-accounts",

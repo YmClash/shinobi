@@ -1,7 +1,7 @@
-//! Handlers de fédération ActivityPub / ForgeFed — Phase 27.
+//! Handlers de fédération ActivityPub / ForgeFed — Phase 27 + 27-quater.
 //!
 //! Endpoints de découverte (WebFinger, NodeInfo) et protocole ActivityPub
-//! (Actor profiles, Inbox, Outbox, Followers, Following).
+//! (Actor profiles, Inbox, Outbox, Followers, Following, Inbox Activities).
 //!
 //! ## Pièges protocolaires intégrés
 //! - **WebFinger** : Content-Type exact `application/jrd+json` (pas `application/json`)
@@ -18,7 +18,7 @@ use serde::Deserialize;
 use tracing::{info, warn};
 use uuid::Uuid;
 
-use domain::entities::federation::{FederationActivity, FederationFollow};
+use domain::entities::federation::{FederationActivity, FederationFollow, InboxActivity};
 use domain::errors::DomainError;
 
 use crate::errors::AppError;
@@ -470,6 +470,11 @@ pub async fn inbox_handler(
 
                 info!(follower = %follower_uri, "👋 Undo Follow reçu");
                 state.federation_repo.delete_follow(follower_uri, &actor.id).await?;
+            } else {
+                // Undo d'autre chose — archiver dans l'inbox
+                let (obj_type, obj_uri) = extract_object_metadata(&body);
+                let remote_actor_uri = body.get("actor").and_then(|v| v.as_str()).unwrap_or("").to_string();
+                persist_inbox_activity(&state, actor.id, &remote_actor_uri, "Undo", &obj_type, &obj_uri, &body).await;
             }
 
             Ok((StatusCode::ACCEPTED, Json(serde_json::json!({
@@ -477,16 +482,93 @@ pub async fn inbox_handler(
                 "type": "Undo",
             }))).into_response())
         }
-        _ => {
-            // On accepte poliment et on archive (202 Accepted)
+
+        // ── Phase 27-quater : Activités ForgeFed étendues ──
+        "Create" | "Update" | "Delete" => {
+            let (obj_type, obj_uri) = extract_object_metadata(&body);
+            let remote_actor_uri = body.get("actor").and_then(|v| v.as_str()).unwrap_or("").to_string();
+
             info!(
                 activity_type = %activity_type,
-                "📋 Activité fédérée non gérée — archivée (stub)"
+                object_type = %obj_type,
+                object_uri = %obj_uri,
+                remote_actor = %remote_actor_uri,
+                "📥 ForgeFed {} reçu — archivé dans l'inbox", activity_type
             );
+
+            persist_inbox_activity(&state, actor.id, &remote_actor_uri, activity_type, &obj_type, &obj_uri, &body).await;
+
             Ok((StatusCode::ACCEPTED, Json(serde_json::json!({
                 "status": "accepted",
                 "type": activity_type,
-                "note": "Activity logged but not processed"
+                "objectType": obj_type,
+            }))).into_response())
+        }
+        "Push" => {
+            // ForgeFed §3.6.2 : Reporting Pushed Commits
+            let remote_actor_uri = body.get("actor").and_then(|v| v.as_str()).unwrap_or("").to_string();
+
+            // Extraire les métadonnées spécifiques au Push
+            let target_repo = body.get("target")
+                .and_then(|v| v.as_str())
+                .or_else(|| body.get("object").and_then(|o| o.get("target")).and_then(|v| v.as_str()))
+                .unwrap_or("");
+
+            let total_commits = body.get("object")
+                .and_then(|o| o.get("totalItems"))
+                .and_then(|v| v.as_u64())
+                .unwrap_or(0);
+
+            info!(
+                remote_actor = %remote_actor_uri,
+                target_repo = %target_repo,
+                total_commits = %total_commits,
+                "📥 ForgeFed Push reçu — archivé dans l'inbox"
+            );
+
+            persist_inbox_activity(&state, actor.id, &remote_actor_uri, "Push", "Repository", target_repo, &body).await;
+
+            Ok((StatusCode::ACCEPTED, Json(serde_json::json!({
+                "status": "accepted",
+                "type": "Push",
+                "totalCommits": total_commits,
+            }))).into_response())
+        }
+        "Announce" => {
+            // Boost/Partage (Mastodon-compatible)
+            let (obj_type, obj_uri) = extract_object_metadata(&body);
+            let remote_actor_uri = body.get("actor").and_then(|v| v.as_str()).unwrap_or("").to_string();
+
+            info!(
+                remote_actor = %remote_actor_uri,
+                object_uri = %obj_uri,
+                "📥 Announce reçu — archivé dans l'inbox"
+            );
+
+            persist_inbox_activity(&state, actor.id, &remote_actor_uri, "Announce", &obj_type, &obj_uri, &body).await;
+
+            Ok((StatusCode::ACCEPTED, Json(serde_json::json!({
+                "status": "accepted",
+                "type": "Announce",
+            }))).into_response())
+        }
+        _ => {
+            // Type inconnu : archive-first (on persiste quand même)
+            let (obj_type, obj_uri) = extract_object_metadata(&body);
+            let remote_actor_uri = body.get("actor").and_then(|v| v.as_str()).unwrap_or("").to_string();
+
+            info!(
+                activity_type = %activity_type,
+                remote_actor = %remote_actor_uri,
+                "📋 Activité fédérée inconnue — archivée dans l'inbox"
+            );
+
+            persist_inbox_activity(&state, actor.id, &remote_actor_uri, activity_type, &obj_type, &obj_uri, &body).await;
+
+            Ok((StatusCode::ACCEPTED, Json(serde_json::json!({
+                "status": "accepted",
+                "type": activity_type,
+                "note": "Activity archived in inbox"
             }))).into_response())
         }
     }
@@ -736,6 +818,121 @@ fn accepts_activitypub(headers: &HeaderMap) -> bool {
 }
 
 // ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+// ── Phase 27-quater — Inbox Helpers
+// ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+/// Extrait le type et l'URI de l'objet depuis un payload ActivityPub.
+///
+/// Gère les cas polymorphiques courants :
+/// - `object` est un objet JSON avec `type` et `id`
+/// - `object` est une string (URI directe, style Mastodon Announce)
+/// - `object` est absent
+fn extract_object_metadata(body: &serde_json::Value) -> (String, String) {
+    let object = body.get("object");
+
+    match object {
+        Some(obj) if obj.is_object() => {
+            let obj_type = obj.get("type")
+                .and_then(|v| v.as_str())
+                .unwrap_or("")
+                .to_string();
+            let obj_uri = obj.get("id")
+                .and_then(|v| v.as_str())
+                .unwrap_or("")
+                .to_string();
+            (obj_type, obj_uri)
+        }
+        Some(obj) if obj.is_string() => {
+            ("".to_string(), obj.as_str().unwrap_or("").to_string())
+        }
+        _ => ("".to_string(), "".to_string()),
+    }
+}
+
+/// Persiste une activité entrante dans l'inbox (fire-and-forget).
+///
+/// Utilise `ON CONFLICT DO NOTHING` côté DB pour la déduplication.
+async fn persist_inbox_activity(
+    state: &SharedState,
+    recipient_actor_id: Uuid,
+    remote_actor_uri: &str,
+    activity_type: &str,
+    object_type: &str,
+    object_uri: &str,
+    body: &serde_json::Value,
+) {
+    let inbox_activity = InboxActivity {
+        id: Uuid::new_v4(),
+        recipient_actor_id,
+        remote_actor_uri: remote_actor_uri.to_string(),
+        activity_type: activity_type.to_string(),
+        object_type: object_type.to_string(),
+        object_uri: object_uri.to_string(),
+        activity_json: body.clone(),
+        processed: false,
+        received_at: Utc::now(),
+        processed_at: None,
+    };
+
+    if let Err(e) = state.federation_repo.save_inbox_activity(&inbox_activity).await {
+        warn!(
+            error = %e,
+            activity_type = %activity_type,
+            "⚠️ Failed to persist inbox activity (non-fatal)"
+        );
+    }
+}
+
+// ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+// ── Phase 27-quater — Inbox Activities Endpoint
+// ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+/// Paramètres de pagination pour l'inbox.
+#[derive(Debug, Deserialize)]
+pub struct InboxPaginationParams {
+    pub limit: Option<i64>,
+}
+
+/// Liste les activités entrantes — `GET /api/v1/actors/{handle}/inbox/activities`
+///
+/// Route **privée** (JWT requis). Seul l'acteur peut consulter son inbox.
+pub async fn inbox_list_handler(
+    State(state): State<SharedState>,
+    Path(handle): Path<String>,
+    Query(params): Query<InboxPaginationParams>,
+) -> Result<Response, AppError> {
+    let actor = state
+        .actor_repo
+        .find_by_handle(&handle)
+        .await?
+        .ok_or_else(|| AppError(DomainError::BusinessRule(
+            format!("Acteur '{}' introuvable", handle),
+        )))?;
+
+    let limit = params.limit.unwrap_or(50).min(200).max(1);
+    let total = state.federation_repo.count_inbox_activities(&actor.id).await?;
+    let activities = state.federation_repo.list_inbox_activities(&actor.id, limit).await?;
+
+    let items: Vec<serde_json::Value> = activities.into_iter().map(|a| {
+        serde_json::json!({
+            "id": a.id,
+            "remoteActorUri": a.remote_actor_uri,
+            "activityType": a.activity_type,
+            "objectType": a.object_type,
+            "objectUri": a.object_uri,
+            "processed": a.processed,
+            "receivedAt": a.received_at.to_rfc3339(),
+            "processedAt": a.processed_at.map(|dt| dt.to_rfc3339()),
+        })
+    }).collect();
+
+    Ok((StatusCode::OK, Json(serde_json::json!({
+        "totalItems": total,
+        "items": items,
+    }))).into_response())
+}
+
+// ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 // ── Tests
 // ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 
@@ -806,4 +1003,62 @@ mod tests {
         headers.insert(header::ACCEPT, "text/html".parse().unwrap());
         assert!(!accepts_activitypub(&headers));
     }
+
+    // ── Phase 27-quater : Tests d'extraction ──
+
+    #[test]
+    fn test_extract_object_metadata_create_repository() {
+        let body = serde_json::json!({
+            "type": "Create",
+            "actor": "https://forgejo.example.com/users/alice",
+            "object": {
+                "type": "Repository",
+                "id": "https://forgejo.example.com/repos/alice/my-lib",
+                "name": "my-lib",
+            }
+        });
+        let (obj_type, obj_uri) = extract_object_metadata(&body);
+        assert_eq!(obj_type, "Repository");
+        assert_eq!(obj_uri, "https://forgejo.example.com/repos/alice/my-lib");
+    }
+
+    #[test]
+    fn test_extract_object_metadata_push() {
+        let body = serde_json::json!({
+            "type": "Push",
+            "actor": "https://forgejo.example.com/users/alice",
+            "object": {
+                "type": "OrderedCollection",
+                "id": "https://forgejo.example.com/pushes/123",
+                "totalItems": 3,
+            }
+        });
+        let (obj_type, obj_uri) = extract_object_metadata(&body);
+        assert_eq!(obj_type, "OrderedCollection");
+        assert_eq!(obj_uri, "https://forgejo.example.com/pushes/123");
+    }
+
+    #[test]
+    fn test_extract_object_metadata_announce_uri_only() {
+        let body = serde_json::json!({
+            "type": "Announce",
+            "actor": "https://mastodon.social/users/bob",
+            "object": "https://forgejo.example.com/repos/alice/my-lib"
+        });
+        let (obj_type, obj_uri) = extract_object_metadata(&body);
+        assert_eq!(obj_type, "");
+        assert_eq!(obj_uri, "https://forgejo.example.com/repos/alice/my-lib");
+    }
+
+    #[test]
+    fn test_extract_object_metadata_missing() {
+        let body = serde_json::json!({
+            "type": "SomeWeirdType",
+            "actor": "https://example.com/users/x",
+        });
+        let (obj_type, obj_uri) = extract_object_metadata(&body);
+        assert_eq!(obj_type, "");
+        assert_eq!(obj_uri, "");
+    }
 }
+

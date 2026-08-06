@@ -271,6 +271,19 @@ mod tests {
         async fn count_local_repos(&self) -> Result<i64, DomainError> {
             Ok(0)
         }
+        // Phase 27-quater stubs
+        async fn save_inbox_activity(&self, _activity: &domain::entities::federation::InboxActivity) -> Result<(), DomainError> {
+            Ok(())
+        }
+        async fn list_inbox_activities(&self, _recipient_id: &Uuid, _limit: i64) -> Result<Vec<domain::entities::federation::InboxActivity>, DomainError> {
+            Ok(vec![])
+        }
+        async fn count_inbox_activities(&self, _recipient_id: &Uuid) -> Result<i64, DomainError> {
+            Ok(0)
+        }
+        async fn mark_inbox_processed(&self, _activity_id: &Uuid) -> Result<(), DomainError> {
+            Ok(())
+        }
     }
 
     #[tokio::test]

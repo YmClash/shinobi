@@ -89,6 +89,49 @@ pub struct FederationActivity {
     pub published_at: DateTime<Utc>,
 }
 
+// ── Activité fédérée entrante (Inbox) ──────────────────────────────
+
+/// Activité ActivityPub reçue d'une forge distante.
+///
+/// Phase 27-quater — Pattern Transactional Inbox :
+/// - Insérée avec `processed = false` à la réception
+/// - Un worker futur passera `processed = true` après side-effects
+///
+/// Les champs `object_type` et `object_uri` sont des colonnes matérialisées
+/// extraites du JSONB à l'insertion pour des requêtes efficaces.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct InboxActivity {
+    /// Identifiant unique.
+    pub id: Uuid,
+
+    /// ID de l'acteur local destinataire.
+    pub recipient_actor_id: Uuid,
+
+    /// URI de l'acteur distant expéditeur.
+    pub remote_actor_uri: String,
+
+    /// Type d'activité AP (ex: "Create", "Push", "Update", "Delete", "Announce").
+    pub activity_type: String,
+
+    /// Type de l'objet référencé (colonne matérialisée).
+    pub object_type: String,
+
+    /// URI de l'objet référencé (colonne matérialisée).
+    pub object_uri: String,
+
+    /// Activité AP complète en JSON-LD (source de vérité).
+    pub activity_json: serde_json::Value,
+
+    /// TRUE si les side-effects métier ont été appliqués.
+    pub processed: bool,
+
+    /// Date de réception.
+    pub received_at: DateTime<Utc>,
+
+    /// Date de traitement (si processed = true).
+    pub processed_at: Option<DateTime<Utc>>,
+}
+
 // ── Tests ─────────────────────────────────────────────────────────────
 
 #[cfg(test)]
@@ -132,5 +175,24 @@ mod tests {
         };
         assert_eq!(activity.activity_type, "Create");
         assert_eq!(activity.object_type, "Repository");
+    }
+
+    #[test]
+    fn test_inbox_activity_creation() {
+        let inbox = InboxActivity {
+            id: Uuid::new_v4(),
+            recipient_actor_id: Uuid::new_v4(),
+            remote_actor_uri: "https://forgejo.example.com/users/alice".into(),
+            activity_type: "Push".into(),
+            object_type: "Repository".into(),
+            object_uri: "https://forgejo.example.com/repos/alice/my-lib".into(),
+            activity_json: serde_json::json!({"type": "Push"}),
+            processed: false,
+            received_at: Utc::now(),
+            processed_at: None,
+        };
+        assert_eq!(inbox.activity_type, "Push");
+        assert!(!inbox.processed);
+        assert!(inbox.processed_at.is_none());
     }
 }
