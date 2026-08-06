@@ -1,0 +1,566 @@
+/* ═══════════════════════════════════════════════════════════════
+   SHINOBI — Federation Dashboard Styles (Phase 31)
+   Mission Control design for ActivityPub/ForgeFed monitoring
+   ═══════════════════════════════════════════════════════════════ */
+
+/* ── Federation Color Tokens ──────────────────────────────────── */
+
+:root {
+  --fed-color-create: oklch(0.72 0.19 145);
+  --fed-color-push: oklch(0.75 0.18 195);
+  --fed-color-accept: oklch(0.72 0.17 310);
+  --fed-color-follow: oklch(0.7 0.15 260);
+  --fed-color-update: oklch(0.78 0.16 85);
+  --fed-color-delete: oklch(0.6 0.22 25);
+  --fed-color-announce: oklch(0.75 0.18 55);
+  --fed-color-undo: oklch(0.65 0.1 280);
+}
+
+/* ── Page Container ───────────────────────────────────────────── */
+
+.fed-page {
+  max-width: 64rem;
+  margin: 0 auto;
+  display: flex;
+  flex-direction: column;
+  gap: 2rem;
+}
+
+.fed-page-header {
+  display: flex;
+  align-items: center;
+  gap: 0.75rem;
+}
+
+.fed-page-header h1 {
+  font-size: 1.125rem;
+  font-weight: 700;
+  letter-spacing: -0.025em;
+}
+
+.fed-page-header-badge {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.25rem;
+  padding: 0.125rem 0.5rem;
+  border-radius: 9999px;
+  font-size: 0.625rem;
+  font-weight: 600;
+  text-transform: uppercase;
+  letter-spacing: 0.08em;
+  background: var(--primary);
+  color: var(--primary-foreground);
+  animation: fed-pulse 2s ease-in-out infinite;
+}
+
+@keyframes fed-pulse {
+  0%, 100% { opacity: 1; }
+  50% { opacity: 0.7; }
+}
+
+/* ── Stats Grid ───────────────────────────────────────────────── */
+
+.fed-stats-grid {
+  display: grid;
+  grid-template-columns: repeat(4, 1fr);
+  gap: 0.75rem;
+}
+
+@media (max-width: 768px) {
+  .fed-stats-grid {
+    grid-template-columns: repeat(2, 1fr);
+  }
+}
+
+.fed-stat-card {
+  position: relative;
+  overflow: hidden;
+  border-radius: var(--radius);
+  padding: 1rem 1.25rem;
+  background: var(--card);
+  border: 1px solid var(--border);
+  transition: all 0.25s ease;
+}
+
+.fed-stat-card:hover {
+  border-color: color-mix(in oklch, var(--primary) 40%, var(--border));
+  transform: translateY(-1px);
+  box-shadow: 0 4px 16px color-mix(in oklch, var(--primary) 8%, transparent);
+}
+
+.fed-stat-card::before {
+  content: "";
+  position: absolute;
+  top: 0;
+  left: 0;
+  right: 0;
+  height: 2px;
+  background: var(--stat-accent, var(--primary));
+  opacity: 0.6;
+  transition: opacity 0.25s ease;
+}
+
+.fed-stat-card:hover::before {
+  opacity: 1;
+}
+
+.fed-stat-icon {
+  font-size: 1.25rem;
+  margin-bottom: 0.5rem;
+  display: block;
+}
+
+.fed-stat-value {
+  font-size: 1.75rem;
+  font-weight: 700;
+  letter-spacing: -0.03em;
+  line-height: 1;
+  color: var(--foreground);
+  font-variant-numeric: tabular-nums;
+}
+
+.fed-stat-label {
+  font-size: 0.6875rem;
+  text-transform: uppercase;
+  letter-spacing: 0.08em;
+  color: var(--muted-foreground);
+  margin-top: 0.375rem;
+}
+
+.fed-stat-sub {
+  font-size: 0.625rem;
+  color: var(--muted-foreground);
+  opacity: 0.7;
+  margin-top: 0.25rem;
+}
+
+/* ── Tab System ───────────────────────────────────────────────── */
+
+.fed-tabs {
+  display: flex;
+  gap: 0;
+  border-bottom: 1px solid var(--border);
+}
+
+.fed-tab {
+  padding: 0.625rem 1.25rem;
+  font-size: 0.8125rem;
+  font-weight: 500;
+  color: var(--muted-foreground);
+  background: transparent;
+  border: none;
+  border-bottom: 2px solid transparent;
+  cursor: pointer;
+  transition: all 0.2s ease;
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+  white-space: nowrap;
+}
+
+.fed-tab:hover {
+  color: var(--foreground);
+  background: color-mix(in oklch, var(--muted) 30%, transparent);
+}
+
+.fed-tab[data-active="true"] {
+  color: var(--primary);
+  border-bottom-color: var(--primary);
+  font-weight: 600;
+}
+
+.fed-tab-count {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  min-width: 1.25rem;
+  height: 1.125rem;
+  padding: 0 0.375rem;
+  border-radius: 9999px;
+  font-size: 0.625rem;
+  font-weight: 700;
+  background: var(--secondary);
+  color: var(--secondary-foreground);
+  font-variant-numeric: tabular-nums;
+}
+
+.fed-tab[data-active="true"] .fed-tab-count {
+  background: var(--primary);
+  color: var(--primary-foreground);
+}
+
+/* ── Tab Content ──────────────────────────────────────────────── */
+
+.fed-tab-content {
+  min-height: 20rem;
+  padding-top: 1rem;
+  animation: fed-fade-in 0.3s ease;
+}
+
+@keyframes fed-fade-in {
+  from { opacity: 0; transform: translateY(4px); }
+  to { opacity: 1; transform: translateY(0); }
+}
+
+/* ── Activity Timeline ────────────────────────────────────────── */
+
+.fed-timeline {
+  display: flex;
+  flex-direction: column;
+  gap: 0;
+}
+
+.fed-timeline-item {
+  display: flex;
+  align-items: flex-start;
+  gap: 0.75rem;
+  padding: 0.75rem 1rem;
+  border-radius: var(--radius);
+  transition: background 0.15s ease;
+  position: relative;
+}
+
+.fed-timeline-item:hover {
+  background: color-mix(in oklch, var(--muted) 40%, transparent);
+}
+
+/* Vertical connector line */
+.fed-timeline-item:not(:last-child)::after {
+  content: "";
+  position: absolute;
+  left: 1.875rem;
+  top: 2.5rem;
+  bottom: -0.25rem;
+  width: 1px;
+  background: var(--border);
+  opacity: 0.5;
+}
+
+.fed-timeline-icon {
+  flex-shrink: 0;
+  width: 2rem;
+  height: 2rem;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  border-radius: 50%;
+  background: var(--secondary);
+  font-size: 0.875rem;
+  z-index: 1;
+}
+
+.fed-timeline-body {
+  flex: 1;
+  min-width: 0;
+}
+
+.fed-timeline-text {
+  font-size: 0.8125rem;
+  line-height: 1.5;
+  color: var(--foreground);
+}
+
+.fed-timeline-text .fed-actor {
+  font-weight: 600;
+  color: var(--primary);
+}
+
+.fed-timeline-text .fed-verb {
+  color: var(--muted-foreground);
+}
+
+.fed-timeline-text .fed-object {
+  font-weight: 500;
+  font-family: var(--font-jetbrains), monospace;
+  font-size: 0.75rem;
+  background: var(--secondary);
+  padding: 0.0625rem 0.375rem;
+  border-radius: 0.25rem;
+}
+
+.fed-timeline-meta {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+  margin-top: 0.25rem;
+  font-size: 0.6875rem;
+  color: var(--muted-foreground);
+}
+
+.fed-timeline-type-badge {
+  display: inline-flex;
+  align-items: center;
+  padding: 0.0625rem 0.375rem;
+  border-radius: 0.25rem;
+  font-size: 0.5625rem;
+  font-weight: 600;
+  text-transform: uppercase;
+  letter-spacing: 0.06em;
+  background: color-mix(in oklch, var(--badge-color, var(--muted)) 15%, transparent);
+  color: var(--badge-color, var(--muted-foreground));
+  border: 1px solid color-mix(in oklch, var(--badge-color, var(--border)) 25%, transparent);
+}
+
+.fed-timeline-status {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.25rem;
+  padding: 0.0625rem 0.375rem;
+  border-radius: 0.25rem;
+  font-size: 0.5625rem;
+  font-weight: 600;
+  text-transform: uppercase;
+}
+
+.fed-timeline-status[data-status="processed"] {
+  background: color-mix(in oklch, var(--fed-color-create) 15%, transparent);
+  color: var(--fed-color-create);
+}
+
+.fed-timeline-status[data-status="pending"] {
+  background: color-mix(in oklch, var(--fed-color-announce) 15%, transparent);
+  color: var(--fed-color-announce);
+}
+
+/* ── Followers List ───────────────────────────────────────────── */
+
+.fed-followers-grid {
+  display: flex;
+  flex-direction: column;
+  gap: 0.375rem;
+}
+
+.fed-follower-item {
+  display: flex;
+  align-items: center;
+  gap: 0.75rem;
+  padding: 0.625rem 1rem;
+  border-radius: var(--radius);
+  border: 1px solid var(--border);
+  background: var(--card);
+  transition: all 0.2s ease;
+}
+
+.fed-follower-item:hover {
+  border-color: color-mix(in oklch, var(--primary) 30%, var(--border));
+  transform: translateX(2px);
+}
+
+.fed-follower-avatar {
+  width: 2rem;
+  height: 2rem;
+  border-radius: 50%;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  font-size: 0.75rem;
+  font-weight: 700;
+  background: var(--primary);
+  color: var(--primary-foreground);
+  flex-shrink: 0;
+}
+
+.fed-follower-uri {
+  flex: 1;
+  min-width: 0;
+  font-family: var(--font-jetbrains), monospace;
+  font-size: 0.75rem;
+  color: var(--foreground);
+  text-overflow: ellipsis;
+  overflow: hidden;
+  white-space: nowrap;
+}
+
+.fed-follower-badge {
+  flex-shrink: 0;
+  display: inline-flex;
+  align-items: center;
+  gap: 0.25rem;
+  padding: 0.125rem 0.5rem;
+  border-radius: 9999px;
+  font-size: 0.5625rem;
+  font-weight: 600;
+  text-transform: uppercase;
+  background: color-mix(in oklch, var(--fed-color-create) 15%, transparent);
+  color: var(--fed-color-create);
+}
+
+/* ── Inbox Locked Overlay ─────────────────────────────────────── */
+
+.fed-inbox-locked {
+  position: relative;
+  min-height: 16rem;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  border-radius: var(--radius);
+  overflow: hidden;
+}
+
+.fed-inbox-locked-bg {
+  position: absolute;
+  inset: 0;
+  background: repeating-linear-gradient(
+    -45deg,
+    var(--secondary),
+    var(--secondary) 8px,
+    var(--muted) 8px,
+    var(--muted) 16px
+  );
+  opacity: 0.3;
+  filter: blur(2px);
+}
+
+.fed-inbox-locked-content {
+  position: relative;
+  z-index: 1;
+  text-align: center;
+  padding: 2rem;
+  background: color-mix(in oklch, var(--background) 85%, transparent);
+  backdrop-filter: blur(12px);
+  border-radius: var(--radius);
+  border: 1px solid var(--border);
+  max-width: 28rem;
+}
+
+.fed-inbox-locked-icon {
+  font-size: 2.5rem;
+  margin-bottom: 0.75rem;
+  display: block;
+  opacity: 0.6;
+}
+
+.fed-inbox-locked-title {
+  font-size: 0.875rem;
+  font-weight: 600;
+  color: var(--foreground);
+  margin-bottom: 0.5rem;
+}
+
+.fed-inbox-locked-text {
+  font-size: 0.75rem;
+  color: var(--muted-foreground);
+  line-height: 1.6;
+}
+
+.fed-inbox-locked-text a {
+  color: var(--primary);
+  text-decoration: underline;
+  text-underline-offset: 2px;
+}
+
+/* ── Empty State ──────────────────────────────────────────────── */
+
+.fed-empty {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  padding: 3rem 1rem;
+  color: var(--muted-foreground);
+  text-align: center;
+}
+
+.fed-empty-icon {
+  font-size: 2.5rem;
+  opacity: 0.25;
+  margin-bottom: 0.75rem;
+}
+
+.fed-empty-text {
+  font-size: 0.8125rem;
+}
+
+.fed-empty-sub {
+  font-size: 0.6875rem;
+  opacity: 0.6;
+  margin-top: 0.25rem;
+}
+
+/* ── Loading Skeletons ────────────────────────────────────────── */
+
+.fed-skeleton-timeline {
+  display: flex;
+  flex-direction: column;
+  gap: 0.5rem;
+}
+
+.fed-skeleton-row {
+  display: flex;
+  align-items: center;
+  gap: 0.75rem;
+  padding: 0.75rem 1rem;
+}
+
+.fed-skeleton-circle {
+  width: 2rem;
+  height: 2rem;
+  border-radius: 50%;
+  background: var(--muted);
+  animation: fed-shimmer 1.5s ease-in-out infinite;
+}
+
+.fed-skeleton-lines {
+  flex: 1;
+  display: flex;
+  flex-direction: column;
+  gap: 0.375rem;
+}
+
+.fed-skeleton-line {
+  height: 0.625rem;
+  border-radius: 0.25rem;
+  background: var(--muted);
+  animation: fed-shimmer 1.5s ease-in-out infinite;
+}
+
+.fed-skeleton-line:nth-child(1) { width: 70%; animation-delay: 0.1s; }
+.fed-skeleton-line:nth-child(2) { width: 40%; animation-delay: 0.2s; }
+
+@keyframes fed-shimmer {
+  0%, 100% { opacity: 0.4; }
+  50% { opacity: 0.8; }
+}
+
+/* ── Instance Info Card ───────────────────────────────────────── */
+
+.fed-instance-info {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.5rem;
+  align-items: center;
+}
+
+.fed-instance-chip {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.25rem;
+  padding: 0.125rem 0.5rem;
+  border-radius: 9999px;
+  font-size: 0.625rem;
+  font-weight: 500;
+  background: var(--secondary);
+  color: var(--secondary-foreground);
+}
+
+/* ── Stagger Animations ──────────────────────────────────────── */
+
+.fed-stagger-1 { animation-delay: 0.05s; }
+.fed-stagger-2 { animation-delay: 0.1s; }
+.fed-stagger-3 { animation-delay: 0.15s; }
+.fed-stagger-4 { animation-delay: 0.2s; }
+
+.fed-animate-in {
+  animation: fed-fade-in-up 0.4s ease both;
+}
+
+@keyframes fed-fade-in-up {
+  from {
+    opacity: 0;
+    transform: translateY(8px);
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0);
+  }
+}

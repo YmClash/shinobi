@@ -17,6 +17,7 @@ const NAV_ITEMS = [
   { href: "/", icon: "⚙️", label: "Dashboard" },
   { href: "/search", icon: "🔍", label: "Recherche RAG" },
   { href: "/forge", icon: "🔨", label: "Forge" },
+  { href: "/federation", icon: "🌐", label: "Fédération" },
 ];
 
 // ── Sidebar Component ────────────────────────────────────────

@@ -36,6 +36,16 @@ const nextConfig: NextConfig = {
         source: "/metrics",
         destination: `${taijutsuUrl}/metrics`,
       },
+      // Phase 31 — Federation Dashboard: proxy ActivityPub & NodeInfo
+      // These endpoints live outside /api/ (Fediverse convention)
+      {
+        source: "/actors/:path*",
+        destination: `${taijutsuUrl}/actors/:path*`,
+      },
+      {
+        source: "/nodeinfo/:path*",
+        destination: `${taijutsuUrl}/nodeinfo/:path*`,
+      },
     ];
   },
 };
