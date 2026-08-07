@@ -284,6 +284,9 @@ mod tests {
         async fn mark_inbox_processed(&self, _activity_id: &Uuid) -> Result<(), DomainError> {
             Ok(())
         }
+        async fn list_unprocessed_inbox(&self, _limit: i64) -> Result<Vec<domain::entities::federation::InboxActivity>, DomainError> {
+            Ok(vec![])
+        }
     }
 
     #[tokio::test]

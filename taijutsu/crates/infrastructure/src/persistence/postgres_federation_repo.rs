@@ -273,6 +273,34 @@ impl FederationRepository for PostgresFederationRepository {
         Ok(())
     }
 
+    async fn list_unprocessed_inbox(&self, limit: i64) -> Result<Vec<InboxActivity>, DomainError> {
+        let rows = sqlx::query_as::<_, InboxRow>(
+            "SELECT id, recipient_actor_id, remote_actor_uri, activity_type, object_type, object_uri,
+                    activity_json, processed, received_at, processed_at
+             FROM federation_inbox
+             WHERE processed = FALSE
+             ORDER BY received_at ASC
+             LIMIT $1"
+        )
+        .bind(limit)
+        .fetch_all(&self.pool)
+        .await
+        .map_err(|e| DomainError::Persistence(e.to_string()))?;
+
+        Ok(rows.into_iter().map(|r| InboxActivity {
+            id: r.id,
+            recipient_actor_id: r.recipient_actor_id,
+            remote_actor_uri: r.remote_actor_uri,
+            activity_type: r.activity_type,
+            object_type: r.object_type,
+            object_uri: r.object_uri,
+            activity_json: r.activity_json,
+            processed: r.processed,
+            received_at: r.received_at,
+            processed_at: r.processed_at,
+        }).collect())
+    }
+
     // ── Stats (NodeInfo) ─────────────────────────────────────
 
     async fn count_local_users(&self) -> Result<i64, DomainError> {

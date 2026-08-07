@@ -62,6 +62,13 @@ pub trait FederationRepository: Send + Sync {
     /// Marque une activité inbox comme traitée (processed = true).
     async fn mark_inbox_processed(&self, activity_id: &Uuid) -> Result<(), DomainError>;
 
+    /// Récupère les activités inbox non traitées (processed = false).
+    ///
+    /// Phase 32 — Inbox Worker : utilisé par la boucle de traitement.
+    /// Tri FIFO (received_at ASC) pour respecter l'ordre causal.
+    /// Utilise l'index partiel `idx_fed_inbox_unprocessed` pour des requêtes O(1).
+    async fn list_unprocessed_inbox(&self, limit: i64) -> Result<Vec<InboxActivity>, DomainError>;
+
     // ── Stats (NodeInfo) ─────────────────────────────────────
 
     /// Compte le nombre total d'utilisateurs locaux (acteurs humains).

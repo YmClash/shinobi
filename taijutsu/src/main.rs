@@ -604,7 +604,7 @@ async fn main() -> anyhow::Result<()> {
         // Phase 27 — ForgeFed (Fédération ActivityPub)
         federation_domain: config.federation_domain.clone(),
         federation_enabled: config.federation_enabled,
-        federation_repo,
+        federation_repo: federation_repo.clone(),
     };
 
     // ── Git Bridge HTTP (Phase 12A) ────────────────────
@@ -677,6 +677,20 @@ async fn main() -> anyhow::Result<()> {
             }
         });
         info!("⏱️ Timer de purge automatique démarré (toutes les 10 min)");
+    }
+
+    // ── Phase 32 : Inbox Worker — Boucle de traitement des activités entrantes ──
+    if config.federation_enabled {
+        let fed_repo = federation_repo.clone();
+        let cancel = cancel_token.clone();
+        tokio::spawn(async move {
+            let worker = infrastructure::federation::inbox_worker::InboxWorker::new(
+                fed_repo,
+                cancel,
+            );
+            worker.run().await;
+        });
+        info!("📥 Inbox Worker démarré (Phase 32 — poll 30s, batch 20, Poison Pill safe)");
     }
 
     // ── Serveur Tonic (gRPC / Ninpo) ───────────────
