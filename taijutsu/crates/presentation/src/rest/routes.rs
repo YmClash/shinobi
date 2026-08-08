@@ -379,6 +379,20 @@ pub fn create_router(state: SharedState) -> Router {
         .route(
             "/api/v1/repos/{owner}/{repo}/checkpoints/{checkpoint_id}",
             get(get_checkpoint_handler),
+        )
+        // ── Phase 33 — Issues/Tickets (GET=MaybeAuth, POST=AuthUser) ──
+        .route(
+            "/api/v1/repos/{owner}/{repo}/issues",
+            get(list_issues_handler)
+                .post(create_issue_handler.layer(auth_layer())),
+        )
+        .route(
+            "/api/v1/repos/{owner}/{repo}/issues/{number}",
+            get(get_issue_handler),
+        )
+        .route(
+            "/api/v1/repos/{owner}/{repo}/labels",
+            get(list_labels_handler),
         );
 
     // ═══════════════════════════════════════════════════════════
@@ -443,6 +457,39 @@ pub fn create_router(state: SharedState) -> Router {
         .route(
             "/api/v1/repos/{owner}/{repo}/mrs/{number}/close",
             post(close_mr_handler),
+        )
+        // Phase 33 — Issue mutations (auth obligatoire)
+        .route(
+            "/api/v1/repos/{owner}/{repo}/issues/{number}/close",
+            post(close_issue_handler),
+        )
+        .route(
+            "/api/v1/repos/{owner}/{repo}/issues/{number}/reopen",
+            post(reopen_issue_handler),
+        )
+        .route(
+            "/api/v1/repos/{owner}/{repo}/issues/{number}/comments",
+            post(comment_issue_handler),
+        )
+        .route(
+            "/api/v1/repos/{owner}/{repo}/issues/{number}/labels",
+            post(add_issue_label_handler),
+        )
+        .route(
+            "/api/v1/repos/{owner}/{repo}/issues/{number}/labels/{label_id}",
+            axum::routing::delete(remove_issue_label_handler),
+        )
+        .route(
+            "/api/v1/repos/{owner}/{repo}/labels",
+            post(create_label_handler),
+        )
+        .route(
+            "/api/v1/repos/{owner}/{repo}/labels/{label_id}",
+            axum::routing::delete(delete_label_handler),
+        )
+        .route(
+            "/api/v1/repos/{owner}/{repo}/issues/{number}/update",
+            post(update_issue_handler),
         )
         // Sensei Chat IA (🔒 verrouillé — coût GPU)
         .route("/api/v1/sensei/chat", post(sensei_chat_handler))
@@ -2454,4 +2501,236 @@ async fn get_checkpoint_handler(
         "total_size": checkpoint.total_size,
         "created_at": checkpoint.created_at,
     })))
+}
+
+// ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+// ── Phase 33 — Issues/Tickets (Le Parchemin des Doléances)
+// ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+#[derive(Debug, Deserialize)]
+struct ListIssuesQuery {
+    status: Option<String>,
+    #[serde(default = "default_issues_limit")]
+    limit: usize,
+    #[serde(default)]
+    offset: usize,
+}
+fn default_issues_limit() -> usize { 30 }
+
+/// `GET /api/v1/repos/{owner}/{repo}/issues` — Liste des issues.
+async fn list_issues_handler(
+    State(state): State<SharedState>,
+    Path((owner, repo)): Path<(String, String)>,
+    Query(query): Query<ListIssuesQuery>,
+    _auth: MaybeAuth,
+) -> Result<Json<serde_json::Value>, AppError> {
+    let repo_entity = state.resolve_repo.execute(&owner, &repo).await?;
+    let status = query.status.as_deref().and_then(domain::IssueStatus::from_sql_str);
+    let (issues, total) = state.list_issues.execute(&repo_entity.id, status, query.limit, query.offset).await?;
+    let items: Vec<serde_json::Value> = issues.into_iter().map(|i| {
+        serde_json::json!({
+            "id": i.id, "number": i.number, "title": i.title,
+            "status": i.status, "author_id": i.author_id,
+            "assignee_id": i.assignee_id,
+            "created_at": i.created_at, "updated_at": i.updated_at,
+        })
+    }).collect();
+    Ok(Json(serde_json::json!({ "items": items, "total": total })))
+}
+
+#[derive(Debug, Deserialize)]
+struct CreateIssueBody {
+    title: String,
+    body: Option<String>,
+    #[serde(default)]
+    label_ids: Vec<Uuid>,
+}
+
+/// `POST /api/v1/repos/{owner}/{repo}/issues` — Créer une issue.
+async fn create_issue_handler(
+    auth: AuthUser,
+    State(state): State<SharedState>,
+    Path((owner, repo)): Path<(String, String)>,
+    Json(body): Json<CreateIssueBody>,
+) -> Result<(axum::http::StatusCode, Json<serde_json::Value>), AppError> {
+    let repo_entity = state.resolve_repo.execute(&owner, &repo).await?;
+    let cmd = application::use_cases::create_issue::CreateIssueCommand {
+        author_id: auth.0.actor_id(),
+        repository_id: repo_entity.id,
+        title: body.title,
+        body: body.body,
+        label_ids: body.label_ids,
+    };
+    let issue = state.create_issue.execute(cmd).await?;
+    Ok((axum::http::StatusCode::CREATED, Json(serde_json::json!({
+        "id": issue.id, "number": issue.number, "title": issue.title,
+        "status": issue.status, "created_at": issue.created_at,
+    }))))
+}
+
+/// `GET /api/v1/repos/{owner}/{repo}/issues/{number}` — Détail d'une issue.
+async fn get_issue_handler(
+    State(state): State<SharedState>,
+    Path((owner, repo, number)): Path<(String, String, i32)>,
+    _auth: MaybeAuth,
+) -> Result<Json<serde_json::Value>, AppError> {
+    let repo_entity = state.resolve_repo.execute(&owner, &repo).await?;
+    let detail = state.get_issue.execute(&repo_entity.id, number).await?;
+    let i = &detail.issue;
+    let comments: Vec<serde_json::Value> = detail.comments.into_iter().map(|c| {
+        serde_json::json!({
+            "id": c.id, "author_id": c.author_id, "body": c.body,
+            "created_at": c.created_at, "updated_at": c.updated_at,
+        })
+    }).collect();
+    let events: Vec<serde_json::Value> = detail.events.into_iter().map(|e| {
+        serde_json::json!({
+            "id": e.id, "actor_id": e.actor_id,
+            "event_type": e.event_type.as_sql_str(),
+            "payload": e.payload, "created_at": e.created_at,
+        })
+    }).collect();
+    let labels: Vec<serde_json::Value> = detail.labels.into_iter().map(|l| {
+        serde_json::json!({
+            "id": l.id, "name": l.name, "color": l.color, "description": l.description,
+        })
+    }).collect();
+    Ok(Json(serde_json::json!({
+        "id": i.id, "number": i.number, "title": i.title, "body": i.body,
+        "status": i.status, "author_id": i.author_id, "assignee_id": i.assignee_id,
+        "closed_by": i.closed_by, "closed_at": i.closed_at,
+        "created_at": i.created_at, "updated_at": i.updated_at,
+        "comments": comments, "events": events, "labels": labels,
+    })))
+}
+
+/// `POST /api/v1/repos/{owner}/{repo}/issues/{number}/close`
+async fn close_issue_handler(
+    auth: AuthUser, State(state): State<SharedState>,
+    Path((owner, repo, number)): Path<(String, String, i32)>,
+) -> Result<Json<serde_json::Value>, AppError> {
+    let repo_entity = state.resolve_repo.execute(&owner, &repo).await?;
+    state.close_issue.close(&auth.0.actor_id(), &repo_entity.id, number).await?;
+    Ok(Json(serde_json::json!({ "status": "closed" })))
+}
+
+/// `POST /api/v1/repos/{owner}/{repo}/issues/{number}/reopen`
+async fn reopen_issue_handler(
+    auth: AuthUser, State(state): State<SharedState>,
+    Path((owner, repo, number)): Path<(String, String, i32)>,
+) -> Result<Json<serde_json::Value>, AppError> {
+    let repo_entity = state.resolve_repo.execute(&owner, &repo).await?;
+    state.close_issue.reopen(&auth.0.actor_id(), &repo_entity.id, number).await?;
+    Ok(Json(serde_json::json!({ "status": "open" })))
+}
+
+#[derive(Debug, Deserialize)]
+struct CommentIssueBody { body: String }
+
+/// `POST /api/v1/repos/{owner}/{repo}/issues/{number}/comments`
+async fn comment_issue_handler(
+    auth: AuthUser, State(state): State<SharedState>,
+    Path((owner, repo, number)): Path<(String, String, i32)>,
+    Json(body): Json<CommentIssueBody>,
+) -> Result<(axum::http::StatusCode, Json<serde_json::Value>), AppError> {
+    let repo_entity = state.resolve_repo.execute(&owner, &repo).await?;
+    let cmd = application::use_cases::comment_issue::CommentIssueCommand {
+        author_id: auth.0.actor_id(),
+        repository_id: repo_entity.id,
+        issue_number: number,
+        body: body.body,
+    };
+    let comment = state.comment_issue.execute(cmd).await?;
+    Ok((axum::http::StatusCode::CREATED, Json(serde_json::json!({
+        "id": comment.id, "author_id": comment.author_id, "body": comment.body,
+        "created_at": comment.created_at,
+    }))))
+}
+
+#[derive(Debug, Deserialize)]
+struct UpdateIssueBody {
+    title: Option<String>,
+    body: Option<Option<String>>,
+}
+
+/// `POST /api/v1/repos/{owner}/{repo}/issues/{number}/update`
+async fn update_issue_handler(
+    auth: AuthUser, State(state): State<SharedState>,
+    Path((owner, repo, number)): Path<(String, String, i32)>,
+    Json(body): Json<UpdateIssueBody>,
+) -> Result<Json<serde_json::Value>, AppError> {
+    let repo_entity = state.resolve_repo.execute(&owner, &repo).await?;
+    let cmd = application::use_cases::update_issue::UpdateIssueCommand {
+        actor_id: auth.0.actor_id(),
+        repository_id: repo_entity.id,
+        issue_number: number,
+        title: body.title,
+        body: body.body,
+    };
+    state.update_issue.execute(cmd).await?;
+    Ok(Json(serde_json::json!({ "status": "updated" })))
+}
+
+/// `GET /api/v1/repos/{owner}/{repo}/labels`
+async fn list_labels_handler(
+    State(state): State<SharedState>,
+    Path((owner, repo)): Path<(String, String)>,
+    _auth: MaybeAuth,
+) -> Result<Json<serde_json::Value>, AppError> {
+    let repo_entity = state.resolve_repo.execute(&owner, &repo).await?;
+    let labels = state.manage_labels.list_labels(&repo_entity.id).await?;
+    let items: Vec<serde_json::Value> = labels.into_iter().map(|l| {
+        serde_json::json!({ "id": l.id, "name": l.name, "color": l.color, "description": l.description })
+    }).collect();
+    Ok(Json(serde_json::json!({ "labels": items })))
+}
+
+#[derive(Debug, Deserialize)]
+struct CreateLabelBody { name: String, color: String, description: Option<String> }
+
+/// `POST /api/v1/repos/{owner}/{repo}/labels`
+async fn create_label_handler(
+    auth: AuthUser, State(state): State<SharedState>,
+    Path((owner, repo)): Path<(String, String)>,
+    Json(body): Json<CreateLabelBody>,
+) -> Result<(axum::http::StatusCode, Json<serde_json::Value>), AppError> {
+    let repo_entity = state.resolve_repo.execute(&owner, &repo).await?;
+    let label = state.manage_labels.create_label(&auth.0.actor_id(), &repo_entity.id, body.name, body.color, body.description).await?;
+    Ok((axum::http::StatusCode::CREATED, Json(serde_json::json!({
+        "id": label.id, "name": label.name, "color": label.color,
+    }))))
+}
+
+/// `DELETE /api/v1/repos/{owner}/{repo}/labels/{label_id}`
+async fn delete_label_handler(
+    auth: AuthUser, State(state): State<SharedState>,
+    Path((owner, repo, label_id)): Path<(String, String, Uuid)>,
+) -> Result<Json<serde_json::Value>, AppError> {
+    let repo_entity = state.resolve_repo.execute(&owner, &repo).await?;
+    state.manage_labels.delete_label(&auth.0.actor_id(), &repo_entity.id, &label_id).await?;
+    Ok(Json(serde_json::json!({ "status": "deleted" })))
+}
+
+#[derive(Debug, Deserialize)]
+struct AddLabelBody { label_id: Uuid }
+
+/// `POST /api/v1/repos/{owner}/{repo}/issues/{number}/labels`
+async fn add_issue_label_handler(
+    auth: AuthUser, State(state): State<SharedState>,
+    Path((owner, repo, number)): Path<(String, String, i32)>,
+    Json(body): Json<AddLabelBody>,
+) -> Result<Json<serde_json::Value>, AppError> {
+    let repo_entity = state.resolve_repo.execute(&owner, &repo).await?;
+    state.manage_labels.add_label(&auth.0.actor_id(), &repo_entity.id, number, &body.label_id).await?;
+    Ok(Json(serde_json::json!({ "status": "label_added" })))
+}
+
+/// `DELETE /api/v1/repos/{owner}/{repo}/issues/{number}/labels/{label_id}`
+async fn remove_issue_label_handler(
+    auth: AuthUser, State(state): State<SharedState>,
+    Path((owner, repo, number, label_id)): Path<(String, String, i32, Uuid)>,
+) -> Result<Json<serde_json::Value>, AppError> {
+    let repo_entity = state.resolve_repo.execute(&owner, &repo).await?;
+    state.manage_labels.remove_label(&auth.0.actor_id(), &repo_entity.id, number, &label_id).await?;
+    Ok(Json(serde_json::json!({ "status": "label_removed" })))
 }

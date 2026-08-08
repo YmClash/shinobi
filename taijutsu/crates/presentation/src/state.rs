@@ -166,6 +166,24 @@ pub struct SharedState {
     pub federation_enabled: bool,
     /// Repository de fédération (keypairs, follows, stats).
     pub federation_repo: Arc<dyn domain::ports::federation_repository::FederationRepository>,
+
+    // ── Phase 33 — Issues/Tickets (Le Parchemin des Doléances) ────────
+    /// Repository des issues (CRUD issues, comments, events, labels).
+    pub issue_repo: Arc<dyn domain::ports::issue_repository::IssueRepository>,
+    /// Use case: créer une issue.
+    pub create_issue: Arc<application::use_cases::create_issue::CreateIssueUseCase>,
+    /// Use case: lister les issues d'un repo.
+    pub list_issues: Arc<application::use_cases::list_issues::ListIssuesUseCase>,
+    /// Use case: récupérer une issue avec détails.
+    pub get_issue: Arc<application::use_cases::get_issue::GetIssueUseCase>,
+    /// Use case: mise à jour titre/body.
+    pub update_issue: Arc<application::use_cases::update_issue::UpdateIssueUseCase>,
+    /// Use case: fermer/rouvrir une issue.
+    pub close_issue: Arc<application::use_cases::close_issue::CloseIssueUseCase>,
+    /// Use case: commenter une issue.
+    pub comment_issue: Arc<application::use_cases::comment_issue::CommentIssueUseCase>,
+    /// Use case: CRUD labels + assign/unassign.
+    pub manage_labels: Arc<application::use_cases::manage_labels::ManageLabelsUseCase>,
 }
 
 // ── Phase 12A — Git Bridge HTTP ──────────────────────────────────────

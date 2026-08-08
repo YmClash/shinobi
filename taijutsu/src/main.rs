@@ -487,6 +487,50 @@ async fn main() -> anyhow::Result<()> {
     );
     info!("🥷 ANBU Checkpoints initialisé (Phase 28B)");
 
+    // ── Phase 33 — Issues/Tickets (Le Parchemin des Doléances) ────────
+    let issue_repo: Arc<dyn domain::ports::issue_repository::IssueRepository> = Arc::new(
+        infrastructure::persistence::postgres_issue_repo::PostgresIssueRepository::new(
+            pg_pool.clone(),
+        ),
+    );
+    let create_issue = Arc::new(
+        application::use_cases::create_issue::CreateIssueUseCase::new(
+            issue_repo.clone(),
+            repo_repo.clone(),
+        ),
+    );
+    let list_issues = Arc::new(
+        application::use_cases::list_issues::ListIssuesUseCase::new(issue_repo.clone()),
+    );
+    let get_issue = Arc::new(
+        application::use_cases::get_issue::GetIssueUseCase::new(issue_repo.clone()),
+    );
+    let update_issue = Arc::new(
+        application::use_cases::update_issue::UpdateIssueUseCase::new(
+            issue_repo.clone(),
+            repo_repo.clone(),
+        ),
+    );
+    let close_issue = Arc::new(
+        application::use_cases::close_issue::CloseIssueUseCase::new(
+            issue_repo.clone(),
+            repo_repo.clone(),
+        ),
+    );
+    let comment_issue = Arc::new(
+        application::use_cases::comment_issue::CommentIssueUseCase::new(
+            issue_repo.clone(),
+            repo_repo.clone(),
+        ),
+    );
+    let manage_labels = Arc::new(
+        application::use_cases::manage_labels::ManageLabelsUseCase::new(
+            issue_repo.clone(),
+            repo_repo.clone(),
+        ),
+    );
+    info!("🎯 Issues/Tickets initialisé (Phase 33)");
+
     // ── Phase 27 — ForgeFed (Fédération ActivityPub) ──────────────────
     let federation_repo: Arc<dyn domain::ports::federation_repository::FederationRepository> =
         Arc::new(PostgresFederationRepository::new(pg_pool.clone()));
@@ -605,6 +649,15 @@ async fn main() -> anyhow::Result<()> {
         federation_domain: config.federation_domain.clone(),
         federation_enabled: config.federation_enabled,
         federation_repo: federation_repo.clone(),
+        // Phase 33 — Issues/Tickets (Le Parchemin des Doléances)
+        issue_repo: issue_repo.clone(),
+        create_issue,
+        list_issues,
+        get_issue,
+        update_issue,
+        close_issue,
+        comment_issue,
+        manage_labels,
     };
 
     // ── Git Bridge HTTP (Phase 12A) ────────────────────

@@ -249,15 +249,16 @@ impl MrRepository for PostgresMrRepository {
 
     #[instrument(skip(self))]
     async fn next_number(&self, repo_id: &Uuid) -> Result<i32, DomainError> {
-        // UPSERT atomique : la première MR d'un repo crée la ligne,
+        // UPSERT atomique sur le compteur unifié (partagé Issues + MRs — Phase 33).
+        // La première MR/issue d'un repo crée la ligne,
         // les suivantes incrémentent. RETURNING retourne le numéro attribué.
         let row = sqlx::query(
             r#"
-            INSERT INTO repo_counters (repository_id, next_mr_number)
-            VALUES ($1, 2)
+            INSERT INTO repo_counters (repository_id, next_mr_number, next_ticket_number)
+            VALUES ($1, 1, 2)
             ON CONFLICT (repository_id)
-            DO UPDATE SET next_mr_number = repo_counters.next_mr_number + 1
-            RETURNING next_mr_number - 1 AS assigned_number
+            DO UPDATE SET next_ticket_number = repo_counters.next_ticket_number + 1
+            RETURNING next_ticket_number - 1 AS assigned_number
             "#,
         )
         .bind(repo_id)
