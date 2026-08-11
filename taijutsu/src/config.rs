@@ -63,7 +63,6 @@ pub struct Config {
     pub oracle_consumer_group: String,
 
     // ── Phase 15 — Sensei (先生) ──────────────────────────────────────
-
     /// Activer/désactiver l'agent Sensei (chat conversationnel). Défaut: true.
     pub sensei_enabled: bool,
 
@@ -76,7 +75,6 @@ pub struct Config {
     pub sensei_ollama_model: String,
 
     // ── Phase 19A — Auth & RBAC ───────────────────────────────────────
-
     /// Secret JWT pour signer les tokens (HS256). ≥32 caractères recommandé.
     /// Défaut: "shinobi-dev-secret-change-me-in-production!" (dev uniquement).
     pub jwt_secret: String,
@@ -85,7 +83,6 @@ pub struct Config {
     pub jwt_duration_secs: i64,
 
     // ── Phase 20 — GitHub OAuth ────────────────────────────────────
-
     /// GitHub OAuth Application Client ID (optionnel).
     /// Si absent, les routes OAuth sont désactivées (graceful degradation).
     pub github_client_id: Option<String>,
@@ -94,7 +91,6 @@ pub struct Config {
     pub github_client_secret: Option<String>,
 
     // ── Phase 27 — ForgeFed (Fédération) ──────────────────────
-
     /// Domaine public de l'instance pour la fédération ActivityPub.
     /// Utilisé pour construire les URIs ActivityPub (ex: `https://{domain}/actors/{handle}`).
     /// Défaut: "localhost:3000" (dev).
