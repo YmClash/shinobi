@@ -398,42 +398,35 @@ async fn git_info_refs(
         _ => {}
     }
 
-    // 2. Construire le chemin vers le bare Git repo
+    // 2. Enregistrer le workspace dans le registre DashMap (idempotent)
+    //    DOIT être fait AVANT git_repo_path() car celui-ci a besoin de
+    //    l'owner_id dans le DashMap pour construire le chemin multi-tenant
+    //    {workspace_root}/{owner_id}/{repo_id}/.jj/repo/store/git
+    //    Sans cet appel préalable, git_repo_path() utilise le fallback plat
+    //    {workspace_root}/{repo_id}/... qui n'existe pas (DEBT-001).
+    if let Err(e) = state
+        .vcs_engine
+        .init_workspace(&repository.owner_id, &repository.id)
+        .await
+    {
+        warn!(error = %e, "Git HTTP: workspace init failed");
+        return (
+            StatusCode::INTERNAL_SERVER_ERROR,
+            "Failed to initialize Git repository",
+        )
+            .into_response();
+    }
+
+    // Maintenant que le DashMap contient owner_id, le chemin est correct
     let repo_git_path = state.vcs_engine.git_repo_path(&repository.id);
 
-    // Lazy init : si le bare Git repo n'existe pas (repo cree avec
-    // SimpleBackend avant Phase 11, ou workspace non initialise),
-    // on initialise le workspace jj+GitBackend a la volee.
     if !repo_git_path.exists() {
-        info!(
+        warn!(
             repo_id = %repository.id,
             path = %repo_git_path.display(),
-            "Git HTTP: bare Git repo absent — lazy init du workspace"
+            "Git HTTP: bare Git repo absent même après init_workspace"
         );
-        if let Err(e) = state
-            .vcs_engine
-            .init_workspace(&repository.owner_id, &repository.id)
-            .await
-        {
-            warn!(error = %e, "Git HTTP: lazy init failed");
-            return (
-                StatusCode::INTERNAL_SERVER_ERROR,
-                "Failed to initialize Git repository",
-            )
-                .into_response();
-        }
-        // Re-verifier apres init
-        if !repo_git_path.exists() {
-            warn!(
-                path = %repo_git_path.display(),
-                "Git HTTP: bare Git repo toujours absent apres init"
-            );
-            return (StatusCode::NOT_FOUND, "Git repository not initialized").into_response();
-        }
-        info!(
-            repo_id = %repository.id,
-            "Git HTTP: workspace initialise avec succes (lazy init)"
-        );
+        return (StatusCode::NOT_FOUND, "Git repository not initialized").into_response();
     }
 
     // 3. Executer le CGI
@@ -510,7 +503,20 @@ async fn git_receive_pack(
         "Git HTTP: push authentifie et autorise"
     );
 
-    // 2. Construire le chemin vers le bare Git repo
+    // 2. Enregistrer le workspace dans le DashMap (idempotent) avant
+    //    git_repo_path() pour le chemin multi-tenant correct (DEBT-001 fix)
+    if let Err(e) = state
+        .vcs_engine
+        .init_workspace(&repository.owner_id, &repository.id)
+        .await
+    {
+        warn!(error = %e, "Git HTTP: workspace init failed for push");
+        return (
+            StatusCode::INTERNAL_SERVER_ERROR,
+            "Failed to initialize Git repository",
+        )
+            .into_response();
+    }
     let repo_git_path = state.vcs_engine.git_repo_path(&repository.id);
 
     // 3. Extraire le Content-Type de la requete
@@ -606,7 +612,20 @@ async fn git_upload_pack(
         return (StatusCode::NOT_FOUND, "Repository not found").into_response();
     }
 
-    // 3. Construire le chemin vers le bare Git repo
+    // 3. Enregistrer le workspace dans le DashMap (idempotent) avant
+    //    git_repo_path() pour le chemin multi-tenant correct (DEBT-001 fix)
+    if let Err(e) = state
+        .vcs_engine
+        .init_workspace(&repository.owner_id, &repository.id)
+        .await
+    {
+        warn!(error = %e, "Git HTTP: workspace init failed for clone/fetch");
+        return (
+            StatusCode::INTERNAL_SERVER_ERROR,
+            "Failed to initialize Git repository",
+        )
+            .into_response();
+    }
     let repo_git_path = state.vcs_engine.git_repo_path(&repository.id);
 
     // 4. Extraire le Content-Type
