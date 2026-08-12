@@ -284,6 +284,56 @@ behavior = "drop"
         base.join(".jj").join("repo").join("store").join("git")
     }
 
+    /// Corrige le HEAD du bare Git repo pour pointer sur `refs/heads/main`
+    /// au lieu du défaut jj-lib `refs/heads/master`.
+    ///
+    /// ## Pourquoi ?
+    /// `jj-lib::Workspace::init_internal_git()` crée un bare repo avec
+    /// `HEAD → refs/heads/master`. Mais les pushes arrivent sur `refs/heads/main`
+    /// (convention moderne). Quand un client fait `jj git clone` ou `git clone`,
+    /// le HEAD pointe sur une branche inexistante → working copy vide.
+    ///
+    /// Cette méthode détecte le désalignement et réécrit le HEAD symref.
+    /// Idempotent : ne fait rien si HEAD pointe déjà sur main.
+    fn fix_bare_head_to_main(&self, repo_id: &Uuid) {
+        let git_dir = self.git_repo_path(repo_id);
+        let head_path = git_dir.join("HEAD");
+
+        // Lire le HEAD actuel
+        let head_content = match std::fs::read_to_string(&head_path) {
+            Ok(c) => c,
+            Err(_) => return, // Pas de HEAD → bare repo pas encore créé
+        };
+        let head_trimmed = head_content.trim();
+
+        // Si HEAD pointe déjà sur main, rien à faire
+        if head_trimmed == "ref: refs/heads/main" {
+            return;
+        }
+
+        // Vérifier si refs/heads/main existe (sinon pas de fix possible)
+        let main_ref = git_dir.join("refs").join("heads").join("main");
+        if !main_ref.exists() {
+            // main n'existe pas encore → le repo est vierge ou utilise master
+            return;
+        }
+
+        // Réécrire HEAD → refs/heads/main
+        if let Err(e) = std::fs::write(&head_path, "ref: refs/heads/main\n") {
+            warn!(
+                repo_id = %repo_id,
+                error = %e,
+                "fix_bare_head_to_main: échec écriture HEAD"
+            );
+        } else {
+            info!(
+                repo_id = %repo_id,
+                old_head = %head_trimmed,
+                "fix_bare_head_to_main: HEAD corrigé → refs/heads/main"
+            );
+        }
+    }
+
     /// Resout le HEAD depuis les refs Git du bare repo (pas les heads jj).
     ///
     /// Apres un `git push`, les refs Git (`refs/heads/main`) sont mises a jour
@@ -964,6 +1014,11 @@ impl VcsEngine for JujutsuEngine {
 
         let wh = workspace_handle?;
         self.handles.insert(rid, (oid, Arc::new(Mutex::new(wh))));
+
+        // Corriger le HEAD du bare Git si nécessaire (master → main)
+        // Doit être appelé APRÈS insert dans le DashMap car fix_bare_head_to_main
+        // utilise git_repo_path() qui a besoin de l'owner_id dans le registre.
+        self.fix_bare_head_to_main(&rid);
 
         Ok(())
     }
