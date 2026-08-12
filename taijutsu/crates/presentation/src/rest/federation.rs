@@ -24,6 +24,9 @@ use domain::errors::DomainError;
 use crate::errors::AppError;
 use crate::state::SharedState;
 
+// Helper partagé : détecte http vs https selon le domaine (DEBT-002)
+use infrastructure::federation::activity_builder::federation_scheme;
+
 // ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 // ── Phase 27A — Discovery Layer
 // ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
@@ -63,13 +66,14 @@ pub async fn webfinger_handler(
         )))?;
 
     let domain = &state.federation_domain;
-    let actor_uri = format!("https://{}/actors/{}", domain, actor.handle);
+    let scheme = federation_scheme(domain);
+    let actor_uri = format!("{}://{}/actors/{}", scheme, domain, actor.handle);
 
     let jrd = serde_json::json!({
         "subject": format!("acct:{}@{}", actor.handle, domain),
         "aliases": [
             actor_uri,
-            format!("https://{}/api/v1/actors/{}/profile", domain, actor.handle),
+            format!("{}://{}/api/v1/actors/{}/profile", scheme, domain, actor.handle),
         ],
         "links": [
             {
@@ -80,7 +84,7 @@ pub async fn webfinger_handler(
             {
                 "rel": "http://webfinger.net/rel/profile-page",
                 "type": "text/html",
-                "href": format!("https://{}/profile/{}", domain, actor.handle),
+                "href": format!("{}://{}/profile/{}", scheme, domain, actor.handle),
             },
         ]
     });
@@ -100,12 +104,13 @@ pub async fn nodeinfo_wellknown_handler(
     State(state): State<SharedState>,
 ) -> Json<serde_json::Value> {
     let domain = &state.federation_domain;
+    let scheme = federation_scheme(domain);
 
     Json(serde_json::json!({
         "links": [
             {
                 "rel": "http://nodeinfo.diaspora.software/ns/schema/2.1",
-                "href": format!("https://{}/nodeinfo/2.1", domain),
+                "href": format!("{}://{}/nodeinfo/2.1", scheme, domain),
             }
         ]
     }))
@@ -189,13 +194,17 @@ pub async fn actor_ap_handler(
         )))?;
 
     let domain = &state.federation_domain;
-    let actor_uri = format!("https://{}/actors/{}", domain, actor.handle);
+    let scheme = federation_scheme(domain);
+    let actor_uri = format!("{}://{}/actors/{}", scheme, domain, actor.handle);
 
     // Récupérer ou générer la clé publique (Lazy Keygen — Phase 27-bis-C)
     let public_key_section = match state.federation_repo.get_keypair(&actor.id).await {
         Ok(Some(keypair)) => {
+            // Recalculer key_id dynamiquement depuis le domaine actuel,
+            // car la valeur en base peut contenir un ancien domaine (ex: localhost:3000)
+            // alors que le FEDERATION_DOMAIN a changé (DEBT-002).
             serde_json::json!({
-                "id": keypair.key_id,
+                "id": format!("{}#main-key", actor_uri),
                 "owner": actor_uri,
                 "publicKeyPem": keypair.public_key_pem,
             })
@@ -253,7 +262,7 @@ pub async fn actor_ap_handler(
         "outbox": format!("{}/outbox", actor_uri),
         "followers": format!("{}/followers", actor_uri),
         "following": format!("{}/following", actor_uri),
-        "url": format!("https://{}/profile/{}", domain, actor.handle),
+        "url": format!("{}://{}/profile/{}", scheme, domain, actor.handle),
         "published": actor.created_at.to_rfc3339(),
         "publicKey": public_key_section,
         "icon": actor.avatar_url.map(|url| serde_json::json!({
@@ -261,7 +270,7 @@ pub async fn actor_ap_handler(
             "url": url,
         })),
         "endpoints": {
-            "sharedInbox": format!("https://{}/inbox", domain),
+            "sharedInbox": format!("{}://{}/inbox", scheme, domain),
         },
     });
 
@@ -393,7 +402,8 @@ pub async fn inbox_handler(
 
             // ── Phase 27-bis-B : Envoyer un Accept signé (Le Facteur) ──
             let domain = state.federation_domain.clone();
-            let actor_uri = format!("https://{}/actors/{}", domain, actor.handle);
+            let scheme = federation_scheme(&domain);
+            let actor_uri = format!("{}://{}/actors/{}", scheme, domain, actor.handle);
             let federation_repo = state.federation_repo.clone();
             let actor_id = actor.id;
             let follow_body = body.clone();
@@ -599,7 +609,8 @@ pub async fn outbox_handler(
         )))?;
 
     let domain = &state.federation_domain;
-    let outbox_uri = format!("https://{}/actors/{}/outbox", domain, handle);
+    let scheme = federation_scheme(domain);
+    let outbox_uri = format!("{}://{}/actors/{}/outbox", scheme, domain, handle);
 
     // Phase 27-bis-D : activités réelles
     let activities = state.federation_repo.list_activities(&actor.id, 50).await?;
@@ -646,7 +657,8 @@ pub async fn followers_handler(
     let uris: Vec<&str> = followers.iter().map(|f| f.follower_uri.as_str()).collect();
 
     let domain = &state.federation_domain;
-    let followers_uri = format!("https://{}/actors/{}/followers", domain, handle);
+    let scheme = federation_scheme(domain);
+    let followers_uri = format!("{}://{}/actors/{}/followers", scheme, domain, handle);
 
     Ok((
         StatusCode::OK,
@@ -684,7 +696,8 @@ pub async fn following_handler(
         )))?;
 
     let domain = &state.federation_domain;
-    let following_uri = format!("https://{}/actors/{}/following", domain, handle);
+    let scheme = federation_scheme(domain);
+    let following_uri = format!("{}://{}/actors/{}/following", scheme, domain, handle);
 
     Ok((
         StatusCode::OK,
@@ -749,7 +762,7 @@ pub async fn repo_ap_handler(
         )))?;
 
     let domain = &state.federation_domain;
-    let scheme = if domain.contains("localhost") { "http" } else { "https" };
+    let scheme = federation_scheme(domain);
     let repo_uri = format!("{}://{}/repos/{}/{}", scheme, domain, owner, repo_name);
     let actor_uri = format!("{}://{}/actors/{}", scheme, domain, owner);
 

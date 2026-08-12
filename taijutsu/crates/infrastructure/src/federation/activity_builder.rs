@@ -141,10 +141,11 @@ pub fn push_activity(
     })
 }
 
-/// Retourne "http" si le domaine contient "localhost", "https" sinon.
+/// Retourne \"http\" si le domaine contient \"localhost\", \"https\" sinon.
 ///
 /// Évite les problèmes de signature HTTP en dev local.
-fn federation_scheme(domain: &str) -> &'static str {
+/// Public car réutilisé par les handlers fédérés (DEBT-002).
+pub fn federation_scheme(domain: &str) -> &'static str {
     if domain.contains("localhost") || domain.contains("127.0.0.1") {
         "http"
     } else {

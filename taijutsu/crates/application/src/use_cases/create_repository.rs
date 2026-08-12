@@ -68,7 +68,7 @@ impl CreateRepositoryUseCase {
             repo_repo,
             vcs,
             federation_service: None,
-            federation_domain: "localhost:3000".to_string(),
+            federation_domain: String::new(), // Injecté par with_federation() si fédération active
         }
     }
 

@@ -169,11 +169,84 @@ impl Config {
             github_client_id: env::var("GITHUB_CLIENT_ID").ok(),
             github_client_secret: env::var("GITHUB_CLIENT_SECRET").ok(),
             // ── Phase 27 — ForgeFed ────────────────────────
-            federation_domain: env::var("FEDERATION_DOMAIN")
-                .unwrap_or_else(|_| "localhost:3000".to_string()),
+            federation_domain: sanitize_federation_domain(
+                &env::var("FEDERATION_DOMAIN")
+                    .unwrap_or_else(|_| "localhost:3000".to_string()),
+            ),
             federation_enabled: env::var("FEDERATION_ENABLED")
                 .map(|v| v != "false" && v != "0")
                 .unwrap_or(false),
         }
     }
 }
+
+/// Sanitise le domaine fédéré en supprimant schéma, espaces et trailing slash.
+///
+/// Le `FEDERATION_DOMAIN` doit être un domaine nu (ex: `forge.shinobi.dev`)
+/// sans schéma `https://`. Cette fonction corrige les erreurs de copier-coller
+/// fréquentes dans `.env` (espaces, schéma inclus, trailing slash).
+///
+/// ## Exemples
+/// - `" https://forge.shinobi.dev "` → `"forge.shinobi.dev"`
+/// - `"http://localhost:3000/"` → `"localhost:3000"`
+/// - `"localhost:3000"` → `"localhost:3000"` (inchangé)
+fn sanitize_federation_domain(raw: &str) -> String {
+    let trimmed = raw.trim();
+    let without_scheme = trimmed
+        .strip_prefix("https://")
+        .or_else(|| trimmed.strip_prefix("http://"))
+        .unwrap_or(trimmed);
+    let clean = without_scheme.trim_end_matches('/');
+    if clean != trimmed {
+        eprintln!(
+            "⚠️  FEDERATION_DOMAIN sanitized: {:?} → {:?} (stripped scheme/spaces/slash)",
+            raw, clean
+        );
+    }
+    clean.to_string()
+}
+
+// ── Tests ─────────────────────────────────────────────────────────────
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_sanitize_plain_domain() {
+        assert_eq!(sanitize_federation_domain("localhost:3000"), "localhost:3000");
+    }
+
+    #[test]
+    fn test_sanitize_strips_https_scheme() {
+        assert_eq!(
+            sanitize_federation_domain("https://forge.shinobi.dev"),
+            "forge.shinobi.dev"
+        );
+    }
+
+    #[test]
+    fn test_sanitize_strips_http_scheme() {
+        assert_eq!(
+            sanitize_federation_domain("http://localhost:3000"),
+            "localhost:3000"
+        );
+    }
+
+    #[test]
+    fn test_sanitize_strips_spaces_and_scheme() {
+        assert_eq!(
+            sanitize_federation_domain(" https://reliably-recognize-payback.ngrok-free.dev "),
+            "reliably-recognize-payback.ngrok-free.dev"
+        );
+    }
+
+    #[test]
+    fn test_sanitize_strips_trailing_slash() {
+        assert_eq!(
+            sanitize_federation_domain("https://forge.shinobi.dev/"),
+            "forge.shinobi.dev"
+        );
+    }
+}
+
