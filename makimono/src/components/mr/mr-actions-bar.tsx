@@ -2,7 +2,7 @@
 
 // ═══════════════════════════════════════════════════════════════
 // MR Actions Bar — Merge/Close/Review buttons (Phase 26B)
-// Uses useOptimistic for instant feedback + anti-double-click
+// Pattern GitHub: overlay plein écran + fermeture au clic extérieur
 // ═══════════════════════════════════════════════════════════════
 
 import { useState } from "react";
@@ -15,28 +15,38 @@ interface MrActionsBarProps {
   actions: OptimisticMrActions;
 }
 
+type OpenMenu = "none" | "review" | "merge";
+
 export function MrActionsBar({
   status,
   hasConflicts,
   actions,
 }: MrActionsBarProps) {
-  const [showMergeMenu, setShowMergeMenu] = useState(false);
-  const [showReviewMenu, setShowReviewMenu] = useState(false);
+  const [openMenu, setOpenMenu] = useState<OpenMenu>("none");
 
   const isOpen = status === "open";
   const isDisabled = actions.isPending || !isOpen;
 
+  // Ferme tous les menus
+  const closeAll = () => setOpenMenu("none");
+
+  // Toggle un menu (ferme l'autre si ouvert)
+  const toggleMenu = (menu: OpenMenu) => {
+    setOpenMenu((prev) => (prev === menu ? "none" : menu));
+  };
+
   const handleMerge = async (strategy: MergeStrategy) => {
-    setShowMergeMenu(false);
+    closeAll();
     await actions.doMerge(strategy);
   };
 
   const handleReview = async (verdict: MrVerdict) => {
-    setShowReviewMenu(false);
+    closeAll();
     await actions.doReview(verdict);
   };
 
   const handleClose = async () => {
+    closeAll();
     await actions.doClose();
   };
 
@@ -50,13 +60,22 @@ export function MrActionsBar({
         </div>
       )}
 
+      {/* ── Overlay plein écran (pattern GitHub) ───── */}
+      {openMenu !== "none" && (
+        <div
+          className="mr-action-overlay"
+          onClick={closeAll}
+          aria-hidden="true"
+        />
+      )}
+
       <div className="mr-actions-buttons">
         {/* ── Review Button ──────────────────────────── */}
         <div className="mr-action-group">
           <button
             className="mr-action-btn mr-action-review"
             disabled={isDisabled}
-            onClick={() => setShowReviewMenu(!showReviewMenu)}
+            onClick={() => toggleMenu("review")}
           >
             {actions.isPending ? (
               <span className="mr-action-spinner" />
@@ -65,7 +84,7 @@ export function MrActionsBar({
             )}
             Review
           </button>
-          {showReviewMenu && (
+          {openMenu === "review" && (
             <div className="mr-action-dropdown animate-fade-in-up">
               <button
                 className="mr-dropdown-item mr-dropdown-approve"
@@ -88,7 +107,7 @@ export function MrActionsBar({
           <button
             className="mr-action-btn mr-action-merge"
             disabled={isDisabled || hasConflicts}
-            onClick={() => setShowMergeMenu(!showMergeMenu)}
+            onClick={() => toggleMenu("merge")}
             title={hasConflicts ? "Cannot merge — conflicts detected" : "Merge this MR"}
           >
             {actions.isPending ? (
@@ -98,7 +117,7 @@ export function MrActionsBar({
             )}
             {hasConflicts ? "Conflicts" : "Merge"}
           </button>
-          {showMergeMenu && !hasConflicts && (
+          {openMenu === "merge" && !hasConflicts && (
             <div className="mr-action-dropdown animate-fade-in-up">
               <button
                 className="mr-dropdown-item"

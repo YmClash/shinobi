@@ -135,7 +135,7 @@ export default function MrDetailPage() {
 
       {/* ── Actions Bar (authenticated only) ────────── */}
       {user && (
-        <div className="animate-fade-in-up stagger-1">
+        <div className="animate-fade-in-up stagger-1" style={{ position: 'relative', zIndex: 20 }}>
           <MrActionsBar
             status={mr.status}
             hasConflicts={mr.has_conflicts}

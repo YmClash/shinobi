@@ -152,9 +152,13 @@
 }
 
 /* ── Actions Bar ───────────────────────────────────────────── */
-.mr-actions-bar { margin-bottom: 1rem; }
-.mr-actions-buttons { display: flex; gap: 0.5rem; flex-wrap: wrap; }
+.mr-actions-bar { margin-bottom: 1rem; position: relative; z-index: 10; }
+.mr-actions-buttons { display: flex; gap: 0.5rem; flex-wrap: wrap; position: relative; }
 .mr-action-group { position: relative; }
+.mr-action-overlay {
+  position: fixed; inset: 0; z-index: 40;
+  background: transparent; cursor: default;
+}
 .mr-action-btn {
   display: inline-flex; align-items: center; gap: 0.35rem;
   padding: 0.5rem 1rem; border-radius: 8px; font-size: 0.78rem; font-weight: 600;
