@@ -1,8 +1,12 @@
 // ═══════════════════════════════════════════════════════════════
-// SHINOBI — Code Explorer Page v2
-// Route: /[owner]/[repo]/tree/[revision]/[[...path]]
+// SHINOBI — Code Explorer Page v3
+// Route: /[owner]/[repo]/tree/[...tree]
 //
-// Layout 2 colonnes inspiré de la maquette :
+// Catch-all route: les segments après /tree/ sont combinés puis
+// résolus dynamiquement en (revision, path) via les refs connues.
+// Supporte les branches avec "/" (ex: feature/login).
+//
+// Layout 2 colonnes :
 //   - Gauche  : FileBrowser (répertoire) ou CodeViewer (fichier)
 //   - Droite  : Sidebar "À propos" avec métadonnées repo + Oracle
 // ═══════════════════════════════════════════════════════════════
@@ -19,7 +23,7 @@ import {
   FileCode,
   ExternalLink,
 } from "lucide-react";
-import { exploreTree, listRefs, buildBreadcrumbs } from "@/lib/explorer-api";
+import { exploreTree, listRefs, buildBreadcrumbs, resolveRevisionAndPath } from "@/lib/explorer-api";
 import { getRepository, listOperations, getOperationReviews, buildRepoPrefix } from "@/lib/api";
 import BreadcrumbNav from "@/components/explorer/BreadcrumbNav";
 import BranchSelector from "@/components/explorer/BranchSelector";
@@ -33,8 +37,7 @@ import CloneDropdown from "@/components/explorer/CloneDropdown";
 interface PageParams {
   owner: string;
   repo: string;
-  revision: string;
-  path?: string[];
+  tree: string[];  // catch-all: ["main"] ou ["feature","login","src","main.rs"]
 }
 
 interface PageProps {
@@ -46,11 +49,12 @@ interface PageProps {
 export async function generateMetadata({
   params,
 }: PageProps): Promise<Metadata> {
-  const { owner, repo, revision, path } = await params;
-  const filePath = path?.join("/") ?? "";
+  const { owner, repo, tree } = await params;
+  // Fallback metadata — la résolution exacte se fait dans la page
+  const display = tree.join("/");
   return {
-    title: `${filePath || "/"} · ${repo} @ ${revision} — SHINOBI`,
-    description: `Explorateur de code pour ${owner}/${repo} à la révision ${revision}`,
+    title: `${display || "/"} · ${repo} — SHINOBI`,
+    description: `Explorateur de code pour ${owner}/${repo}`,
   };
 }
 
@@ -93,23 +97,32 @@ function detectPrimaryLanguage(entries: { name: string }[]): string | null {
 // ── Page ─────────────────────────────────────────────────────
 
 export default async function ExplorerPage({ params }: PageProps) {
-  const { owner, repo, revision, path } = await params;
-  const filePath = path?.join("/") ?? "";
+  const { owner, repo, tree } = await params;
+
+  // ── Fetch refs en premier (nécessaire pour résoudre la revision) ──
+  const refsData = await listRefs(owner, repo).catch(() => ({
+    branches: [] as { name: string; target: string }[],
+    tags: [] as { name: string; target: string }[],
+    total: 0,
+  }));
+
+  // ── Résolution revision/path depuis les segments catch-all ──
+  const knownRefs = [
+    ...refsData.branches.map((b) => b.name),
+    ...refsData.tags.map((t) => t.name),
+  ];
+  const { revision, path: filePath } = resolveRevisionAndPath(tree, knownRefs);
 
   // ── Fetch parallèle ──────────────────────────────────────────
-  const [explorerData, refsData, repoData, opsData] =
+  const [explorerData, repoData, opsData] =
     await Promise.allSettled([
       exploreTree(owner, repo, revision, filePath),
-      listRefs(owner, repo),
       getRepository(owner, repo),
       listOperations(buildRepoPrefix(owner, repo), 1), // dernier commit
     ]);
 
   // ── Refs ─────────────────────────────────────────────────────
-  const refs =
-    refsData.status === "fulfilled"
-      ? refsData.value
-      : { branches: [], tags: [], total: 0 };
+  const refs = refsData;
 
   // ── Métadonnées repo ─────────────────────────────────────────
   const repoMeta =
@@ -448,7 +461,7 @@ git push -u origin main`}</pre>
               <div className="ex-oracle-score-display">
                 <div className="ex-oracle-gauge">
                   <span className={`ex-oracle-value ${oracleScore >= 80 ? "ex-oracle-good" :
-                      oracleScore >= 60 ? "ex-oracle-mid" : "ex-oracle-low"
+                    oracleScore >= 60 ? "ex-oracle-mid" : "ex-oracle-low"
                     }`}>
                     {oracleScore}
                   </span>

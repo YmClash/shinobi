@@ -86,24 +86,14 @@ async fn main() -> anyhow::Result<()> {
     print_banner();
 
     // ── Configuration ──────────────────────────────
-    let config = Config::from_env();
-    info!(
-        rest_port = config.rest_port,
-        grpc_port = config.grpc_port,
-        vcs_root = %config.vcs_workspace_root,
-        kafka_brokers = %config.kafka_brokers,
-        ipfs_api_url = %config.ipfs_api_url,
-        tensai_enabled = config.tensai_consumer_enabled,
-        embedding_enabled = config.embedding_enabled,
-        embedding_dimensions = config.embedding_dimensions,
-        ollama_url = %config.ollama_url,
-        ollama_model = %config.ollama_model,
-        oracle_enabled = config.oracle_consumer_enabled,
-        sensei_enabled = config.sensei_enabled,
-        sensei_ollama_url = %config.sensei_ollama_url,
-        sensei_ollama_model = %config.sensei_ollama_model,
-        "Configuration chargée"
-    );
+    let config = match Config::from_env() {
+        Ok(c) => c,
+        Err(e) => {
+            eprintln!("\n{}", e);
+            std::process::exit(1);
+        }
+    };
+    config.log_summary();
 
     // ── Token de shutdown gracieux ─────────────────
     let cancel_token = CancellationToken::new();

@@ -109,15 +109,51 @@ export async function listRefs(
 
 // ── Helpers ──────────────────────────────────────────────────
 
-/** Construit l'URL de navigation vers un chemin dans le dépôt. */
+/**
+ * Résout la revision (branche/tag) et le chemin fichier à partir
+ * des segments bruts du catch-all `[...tree]`.
+ *
+ * Algorithme : teste les segments cumulés du plus long au plus court
+ * contre la liste des refs connues. Le premier match est la branche,
+ * le reste est le chemin fichier.
+ *
+ * Exemple :
+ *   segments = ["feature", "login", "src", "main.rs"]
+ *   knownRefs = ["main", "feature/login"]
+ *   → { revision: "feature/login", path: "src/main.rs" }
+ */
+export function resolveRevisionAndPath(
+  treeSegments: string[],
+  knownRefs: string[]
+): { revision: string; path: string } {
+  // Tester du plus long au plus court pour matcher la ref la plus spécifique
+  for (let i = treeSegments.length; i >= 1; i--) {
+    const candidate = treeSegments.slice(0, i).join("/");
+    if (knownRefs.includes(candidate)) {
+      return {
+        revision: candidate,
+        path: treeSegments.slice(i).join("/"),
+      };
+    }
+  }
+  // Fallback : premier segment = revision (comportement original)
+  return {
+    revision: treeSegments[0],
+    path: treeSegments.slice(1).join("/"),
+  };
+}
+
+/** Construit l'URL de navigation vers un chemin dans le dépôt.
+ *  Les slashes dans `revision` sont conservés (catch-all `[...tree]`). */
 export function buildTreeUrl(
   owner: string,
   repo: string,
   revision: string,
   path: string = ""
 ): string {
-  const segments = [owner, repo, "tree", revision, ...path.split("/").filter(Boolean)];
-  return "/" + segments.map(encodeURIComponent).join("/");
+  const base = `/${encodeURIComponent(owner)}/${encodeURIComponent(repo)}/tree/${revision}`;
+  const pathSuffix = path ? `/${path}` : "";
+  return base + pathSuffix;
 }
 
 /** Construit les segments du breadcrumb depuis un chemin complet. */
@@ -147,3 +183,4 @@ export function buildBreadcrumbs(
 
   return crumbs;
 }
+
