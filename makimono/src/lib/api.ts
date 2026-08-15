@@ -697,3 +697,58 @@ export async function getCheckpoint(
 ): Promise<Checkpoint> {
   return apiFetch<Checkpoint>(`${repoPrefix}/checkpoints/${id}`);
 }
+
+// ── Phase 37A — Actor Profile (Le Visage Public) ─────────────
+
+/** Activité récente de l'outbox ActivityPub. */
+export interface ProfileActivity {
+  type: string;
+  object_type: string;
+  published: string;
+  object_id: string;
+}
+
+/** Stats publiques d'un acteur. */
+export interface ActorStats {
+  public_repos: number;
+  total_repos: number;
+  bots_count: number;
+  follower_count: number;
+}
+
+/** Profil public d'un acteur (humain, bot, ou système). */
+export interface ActorProfile {
+  actor: {
+    id: string;
+    handle: string;
+    display_name: string;
+    actor_type: string;
+    avatar_url: string | null;
+    bio: string | null;
+    created_at: string | null;
+  };
+  stats: ActorStats;
+  fediverse_address: string;
+  is_followed_by_current_user: boolean;
+  recent_activities: ProfileActivity[];
+  parent: {
+    id: string;
+    handle: string;
+    display_name: string;
+    avatar_url: string | null;
+  } | null;
+  is_system?: boolean;
+}
+
+/** Récupère le profil public d'un acteur par handle. */
+export async function getActorProfile(
+  handle: string,
+  token?: string | null,
+): Promise<ActorProfile> {
+  const headers: Record<string, string> = {};
+  if (token) headers["Authorization"] = `Bearer ${token}`;
+  return apiFetch<ActorProfile>(
+    `/api/v1/actors/${encodeURIComponent(handle)}/profile`,
+    { headers },
+  );
+}

@@ -27,7 +27,9 @@ export function Header() {
         {repoOwner && repoName && (
           <span className="repo-breadcrumb">
             <span>📦</span>
-            <span>{repoOwner}/{repoName}</span>
+            <Link href={`/${repoOwner}`} className="hover:text-primary transition-colors">{repoOwner}</Link>
+            <span className="text-muted-foreground/40">/</span>
+            <span>{repoName}</span>
           </span>
         )}
       </div>
@@ -47,7 +49,7 @@ export function Header() {
             {user ? (
               <div className="header-user-menu">
                 <Link
-                  href={`/profile/${user.handle}`}
+                  href={`/${user.handle}`}
                   className="header-user-badge"
                   title="Voir mon profil"
                 >

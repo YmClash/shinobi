@@ -265,11 +265,8 @@ pub fn create_router(state: SharedState) -> Router {
         // GitHub OAuth (pré-authentification)
         .route("/api/v1/auth/github", get(crate::rest::auth_routes::github_auth_url_handler))
         .route("/api/v1/auth/github/callback", post(crate::rest::auth_routes::github_callback_handler))
-        // Profil public acteur (Phase 25B)
-        .route(
-            "/api/v1/actors/{handle}/profile",
-            get(actor_profile_handler),
-        )
+        // Profil public acteur (Phase 37A — déplacé en semi-public pour MaybeAuth)
+        // Route supprimée ici — voir semi_public ci-dessous
         // Métriques Prometheus
         .route(
             "/metrics",
@@ -302,6 +299,11 @@ pub fn create_router(state: SharedState) -> Router {
     // panic Axum sur .merge() avec chemins dupliqués.
     // ═══════════════════════════════════════════════════════════
     let semi_public = Router::new()
+        // Phase 37A — Profil public acteur (MaybeAuth pour Vegapunk Tweak)
+        .route(
+            "/api/v1/actors/{handle}/profile",
+            get(actor_profile_handler),
+        )
         // Listing repos (filtrage visibilité selon auth)
         .route(
             "/api/v1/actors/{handle}/repos",
@@ -1866,11 +1868,19 @@ async fn list_trash_handler(
 ///
 /// Retourne les informations publiques d'un acteur (humain ou bot).
 /// Pour les bots, inclut le parent_handle.
+///
+/// ## Phase 37A — Le Visage Public
+/// - `MaybeAuth` pour le Vegapunk Tweak (`is_followed_by_current_user`)
+/// - `follower_count` : followers fédérés (ActivityPub)
+/// - `fediverse_address` : `@handle@domain` pour la découverte Mastodon
+/// - `recent_activities` : les 10 dernières activités de l'outbox
+///   (filtrées : Create(Repository), Push, Issue uniquement)
 async fn actor_profile_handler(
     State(state): State<SharedState>,
     Path(handle): Path<String>,
+    auth: MaybeAuth,
 ) -> Result<Json<serde_json::Value>, AppError> {
-    info!(handle = %handle, "REST: GetActorProfile");
+    info!(handle = %handle, "REST: GetActorProfile (Phase 37A)");
 
     // Phase 27-pre : profil spécial pour l'acteur système
     if handle.to_lowercase() == "system" {
@@ -1884,7 +1894,10 @@ async fn actor_profile_handler(
                 "avatar_url": null,
                 "created_at": null,
             },
-            "stats": { "public_repos": 0, "total_repos": 0, "bots_count": 0 },
+            "stats": { "public_repos": 0, "total_repos": 0, "bots_count": 0, "follower_count": 0 },
+            "fediverse_address": format!("@system@{}", state.federation_domain),
+            "is_followed_by_current_user": false,
+            "recent_activities": [],
             "parent": null,
             "is_system": true,
         })));
@@ -1936,6 +1949,57 @@ async fn actor_profile_handler(
         0
     };
 
+    // ── Phase 37A — Enrichissements fédérés ──────────────────────
+
+    // Compteur de followers fédérés
+    let follower_count = state
+        .federation_repo
+        .count_followers(&actor.id)
+        .await
+        .unwrap_or(0);
+
+    // Adresse Fediverse pour la découverte Mastodon
+    let fediverse_address = format!("@{}@{}", actor.handle, state.federation_domain);
+
+    // Vegapunk Tweak : is_followed_by_current_user
+    // V1 : toujours false (Follow intra-instance pas implémenté)
+    // Future : vérifier si le JWT user suit cet acteur
+    let is_followed_by_current_user = false;
+    let _ = &auth; // Acknowledge MaybeAuth pour usage futur
+
+    // Timeline d'activités récentes (outbox, filtré)
+    // On ne montre que les types intéressants : Push, Create, Update
+    let raw_activities = state
+        .federation_repo
+        .list_activities(&actor.id, 20)
+        .await
+        .unwrap_or_default();
+
+    let recent_activities: Vec<serde_json::Value> = raw_activities
+        .into_iter()
+        .filter(|a| {
+            matches!(
+                a.activity_type.as_str(),
+                "Push" | "Create" | "Update" | "Accept"
+            )
+        })
+        .take(10)
+        .map(|a| {
+            serde_json::json!({
+                "type": a.activity_type,
+                "object_type": a.object_type,
+                "published": a.published_at,
+                "object_id": a.object_id,
+            })
+        })
+        .collect();
+
+    // Déterminer si le visiteur est le propriétaire (pour total_repos)
+    let is_owner = match &auth.0 {
+        Some(claims) => claims.actor_id() == actor.id,
+        None => false,
+    };
+
     Ok(Json(serde_json::json!({
         "actor": {
             "id": actor.id,
@@ -1948,9 +2012,13 @@ async fn actor_profile_handler(
         },
         "stats": {
             "public_repos": public_repos,
-            "total_repos": repos.len(),
+            "total_repos": if is_owner { repos.len() } else { public_repos },
             "bots_count": bots_count,
+            "follower_count": follower_count,
         },
+        "fediverse_address": fediverse_address,
+        "is_followed_by_current_user": is_followed_by_current_user,
+        "recent_activities": recent_activities,
         "parent": parent_info,
     })))
 }

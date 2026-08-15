@@ -348,42 +348,9 @@ export async function deleteServiceAccount(
   return res.json();
 }
 
-// ── Phase 25B — Profil Public Acteur ──────────────────────────
+// ── Phase 25B → Phase 37A — Profil Public Acteur ──────────────────────────
+// Redirigé vers api.ts pour éviter la duplication (Phase 37A).
+// L'ancien type ActorProfile est remplacé par la version enrichie dans api.ts.
 
-export interface ActorProfile {
-  actor: {
-    id: string;
-    handle: string;
-    display_name: string;
-    actor_type: string;
-    avatar_url: string | null;
-    bio: string | null;
-    created_at: string;
-  };
-  stats: {
-    public_repos: number;
-    total_repos: number;
-    bots_count: number;
-  };
-  parent: {
-    id: string;
-    handle: string;
-    display_name: string;
-    avatar_url: string | null;
-  } | null;
-  /** Phase 27-pre : true si c'est l'acteur système SHINOBI */
-  is_system?: boolean;
-}
-
-/** GET /api/v1/actors/{handle}/profile — Profil public d'un acteur. */
-export async function getActorProfile(
-  handle: string
-): Promise<ActorProfile> {
-  const res = await fetch(
-    `${base()}/api/v1/actors/${encodeURIComponent(handle)}/profile`
-  );
-  if (!res.ok) {
-    throw new Error(`Profil introuvable (${res.status})`);
-  }
-  return res.json();
-}
+export type { ActorProfile } from "./api";
+export { getActorProfile } from "./api";
