@@ -432,6 +432,11 @@ pub fn create_router(state: SharedState) -> Router {
             "/api/v1/actors/{handle}/trash",
             get(list_trash_handler),
         )
+        // Phase 37B — Fork Local (Le Dédoublement)
+        .route(
+            "/api/v1/repos/{owner}/{repo}/fork",
+            post(fork_repository_handler),
+        )
         // Phase 27-quater — Inbox Activities (Private: JWT required)
         .route(
             "/api/v1/actors/{handle}/inbox/activities",
@@ -727,6 +732,18 @@ pub struct RepositoryJson {
     /// Timestamp du dernier import miroir. Phase 19B.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub mirror_synced_at: Option<DateTime<Utc>>,
+    /// UUID du dépôt parent si c'est un fork (Phase 37B).
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub forked_from_id: Option<Uuid>,
+    /// Nombre de forks de ce repo (Phase 37B). Peuplé on-the-fly.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub fork_count: Option<u64>,
+    /// Handle du propriétaire du repo parent (Phase 37B). Peuplé on-the-fly.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub forked_from_owner: Option<String>,
+    /// Nom (slug) du repo parent (Phase 37B). Peuplé on-the-fly.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub forked_from_name: Option<String>,
 }
 
 impl From<domain::entities::repository::Repository> for RepositoryJson {
@@ -742,6 +759,10 @@ impl From<domain::entities::repository::Repository> for RepositoryJson {
             created_at: repo.created_at,
             mirror_source_url: repo.mirror_source_url,
             mirror_synced_at: repo.mirror_synced_at,
+            forked_from_id: repo.forked_from_id,
+            fork_count: None,
+            forked_from_owner: None,
+            forked_from_name: None,
         }
     }
 }
@@ -869,7 +890,55 @@ async fn get_repository_handler(
 
     let repository = resolve_repo_with_access_check(&state, &owner, &repo, &auth).await?;
 
-    Ok(Json(RepositoryJson::from(repository)))
+    // Phase 37B : compter les forks on-the-fly
+    let fork_count = state.repo_repo.count_forks(&repository.id).await.unwrap_or(0);
+    let mut json = RepositoryJson::from(repository);
+    json.fork_count = Some(fork_count);
+
+    // Phase 37B : résoudre le parent owner/name si c'est un fork
+    if let Some(parent_id) = json.forked_from_id {
+        if let Ok(Some(parent)) = state.repo_repo.find_by_id(&parent_id).await {
+            json.forked_from_name = Some(parent.name.clone());
+            if let Ok(Some(parent_actor)) = state.actor_repo.find_by_id(&parent.owner_id).await {
+                json.forked_from_owner = Some(parent_actor.handle.clone());
+            }
+        }
+    }
+
+    Ok(Json(json))
+}
+
+/// Forker un dépôt — `POST /api/v1/repos/{owner}/{repo}/fork`
+///
+/// 🔒 **Authentification obligatoire** — le forker_id est extrait du JWT.
+/// Crée un clone complet du dépôt source dans le namespace de l'acteur.
+///
+/// ## Phase 37B — Fork Local (Le Dédoublement)
+/// - GitHub-style : même slug que le parent
+/// - Garde anti-doublon : un owner ne peut forker qu'une fois le même repo
+/// - Rollback PG automatique si le clone VCS échoue
+async fn fork_repository_handler(
+    State(state): State<SharedState>,
+    Path((owner, repo)): Path<(String, String)>,
+    auth: AuthUser,
+) -> Result<(axum::http::StatusCode, Json<RepositoryJson>), AppError> {
+    let forker_id = auth.0.actor_id();
+
+    info!(
+        source = %format!("{}/{}", owner, repo),
+        forker_id = %forker_id,
+        "REST: ForkRepository reçu (Phase 37B)"
+    );
+
+    let fork = state
+        .fork_repository
+        .execute(&owner, &repo, &forker_id)
+        .await?;
+
+    Ok((
+        axum::http::StatusCode::CREATED,
+        Json(RepositoryJson::from(fork)),
+    ))
 }
 
 // ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━

@@ -95,6 +95,9 @@ impl VcsEngine for MockVcsEngine {
     async fn diff_merge_base(&self, _repo_id: &Uuid, _source: &str, _target: &str) -> Result<Vec<domain::ports::vcs_engine::FileDiff>, DomainError> {
         Ok(vec![])
     }
+    async fn clone_workspace(&self, _source_owner_id: &Uuid, _source_repo_id: &Uuid, _target_owner_id: &Uuid, _target_repo_id: &Uuid) -> Result<(), DomainError> {
+        Ok(())
+    }
 }
 
 struct MockLlmService {

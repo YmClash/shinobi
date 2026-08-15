@@ -378,6 +378,12 @@ mod tests {
         async fn list_expired_trash(&self, _retention_secs: i64) -> Result<Vec<Repository>, DomainError> {
             Ok(vec![])
         }
+        async fn count_forks(&self, _repo_id: &Uuid) -> Result<u64, DomainError> {
+            Ok(0)
+        }
+        async fn find_fork_by_owner(&self, _owner_id: &Uuid, _source_repo_id: &Uuid) -> Result<Option<Repository>, DomainError> {
+            Ok(None)
+        }
     }
 
     // ── Mock VcsEngine ──────────────────────────────
@@ -437,6 +443,9 @@ mod tests {
         }
         async fn diff_merge_base(&self, _repo_id: &Uuid, _source: &str, _target: &str) -> Result<Vec<domain::ports::vcs_engine::FileDiff>, DomainError> {
             Ok(vec![])
+        }
+        async fn clone_workspace(&self, _source_owner_id: &Uuid, _source_repo_id: &Uuid, _target_owner_id: &Uuid, _target_repo_id: &Uuid) -> Result<(), DomainError> {
+            Ok(())
         }
     }
 

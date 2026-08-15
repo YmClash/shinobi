@@ -31,6 +31,7 @@ import FileBrowser from "@/components/explorer/FileBrowser";
 import ExplorerFileClient from "@/components/explorer/ExplorerFileClient";
 import DeleteRepoButton from "@/components/forge/delete-repo-button";
 import CloneDropdown from "@/components/explorer/CloneDropdown";
+import { ForkButton } from "@/components/repo/fork-button";
 
 // ── Route params ─────────────────────────────────────────────
 
@@ -336,6 +337,14 @@ git push -u origin main`}</pre>
               <Search size={14} />
               <span>Rechercher</span>
             </button>
+            {repoMeta && (
+              <ForkButton
+                owner={owner}
+                repo={repo}
+                repoOwnerId={repoMeta.owner_id}
+                forkCount={repoMeta.fork_count ?? 0}
+              />
+            )}
             <CloneDropdown owner={owner} repo={repo} />
             {repoMeta && (
               <DeleteRepoButton

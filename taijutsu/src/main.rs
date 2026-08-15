@@ -26,6 +26,7 @@ use application::use_cases::create_pat::CreatePatUseCase;
 use application::use_cases::create_repository::CreateRepositoryUseCase;
 use application::use_cases::create_service_account::CreateServiceAccountUseCase;
 use application::use_cases::delete_repository::DeleteRepositoryUseCase;
+use application::use_cases::fork_repository::ForkRepositoryUseCase;
 use application::use_cases::get_blob::GetBlobUseCase;
 use application::use_cases::get_ipfs_content::GetIpfsContentUseCase;
 use application::use_cases::get_operation::GetOperationUseCase;
@@ -413,6 +414,15 @@ async fn main() -> anyhow::Result<()> {
         application::use_cases::purge_trash::TRASH_RETENTION_SECS
     );
 
+    // ── Phase 37B : Fork Local (Le Dédoublement) ──────────────────────
+    let fork_repository = Arc::new(ForkRepositoryUseCase::new(
+        actor_repo.clone(),
+        repo_repo.clone(),
+        vcs.clone(),
+    ));
+
+    info!("🍴 Fork Local initialisé (Phase 37B — Le Dédoublement)");
+
     // ── Phase 25 : Service Accounts (L'Acte de Naissance) ──────────────
     let create_service_account = Arc::new(CreateServiceAccountUseCase::new(
         actor_repo.clone(),
@@ -621,6 +631,8 @@ async fn main() -> anyhow::Result<()> {
         bulk_import_github,
         // Phase 24 — Soft Delete (Corbeille)
         delete_repository,
+        // Phase 37B — Fork Local (Le Dédoublement)
+        fork_repository,
         // Phase 25 — Service Accounts (L'Acte de Naissance)
         create_service_account,
         // Phase 26A — Merge Requests (Le Katana Croisé)

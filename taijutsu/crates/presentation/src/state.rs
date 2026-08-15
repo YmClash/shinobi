@@ -131,6 +131,10 @@ pub struct SharedState {
     /// Use case: suppression (soft delete) et restauration de dépôts.
     pub delete_repository: Arc<application::use_cases::delete_repository::DeleteRepositoryUseCase>,
 
+    // ── Phase 37B — Fork Local (Le Dédoublement) ────────────────
+    /// Use case: fork intra-instance d'un dépôt.
+    pub fork_repository: Arc<application::use_cases::fork_repository::ForkRepositoryUseCase>,
+
     // ── Phase 25 — Service Accounts (L'Acte de Naissance) ────────
     /// Use case: création, listing et suppression de Service Accounts IA.
     pub create_service_account: Arc<application::use_cases::create_service_account::CreateServiceAccountUseCase>,

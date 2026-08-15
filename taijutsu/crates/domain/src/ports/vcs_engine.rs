@@ -199,6 +199,24 @@ pub trait VcsEngine: Send + Sync {
         message: &str,
     ) -> Result<ContentId, DomainError>;
 
+    // ── Phase 37B — Fork Local (Le Dédoublement) ────────────────
+
+    /// Clone un workspace VCS d'un dépôt source vers un dépôt cible.
+    ///
+    /// Effectue une copie physique complète du répertoire du workspace
+    /// (incluant `.jj/` et le bare Git repo) dans un `spawn_blocking`
+    /// pour ne pas bloquer le runtime Tokio.
+    ///
+    /// ## V1 — Dumb Copy
+    /// Copie récursive complète. Future V2 : Git Alternates ou CoW (reflink).
+    async fn clone_workspace(
+        &self,
+        source_owner_id: &Uuid,
+        source_repo_id: &Uuid,
+        target_owner_id: &Uuid,
+        target_repo_id: &Uuid,
+    ) -> Result<(), DomainError>;
+
     /// Calcule le diff entre le merge-base (ancêtre commun) et la branche source.
     ///
     /// C'est la bonne façon de calculer le diff d'une MR :

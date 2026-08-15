@@ -30,6 +30,7 @@ interface RepoCardProps {
 export function RepoCard({ repo, ownerHandle, className = "" }: RepoCardProps) {
   const isPublic = repo.visibility === "public";
   const isMirror = Boolean(repo.mirror_source_url);
+  const isFork = Boolean(repo.forked_from_id);
 
   return (
     <Link href={`/${ownerHandle}/${repo.name}`}>
@@ -59,6 +60,14 @@ export function RepoCard({ repo, ownerHandle, className = "" }: RepoCardProps) {
           </div>
 
           <div className="flex items-center gap-1.5 shrink-0">
+            {isFork && (
+              <Badge
+                variant="outline"
+                className="text-[10px] px-1.5 py-0 border-violet-500/30 text-violet-500/80 bg-violet-500/5"
+              >
+                🍴 Fork
+              </Badge>
+            )}
             {isMirror && (
               <Badge
                 variant="outline"

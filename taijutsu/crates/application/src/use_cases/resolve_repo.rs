@@ -226,6 +226,12 @@ mod tests {
         async fn list_expired_trash(&self, _retention_secs: i64) -> Result<Vec<Repository>, DomainError> {
             Ok(vec![])
         }
+        async fn count_forks(&self, _repo_id: &Uuid) -> Result<u64, DomainError> {
+            Ok(0)
+        }
+        async fn find_fork_by_owner(&self, _owner_id: &Uuid, _source_repo_id: &Uuid) -> Result<Option<Repository>, DomainError> {
+            Ok(None)
+        }
     }
 
     // ── Helpers ──────────────────────────────────────
@@ -246,6 +252,7 @@ mod tests {
             mirror_source_url: None,
             mirror_synced_at: None,
             deleted_at: None,
+            forked_from_id: None,
         }
     }
 

@@ -766,6 +766,22 @@ pub async fn repo_ap_handler(
     let repo_uri = format!("{}://{}/repos/{}/{}", scheme, domain, owner, repo_name);
     let actor_uri = format!("{}://{}/actors/{}", scheme, domain, owner);
 
+    // Phase 37B : résoudre forkedFrom si le repo est un fork
+    let forked_from = if let Some(parent_id) = repository.forked_from_id {
+        if let Ok(Some(parent)) = state.repo_repo.find_by_id(&parent_id).await {
+            // Résoudre le handle du propriétaire parent
+            if let Ok(Some(parent_actor)) = state.actor_repo.find_by_id(&parent.owner_id).await {
+                Some(format!("{}://{}/repos/{}/{}", scheme, domain, parent_actor.handle, parent.name))
+            } else {
+                None
+            }
+        } else {
+            None
+        }
+    } else {
+        None
+    };
+
     let ap_repo = serde_json::json!({
         "@context": [
             "https://www.w3.org/ns/activitystreams",
@@ -778,7 +794,7 @@ pub async fn repo_ap_handler(
         "attributedTo": actor_uri,
         "published": repository.created_at.to_rfc3339(),
         "url": format!("{}://{}/{}/{}", scheme, domain, owner, repo_name),
-        "forkedFrom": serde_json::Value::Null,  // Phase 27-quater
+        "forkedFrom": forked_from,
     });
 
     Ok((

@@ -68,6 +68,9 @@ fn row_to_repository(row: sqlx::postgres::PgRow) -> Result<Repository, DomainErr
         deleted_at: row
             .try_get::<Option<DateTime<Utc>>, _>("deleted_at")
             .map_err(|e| DomainError::Persistence(e.to_string()))?,
+        forked_from_id: row
+            .try_get::<Option<Uuid>, _>("forked_from_id")
+            .map_err(|e| DomainError::Persistence(e.to_string()))?,
     })
 }
 
@@ -77,8 +80,8 @@ impl RepoRepository for PostgresRepoRepository {
     async fn save(&self, repo: &Repository) -> Result<(), DomainError> {
         sqlx::query(
             r#"
-            INSERT INTO repositories (id, owner_id, name, display_name, description, visibility, default_branch, created_at, mirror_source_url, mirror_synced_at)
-            VALUES ($1, $2, $3, $4, $5, $6::visibility, $7, $8, $9, $10)
+            INSERT INTO repositories (id, owner_id, name, display_name, description, visibility, default_branch, created_at, mirror_source_url, mirror_synced_at, forked_from_id)
+            VALUES ($1, $2, $3, $4, $5, $6::visibility, $7, $8, $9, $10, $11)
             "#,
         )
         .bind(repo.id)
@@ -91,6 +94,7 @@ impl RepoRepository for PostgresRepoRepository {
         .bind(repo.created_at)
         .bind(&repo.mirror_source_url)
         .bind(repo.mirror_synced_at)
+        .bind(repo.forked_from_id)
         .execute(&self.pool)
         .await
         .map_err(|e| {
@@ -110,7 +114,7 @@ impl RepoRepository for PostgresRepoRepository {
     #[instrument(skip(self))]
     async fn find_by_id(&self, id: &Uuid) -> Result<Option<Repository>, DomainError> {
         let row = sqlx::query(
-            "SELECT id, owner_id, name, display_name, description, visibility::text, default_branch, created_at, mirror_source_url, mirror_synced_at, deleted_at \
+            "SELECT id, owner_id, name, display_name, description, visibility::text, default_branch, created_at, mirror_source_url, mirror_synced_at, deleted_at, forked_from_id \
              FROM repositories WHERE id = $1 AND deleted_at IS NULL",
         )
         .bind(id)
@@ -131,7 +135,7 @@ impl RepoRepository for PostgresRepoRepository {
         name: &str,
     ) -> Result<Option<Repository>, DomainError> {
         let row = sqlx::query(
-            "SELECT id, owner_id, name, display_name, description, visibility::text, default_branch, created_at, mirror_source_url, mirror_synced_at, deleted_at \
+            "SELECT id, owner_id, name, display_name, description, visibility::text, default_branch, created_at, mirror_source_url, mirror_synced_at, deleted_at, forked_from_id \
              FROM repositories WHERE owner_id = $1 AND name = $2 AND deleted_at IS NULL",
         )
         .bind(owner_id)
@@ -149,7 +153,7 @@ impl RepoRepository for PostgresRepoRepository {
     #[instrument(skip(self))]
     async fn list_by_owner(&self, owner_id: &Uuid) -> Result<Vec<Repository>, DomainError> {
         let rows = sqlx::query(
-            "SELECT id, owner_id, name, display_name, description, visibility::text, default_branch, created_at, mirror_source_url, mirror_synced_at, deleted_at \
+            "SELECT id, owner_id, name, display_name, description, visibility::text, default_branch, created_at, mirror_source_url, mirror_synced_at, deleted_at, forked_from_id \
              FROM repositories WHERE owner_id = $1 AND deleted_at IS NULL ORDER BY created_at DESC",
         )
         .bind(owner_id)
@@ -163,7 +167,7 @@ impl RepoRepository for PostgresRepoRepository {
     #[instrument(skip(self))]
     async fn list_public(&self, limit: usize) -> Result<Vec<Repository>, DomainError> {
         let rows = sqlx::query(
-            "SELECT id, owner_id, name, display_name, description, visibility::text, default_branch, created_at, mirror_source_url, mirror_synced_at, deleted_at \
+            "SELECT id, owner_id, name, display_name, description, visibility::text, default_branch, created_at, mirror_source_url, mirror_synced_at, deleted_at, forked_from_id \
              FROM repositories WHERE visibility = 'public' AND deleted_at IS NULL ORDER BY created_at DESC LIMIT $1",
         )
         .bind(limit as i64)
@@ -291,7 +295,7 @@ impl RepoRepository for PostgresRepoRepository {
     #[instrument(skip(self))]
     async fn list_deleted_by_owner(&self, owner_id: &Uuid) -> Result<Vec<Repository>, DomainError> {
         let rows = sqlx::query(
-            "SELECT id, owner_id, name, display_name, description, visibility::text, default_branch, created_at, mirror_source_url, mirror_synced_at, deleted_at \
+            "SELECT id, owner_id, name, display_name, description, visibility::text, default_branch, created_at, mirror_source_url, mirror_synced_at, deleted_at, forked_from_id \
              FROM repositories WHERE owner_id = $1 AND deleted_at IS NOT NULL ORDER BY deleted_at DESC",
         )
         .bind(owner_id)
@@ -305,7 +309,7 @@ impl RepoRepository for PostgresRepoRepository {
     #[instrument(skip(self))]
     async fn list_expired_trash(&self, retention_secs: i64) -> Result<Vec<Repository>, DomainError> {
         let rows = sqlx::query(
-            "SELECT id, owner_id, name, display_name, description, visibility::text, default_branch, created_at, mirror_source_url, mirror_synced_at, deleted_at \
+            "SELECT id, owner_id, name, display_name, description, visibility::text, default_branch, created_at, mirror_source_url, mirror_synced_at, deleted_at, forked_from_id \
              FROM repositories WHERE deleted_at IS NOT NULL AND deleted_at < NOW() - ($1 || ' seconds')::INTERVAL",
         )
         .bind(retention_secs.to_string())
@@ -314,5 +318,45 @@ impl RepoRepository for PostgresRepoRepository {
         .map_err(|e| DomainError::Persistence(e.to_string()))?;
 
         rows.into_iter().map(row_to_repository).collect()
+    }
+
+    // ── Phase 37B — Fork Local (Le Dédoublement) ────────────────
+
+    #[instrument(skip(self))]
+    async fn count_forks(&self, repo_id: &Uuid) -> Result<u64, DomainError> {
+        let row = sqlx::query(
+            "SELECT COUNT(*) AS cnt FROM repositories WHERE forked_from_id = $1 AND deleted_at IS NULL",
+        )
+        .bind(repo_id)
+        .fetch_one(&self.pool)
+        .await
+        .map_err(|e| DomainError::Persistence(e.to_string()))?;
+
+        let count: i64 = row
+            .try_get("cnt")
+            .map_err(|e| DomainError::Persistence(e.to_string()))?;
+        Ok(count as u64)
+    }
+
+    #[instrument(skip(self))]
+    async fn find_fork_by_owner(
+        &self,
+        owner_id: &Uuid,
+        source_repo_id: &Uuid,
+    ) -> Result<Option<Repository>, DomainError> {
+        let row = sqlx::query(
+            "SELECT id, owner_id, name, display_name, description, visibility::text, default_branch, created_at, mirror_source_url, mirror_synced_at, deleted_at, forked_from_id \
+             FROM repositories WHERE owner_id = $1 AND forked_from_id = $2 AND deleted_at IS NULL",
+        )
+        .bind(owner_id)
+        .bind(source_repo_id)
+        .fetch_optional(&self.pool)
+        .await
+        .map_err(|e| DomainError::Persistence(e.to_string()))?;
+
+        match row {
+            Some(r) => Ok(Some(row_to_repository(r)?)),
+            None => Ok(None),
+        }
     }
 }

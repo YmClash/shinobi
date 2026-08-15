@@ -201,6 +201,14 @@ export interface Repository {
   mirror_source_url?: string | null;
   /** Timestamp du dernier import miroir (Phase 19B). */
   mirror_synced_at?: string | null;
+  /** UUID du dépôt parent si c'est un fork (Phase 37B). */
+  forked_from_id?: string | null;
+  /** Nombre de forks de ce repo (Phase 37B). */
+  fork_count?: number;
+  /** Handle du propriétaire du repo parent (Phase 37B). */
+  forked_from_owner?: string | null;
+  /** Nom (slug) du repo parent (Phase 37B). */
+  forked_from_name?: string | null;
 }
 
 export interface RepositoriesResponse {
@@ -750,5 +758,22 @@ export async function getActorProfile(
   return apiFetch<ActorProfile>(
     `/api/v1/actors/${encodeURIComponent(handle)}/profile`,
     { headers },
+  );
+}
+
+// ── Phase 37B — Fork Local (Le Dédoublement) ────────────────
+
+/** Fork un dépôt dans le namespace de l'utilisateur authentifié. */
+export async function forkRepository(
+  owner: string,
+  repo: string,
+  token: string,
+): Promise<Repository> {
+  return apiFetch<Repository>(
+    `/api/v1/repos/${encodeURIComponent(owner)}/${encodeURIComponent(repo)}/fork`,
+    {
+      method: "POST",
+      headers: { Authorization: `Bearer ${token}` },
+    },
   );
 }

@@ -11,6 +11,7 @@ pub mod create_pat;
 pub mod create_repository;
 pub mod create_service_account;
 pub mod delete_repository;
+pub mod fork_repository;
 pub mod get_blob;
 pub mod get_ipfs_content;
 pub mod get_issue;

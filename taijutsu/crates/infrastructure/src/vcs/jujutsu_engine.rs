@@ -886,6 +886,25 @@ fn collect_loose_refs_recursive(
         }
     }
 }
+// ── Phase 37B — Helper : Copie récursive synchrone ─────────────────────
+//
+// Appelée exclusivement depuis `spawn_blocking` dans `clone_workspace`.
+// Simple, robuste, isolation parfaite. Pas de hardlinks, pas d'alternates.
+fn copy_dir_recursive(src: &std::path::Path, dst: &std::path::Path) -> Result<(), std::io::Error> {
+    std::fs::create_dir_all(dst)?;
+    for entry in std::fs::read_dir(src)? {
+        let entry = entry?;
+        let file_type = entry.file_type()?;
+        let src_child = entry.path();
+        let dst_child = dst.join(entry.file_name());
+        if file_type.is_dir() {
+            copy_dir_recursive(&src_child, &dst_child)?;
+        } else {
+            std::fs::copy(&src_child, &dst_child)?;
+        }
+    }
+    Ok(())
+}
 
 #[async_trait]
 impl VcsEngine for JujutsuEngine {
@@ -1966,6 +1985,67 @@ impl VcsEngine for JujutsuEngine {
             "squash_merge: fallback sur fast-forward (V1)"
         );
         self.merge_fast_forward(repo_id, source_ref, target_ref).await
+    }
+
+    // ── Phase 37B — Fork Local (Le Dédoublement) ────────────────────────
+    //
+    // Clone un workspace complet (Dumb Copy V1) dans spawn_blocking.
+    // Le thread-pool bloquant de Tokio absorbe l'I/O lourd sans geler Axum.
+    //
+    // Stratégie V1 : copie physique récursive (robuste, isolation parfaite).
+    // Futur V2 : Git Alternates ou CoW (reflink ZFS/Btrfs/APFS).
+    #[instrument(skip(self))]
+    async fn clone_workspace(
+        &self,
+        source_owner_id: &Uuid,
+        source_repo_id: &Uuid,
+        target_owner_id: &Uuid,
+        target_repo_id: &Uuid,
+    ) -> Result<(), DomainError> {
+        let source_path = self.repo_path(source_owner_id, source_repo_id);
+        let target_path = self.repo_path(target_owner_id, target_repo_id);
+
+        info!(
+            source = %source_path.display(),
+            target = %target_path.display(),
+            "clone_workspace: copie physique du workspace (V1 — Dumb Copy)"
+        );
+
+        // Vérifier que la source existe
+        if !source_path.exists() {
+            return Err(DomainError::VcsError(format!(
+                "Source workspace does not exist: {}",
+                source_path.display()
+            )));
+        }
+
+        // Vérifier que la cible n'existe pas déjà
+        if target_path.exists() {
+            return Err(DomainError::VcsError(format!(
+                "Target workspace already exists: {}",
+                target_path.display()
+            )));
+        }
+
+        // Copie récursive dans spawn_blocking (Vegapunk Tweak)
+        let src = source_path.clone();
+        let dst = target_path.clone();
+        tokio::task::spawn_blocking(move || {
+            copy_dir_recursive(&src, &dst)
+        })
+        .await
+        .map_err(|e| DomainError::Internal(format!("spawn_blocking join error: {e}")))?
+        .map_err(|e| DomainError::VcsError(format!("clone_workspace copy failed: {e}")))?;
+
+        info!(
+            target = %target_path.display(),
+            "clone_workspace: copie terminée — init du handle cible"
+        );
+
+        // Enregistrer le workspace cloné dans le DashMap
+        self.init_workspace(target_owner_id, target_repo_id).await?;
+
+        Ok(())
     }
 
     #[instrument(skip(self))]

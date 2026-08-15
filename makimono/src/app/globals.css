@@ -1201,6 +1201,23 @@ html * {
   background: rgba(16, 185, 129, 0.2);
 }
 
+/* Phase 37B — Fork button styles */
+.ex-btn-destructive {
+  background: rgba(248, 113, 113, 0.12);
+  border-color: rgba(248, 113, 113, 0.25);
+  color: #f87171;
+}
+
+.ex-fork-count {
+  font-size: 0.65rem;
+  font-family: var(--font-mono);
+  padding: 0.1rem 0.4rem;
+  border-radius: 999px;
+  background: rgba(255, 255, 255, 0.06);
+  color: var(--muted-foreground);
+  line-height: 1;
+}
+
 /* ── Clone Dropdown ─────────────────────────────────────────── */
 .clone-dropdown-wrapper { position: relative; }
 .clone-dropdown {

@@ -80,4 +80,17 @@ pub trait RepoRepository: Send + Sync {
 
     /// Liste les dépôts à purger (deleted_at plus ancien que le seuil donné).
     async fn list_expired_trash(&self, retention_secs: i64) -> Result<Vec<Repository>, DomainError>;
+
+    // ── Phase 37B — Fork Local (Le Dédoublement) ────────────────
+
+    /// Compte le nombre de forks d'un dépôt donné.
+    async fn count_forks(&self, repo_id: &Uuid) -> Result<u64, DomainError>;
+
+    /// Vérifie si un owner possède déjà un fork du dépôt source.
+    /// Retourne le fork existant si trouvé.
+    async fn find_fork_by_owner(
+        &self,
+        owner_id: &Uuid,
+        source_repo_id: &Uuid,
+    ) -> Result<Option<Repository>, DomainError>;
 }

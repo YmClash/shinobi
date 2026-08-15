@@ -102,6 +102,13 @@ pub struct Repository {
     /// Timestamp de suppression (soft delete). `None` = dépôt actif.
     /// Si renseigné, le repo est en corbeille et sera purgé après le délai de rétention.
     pub deleted_at: Option<DateTime<Utc>>,
+
+    // ── Phase 37B — Fork Local (Le Dédoublement) ─────────────────
+
+    /// UUID du dépôt parent si ce repo est un fork. `None` = repo original.
+    /// FK vers `repositories(id)` avec `ON DELETE SET NULL` — si le parent
+    /// est supprimé, le fork survit en tant que repo autonome.
+    pub forked_from_id: Option<Uuid>,
 }
 
 impl Repository {
@@ -123,6 +130,7 @@ impl Repository {
             mirror_source_url: None,
             mirror_synced_at: None,
             deleted_at: None,
+            forked_from_id: None,
         }
     }
 
@@ -144,6 +152,11 @@ impl Repository {
     /// Vérifie si le dépôt est dans la corbeille (soft-deleted).
     pub fn is_deleted(&self) -> bool {
         self.deleted_at.is_some()
+    }
+
+    /// Vérifie si le dépôt est un fork d'un autre dépôt (Phase 37B).
+    pub fn is_fork(&self) -> bool {
+        self.forked_from_id.is_some()
     }
 
     /// Nombre de secondes restantes avant purge définitive.
