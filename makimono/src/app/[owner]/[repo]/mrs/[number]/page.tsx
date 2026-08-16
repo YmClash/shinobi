@@ -19,6 +19,7 @@ import { MrTimeline } from "@/components/mr/mr-timeline";
 import { MrReviewCard } from "@/components/mr/mr-review-card";
 import { MrActionsBar } from "@/components/mr/mr-actions-bar";
 import { UnifiedDiffViewer } from "@/components/operations/unified-diff-viewer";
+import { MentionRenderer } from "@/components/ui/mention-renderer";
 
 type DetailTab = "conversation" | "diff";
 
@@ -129,7 +130,7 @@ export default function MrDetailPage() {
         </div>
 
         {mr.description && (
-          <div className="mr-detail-description">{mr.description}</div>
+          <div className="mr-detail-description"><MentionRenderer text={mr.description} /></div>
         )}
       </div>
 

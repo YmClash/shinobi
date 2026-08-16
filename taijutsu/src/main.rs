@@ -439,6 +439,7 @@ async fn main() -> anyhow::Result<()> {
         application::use_cases::create_mr::CreateMrUseCase::new(
             mr_repo.clone(),
             repo_repo.clone(),
+            actor_repo.clone(),
         ),
     );
     let list_mrs = Arc::new(
@@ -497,6 +498,7 @@ async fn main() -> anyhow::Result<()> {
         application::use_cases::create_issue::CreateIssueUseCase::new(
             issue_repo.clone(),
             repo_repo.clone(),
+            actor_repo.clone(),
         ),
     );
     let list_issues = Arc::new(
@@ -521,6 +523,7 @@ async fn main() -> anyhow::Result<()> {
         application::use_cases::comment_issue::CommentIssueUseCase::new(
             issue_repo.clone(),
             repo_repo.clone(),
+            actor_repo.clone(),
         ),
     );
     let manage_labels = Arc::new(

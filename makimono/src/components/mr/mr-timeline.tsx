@@ -24,6 +24,7 @@ const eventConfig: Record<
     color: "mr-event-changes",
   },
   reopened: { icon: "🔄", label: "Reopened", color: "mr-event-opened" },
+  mentioned: { icon: "📣", label: "Mentioned", color: "mr-event-mentioned" },
 };
 
 function formatRelativeTime(dateStr: string): string {

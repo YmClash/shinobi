@@ -2714,15 +2714,34 @@ async fn get_issue_handler(
     let repo_entity = state.resolve_repo.execute(&owner, &repo).await?;
     let detail = state.get_issue.execute(&repo_entity.id, number).await?;
     let i = &detail.issue;
+
+    // Phase 37C — Résoudre les actor UUIDs en handles lisibles
+    let mut actor_ids = std::collections::HashSet::new();
+    actor_ids.insert(i.author_id);
+    if let Some(aid) = i.assignee_id { actor_ids.insert(aid); }
+    if let Some(aid) = i.closed_by { actor_ids.insert(aid); }
+    for c in &detail.comments { actor_ids.insert(c.author_id); }
+    for e in &detail.events { actor_ids.insert(e.actor_id); }
+
+    let mut handle_map = std::collections::HashMap::<uuid::Uuid, String>::new();
+    for aid in &actor_ids {
+        if let Ok(Some(actor)) = state.actor_repo.find_by_id(aid).await {
+            handle_map.insert(*aid, actor.handle);
+        }
+    }
+
     let comments: Vec<serde_json::Value> = detail.comments.into_iter().map(|c| {
+        let handle = handle_map.get(&c.author_id).cloned().unwrap_or_else(|| c.author_id.to_string()[..8].to_string());
         serde_json::json!({
-            "id": c.id, "author_id": c.author_id, "body": c.body,
+            "id": c.id, "author_id": c.author_id, "author_handle": handle,
+            "body": c.body,
             "created_at": c.created_at, "updated_at": c.updated_at,
         })
     }).collect();
     let events: Vec<serde_json::Value> = detail.events.into_iter().map(|e| {
+        let handle = handle_map.get(&e.actor_id).cloned().unwrap_or_else(|| e.actor_id.to_string()[..8].to_string());
         serde_json::json!({
-            "id": e.id, "actor_id": e.actor_id,
+            "id": e.id, "actor_id": e.actor_id, "actor_handle": handle,
             "event_type": e.event_type.as_sql_str(),
             "payload": e.payload, "created_at": e.created_at,
         })
@@ -2732,9 +2751,13 @@ async fn get_issue_handler(
             "id": l.id, "name": l.name, "color": l.color, "description": l.description,
         })
     }).collect();
+
+    let author_handle = handle_map.get(&i.author_id).cloned().unwrap_or_else(|| i.author_id.to_string()[..8].to_string());
+
     Ok(Json(serde_json::json!({
         "id": i.id, "number": i.number, "title": i.title, "body": i.body,
-        "status": i.status, "author_id": i.author_id, "assignee_id": i.assignee_id,
+        "status": i.status, "author_id": i.author_id, "author_handle": author_handle,
+        "assignee_id": i.assignee_id,
         "closed_by": i.closed_by, "closed_at": i.closed_at,
         "created_at": i.created_at, "updated_at": i.updated_at,
         "comments": comments, "events": events, "labels": labels,

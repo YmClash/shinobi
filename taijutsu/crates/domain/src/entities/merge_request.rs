@@ -258,6 +258,8 @@ pub enum MrEventType {
     Closed,
     /// MR rouverte après fermeture.
     Reopened,
+    /// Un acteur a été mentionné via @handle (Phase 37C).
+    Mentioned,
 }
 
 impl MrEventType {
@@ -272,6 +274,7 @@ impl MrEventType {
             Self::Merged => "merged",
             Self::Closed => "closed",
             Self::Reopened => "reopened",
+            Self::Mentioned => "mentioned",
         }
     }
 
@@ -286,6 +289,7 @@ impl MrEventType {
             "merged" => Some(Self::Merged),
             "closed" => Some(Self::Closed),
             "reopened" => Some(Self::Reopened),
+            "mentioned" => Some(Self::Mentioned),
             _ => None,
         }
     }
@@ -357,6 +361,7 @@ mod tests {
             MrEventType::Merged,
             MrEventType::Closed,
             MrEventType::Reopened,
+            MrEventType::Mentioned,
         ];
         for t in types {
             let sql = t.as_sql_str();

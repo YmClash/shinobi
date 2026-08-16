@@ -5,6 +5,7 @@
 //! 2. Validation des branches (source ≠ target, pas de MR ouverte identique)
 //! 3. Attribution atomique du numéro séquentiel
 //! 4. Persistence + événement timeline
+//! 5. Extraction et traitement des @mentions (Phase 37C)
 
 use std::sync::Arc;
 
@@ -13,8 +14,11 @@ use uuid::Uuid;
 
 use domain::entities::merge_request::{MergeRequest, MrEvent, MrEventType};
 use domain::errors::DomainError;
+use domain::ports::actor_repository::ActorRepository;
 use domain::ports::mr_repository::MrRepository;
 use domain::ports::repo_repository::RepoRepository;
+
+use crate::use_cases::mention_service;
 
 /// Commande de création d'une MR.
 #[derive(Debug)]
@@ -36,14 +40,16 @@ pub struct CreateMrCommand {
 pub struct CreateMrUseCase {
     mr_repo: Arc<dyn MrRepository>,
     repo_repo: Arc<dyn RepoRepository>,
+    actor_repo: Arc<dyn ActorRepository>,
 }
 
 impl CreateMrUseCase {
     pub fn new(
         mr_repo: Arc<dyn MrRepository>,
         repo_repo: Arc<dyn RepoRepository>,
+        actor_repo: Arc<dyn ActorRepository>,
     ) -> Self {
-        Self { mr_repo, repo_repo }
+        Self { mr_repo, repo_repo, actor_repo }
     }
 
     #[instrument(skip(self), fields(author = %cmd.author_id, repo = %cmd.repository_id))]
@@ -113,11 +119,37 @@ impl CreateMrUseCase {
         );
         self.mr_repo.save_event(&event).await?;
 
+        // 7. Phase 37C — Extraction et traitement des @mentions
+        let mention_text = format!(
+            "{}\n{}",
+            &mr.title,
+            mr.description.as_deref().unwrap_or("")
+        );
+        let mention_result = mention_service::process_mentions(
+            &mention_text,
+            &cmd.author_id,
+            &self.actor_repo,
+        ).await;
+
+        for resolved in &mention_result.resolved {
+            let mention_event = MrEvent::new(
+                mr.id,
+                cmd.author_id,
+                MrEventType::Mentioned,
+                serde_json::json!({
+                    "mentioned_actor_id": resolved.actor_id,
+                    "mentioned_handle": resolved.handle,
+                }),
+            );
+            self.mr_repo.save_event(&mention_event).await?;
+        }
+
         info!(
             mr_id = %mr.id,
             number = mr.number,
             source = %mr.source_branch,
             target = %mr.target_branch,
+            mentions = mention_result.resolved.len(),
             "✅ MR #{} créée",
             mr.number
         );

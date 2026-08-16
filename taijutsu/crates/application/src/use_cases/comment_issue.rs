@@ -1,12 +1,17 @@
 //! Use Case: CommentIssue — Ajouter un commentaire à une issue.
+//!
+//! Phase 37C: intègre l'extraction des @mentions dans le corps du commentaire.
 
 use std::sync::Arc;
 use tracing::{info, instrument};
 use uuid::Uuid;
 use domain::entities::issue::{IssueComment, IssueEvent, IssueEventType};
 use domain::errors::DomainError;
+use domain::ports::actor_repository::ActorRepository;
 use domain::ports::issue_repository::IssueRepository;
 use domain::ports::repo_repository::RepoRepository;
+
+use crate::use_cases::mention_service;
 
 #[derive(Debug)]
 pub struct CommentIssueCommand {
@@ -19,18 +24,31 @@ pub struct CommentIssueCommand {
 pub struct CommentIssueUseCase {
     issue_repo: Arc<dyn IssueRepository>,
     repo_repo: Arc<dyn RepoRepository>,
+    actor_repo: Arc<dyn ActorRepository>,
 }
 
 impl CommentIssueUseCase {
-    pub fn new(issue_repo: Arc<dyn IssueRepository>, repo_repo: Arc<dyn RepoRepository>) -> Self {
-        Self { issue_repo, repo_repo }
+    pub fn new(
+        issue_repo: Arc<dyn IssueRepository>,
+        repo_repo: Arc<dyn RepoRepository>,
+        actor_repo: Arc<dyn ActorRepository>,
+    ) -> Self {
+        Self { issue_repo, repo_repo, actor_repo }
     }
 
     #[instrument(skip(self), fields(author = %cmd.author_id, number = cmd.issue_number))]
     pub async fn execute(&self, cmd: CommentIssueCommand) -> Result<IssueComment, DomainError> {
-        let is_collab = self.repo_repo.is_collaborator(&cmd.author_id, &cmd.repository_id).await?;
-        if !is_collab {
-            return Err(DomainError::Forbidden("Seuls les collaborateurs peuvent commenter".to_string()));
+        // RBAC — sur un repo public, tout utilisateur authentifié peut commenter.
+        let repo_entity = self.repo_repo.find_by_id(&cmd.repository_id).await?
+            .ok_or_else(|| DomainError::NotFound {
+                entity_type: "Repository",
+                id: cmd.repository_id,
+            })?;
+        if repo_entity.visibility == domain::entities::repository::Visibility::Private {
+            let is_collab = self.repo_repo.is_collaborator(&cmd.author_id, &cmd.repository_id).await?;
+            if !is_collab {
+                return Err(DomainError::Forbidden("Seuls les collaborateurs peuvent commenter sur un dépôt privé".to_string()));
+            }
         }
         if cmd.body.trim().is_empty() {
             return Err(DomainError::BusinessRule("Le commentaire ne peut pas être vide".to_string()));
@@ -44,7 +62,33 @@ impl CommentIssueUseCase {
         let event = IssueEvent::new(issue.id, cmd.author_id, IssueEventType::Commented, serde_json::json!({"comment_id": comment.id}));
         self.issue_repo.save_event(&event).await?;
 
-        info!(comment_id = %comment.id, "💬 Commentaire ajouté à l'issue #{}", issue.number);
+        // Phase 37C — Extraction des @mentions dans le commentaire
+        let mention_result = mention_service::process_mentions(
+            &comment.body,
+            &cmd.author_id,
+            &self.actor_repo,
+        ).await;
+
+        for resolved in &mention_result.resolved {
+            let mention_event = IssueEvent::new(
+                issue.id,
+                cmd.author_id,
+                IssueEventType::Mentioned,
+                serde_json::json!({
+                    "mentioned_actor_id": resolved.actor_id,
+                    "mentioned_handle": resolved.handle,
+                    "comment_id": comment.id,
+                }),
+            );
+            self.issue_repo.save_event(&mention_event).await?;
+        }
+
+        info!(
+            comment_id = %comment.id,
+            mentions = mention_result.resolved.len(),
+            "💬 Commentaire ajouté à l'issue #{}",
+            issue.number,
+        );
         Ok(comment)
     }
 }

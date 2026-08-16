@@ -17,6 +17,7 @@ export interface Issue {
   body?: string | null;
   status: IssueStatus;
   author_id: string;
+  author_handle?: string;
   assignee_id?: string | null;
   closed_by?: string | null;
   closed_at?: string | null;
@@ -27,6 +28,7 @@ export interface Issue {
 export interface IssueComment {
   id: string;
   author_id: string;
+  author_handle?: string;
   body: string;
   created_at: string;
   updated_at: string;
@@ -35,6 +37,7 @@ export interface IssueComment {
 export interface IssueEvent {
   id: string;
   actor_id: string;
+  actor_handle?: string;
   event_type: string;
   payload: Record<string, unknown> | null;
   created_at: string;

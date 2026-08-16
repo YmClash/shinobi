@@ -216,6 +216,8 @@ pub enum IssueEventType {
     Assigned,
     /// Désassigné d'un acteur.
     Unassigned,
+    /// Un acteur a été mentionné via @handle (Phase 37C).
+    Mentioned,
 }
 
 impl IssueEventType {
@@ -232,6 +234,7 @@ impl IssueEventType {
             Self::LabelRemoved => "label_removed",
             Self::Assigned => "assigned",
             Self::Unassigned => "unassigned",
+            Self::Mentioned => "mentioned",
         }
     }
 
@@ -248,6 +251,7 @@ impl IssueEventType {
             "label_removed" => Some(Self::LabelRemoved),
             "assigned" => Some(Self::Assigned),
             "unassigned" => Some(Self::Unassigned),
+            "mentioned" => Some(Self::Mentioned),
             _ => None,
         }
     }
@@ -332,6 +336,7 @@ mod tests {
             IssueEventType::LabelRemoved,
             IssueEventType::Assigned,
             IssueEventType::Unassigned,
+            IssueEventType::Mentioned,
         ];
         for t in types {
             let sql = t.as_sql_str();

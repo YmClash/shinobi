@@ -31,6 +31,7 @@ pub mod list_refs;
 pub mod list_repositories;
 pub mod login_actor;
 pub mod manage_labels;
+pub mod mention_service;
 pub mod merge_mr;
 pub mod mr_diff;
 pub mod oauth_github;

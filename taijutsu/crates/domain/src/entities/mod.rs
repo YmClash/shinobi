@@ -8,4 +8,5 @@ pub mod repository;
 pub mod merge_request;
 pub mod federation;
 pub mod issue;
+pub mod mention;
 pub mod session;

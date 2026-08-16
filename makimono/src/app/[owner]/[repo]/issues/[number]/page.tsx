@@ -12,6 +12,7 @@ import { IssueStatusBadge } from "@/components/issue/issue-status-badge";
 import { IssueLabelBadge } from "@/components/issue/issue-label-badge";
 import { IssueTimeline } from "@/components/issue/issue-timeline";
 import { closeIssue, reopenIssue, commentIssue } from "@/lib/issue-api";
+import { MentionRenderer } from "@/components/ui/mention-renderer";
 
 export default function IssueDetailPage() {
   const params = useParams<{ owner: string; repo: string; number: string }>();
@@ -103,7 +104,7 @@ export default function IssueDetailPage() {
           {/* Body */}
           {data.body && (
             <div className="issue-detail-body">
-              <p>{data.body}</p>
+              <MentionRenderer text={data.body} />
             </div>
           )}
 
@@ -140,9 +141,8 @@ export default function IssueDetailPage() {
             <div className="issue-comment-form-actions">
               <button
                 type="button"
-                className={`issue-toggle-btn ${
-                  data.status === "open" ? "issue-close-btn" : "issue-reopen-btn"
-                }`}
+                className={`issue-toggle-btn ${data.status === "open" ? "issue-close-btn" : "issue-reopen-btn"
+                  }`}
                 onClick={handleToggleStatus}
                 disabled={submitting}
               >

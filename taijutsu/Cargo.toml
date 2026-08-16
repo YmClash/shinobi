@@ -137,3 +137,7 @@ rsa = { version = "0.9", features = ["pem", "sha2"] }
 pkcs8 = { version = "0.10", features = ["pem"] }
 base64 = { version = "0.22" }
 url = { version = "2" }
+
+# — Phase 37C — @Mentions (Le Mégaphone) —
+pulldown-cmark = { version = "0.12" }
+regex = { version = "1" }

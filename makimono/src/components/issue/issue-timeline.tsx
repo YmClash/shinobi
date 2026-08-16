@@ -3,6 +3,7 @@
 // Interleaved comments + events in chronological order
 
 import type { IssueComment, IssueEvent } from "@/lib/issue-api";
+import { MentionRenderer } from "@/components/ui/mention-renderer";
 
 interface Props {
   comments: IssueComment[];
@@ -24,6 +25,7 @@ const eventLabels: Record<string, string> = {
   label_removed: "removed a label",
   assigned: "assigned this issue",
   unassigned: "unassigned this issue",
+  mentioned: "mentioned someone",
 };
 
 const eventIcons: Record<string, string> = {
@@ -37,6 +39,7 @@ const eventIcons: Record<string, string> = {
   label_removed: "🏷️",
   assigned: "👤",
   unassigned: "👤",
+  mentioned: "📣",
 };
 
 export function IssueTimeline({ comments, events }: Props) {
@@ -69,7 +72,7 @@ export function IssueTimeline({ comments, events }: Props) {
             <div key={`comment-${c.id}`} className="issue-timeline-comment">
               <div className="issue-comment-header">
                 <span className="issue-comment-avatar">💬</span>
-                <span className="issue-comment-author">{c.author_id.slice(0, 8)}</span>
+                <span className="issue-comment-author">{c.author_handle ?? c.author_id.slice(0, 8)}</span>
                 <span className="issue-comment-date">
                   {new Date(c.created_at).toLocaleDateString("fr-FR", {
                     day: "numeric", month: "short", year: "numeric",
@@ -77,7 +80,7 @@ export function IssueTimeline({ comments, events }: Props) {
                   })}
                 </span>
               </div>
-              <div className="issue-comment-body">{c.body}</div>
+              <div className="issue-comment-body"><MentionRenderer text={c.body} /></div>
             </div>
           );
         } else {
@@ -87,7 +90,7 @@ export function IssueTimeline({ comments, events }: Props) {
               <span className="issue-event-icon">
                 {eventIcons[e.event_type] ?? "📌"}
               </span>
-              <span className="issue-event-actor">{e.actor_id.slice(0, 8)}</span>
+              <span className="issue-event-actor">{e.actor_handle ?? e.actor_id.slice(0, 8)}</span>
               <span className="issue-event-label">
                 {eventLabels[e.event_type] ?? e.event_type}
               </span>
