@@ -9,7 +9,7 @@
 
 use std::sync::Arc;
 
-use tracing::{info, instrument};
+use tracing::{info, instrument, warn};
 use uuid::Uuid;
 
 use domain::entities::issue::{Issue, IssueEvent, IssueEventType};
@@ -115,34 +115,59 @@ impl CreateIssueUseCase {
         }
 
         // 7. Phase 37C — Extraction et traitement des @mentions
+        //    P2 fix: Fire-and-forget via tokio::spawn — l'HTTP 201 revient immédiatement.
+        //    Les événements Mentioned apparaissent quelques ms plus tard.
         let mention_text = format!(
             "{}\n{}",
             &issue.title,
             issue.body.as_deref().unwrap_or("")
         );
-        let mention_result = mention_service::process_mentions(
-            &mention_text,
-            &cmd.author_id,
-            &self.actor_repo,
-        ).await;
+        let issue_id = issue.id;
+        let author_id = cmd.author_id;
+        let actor_repo = Arc::clone(&self.actor_repo);
+        let issue_repo = Arc::clone(&self.issue_repo);
+        let issue_number = issue.number;
 
-        for resolved in &mention_result.resolved {
-            let mention_event = IssueEvent::new(
-                issue.id,
-                cmd.author_id,
-                IssueEventType::Mentioned,
-                serde_json::json!({
-                    "mentioned_actor_id": resolved.actor_id,
-                    "mentioned_handle": resolved.handle,
-                }),
-            );
-            self.issue_repo.save_event(&mention_event).await?;
-        }
+        tokio::spawn(async move {
+            let mention_result = mention_service::process_mentions(
+                &mention_text,
+                &author_id,
+                &actor_repo,
+            ).await;
+
+            for resolved in &mention_result.resolved {
+                let mention_event = IssueEvent::new(
+                    issue_id,
+                    author_id,
+                    IssueEventType::Mentioned,
+                    serde_json::json!({
+                        "mentioned_actor_id": resolved.actor_id,
+                        "mentioned_handle": resolved.handle,
+                    }),
+                );
+                if let Err(e) = issue_repo.save_event(&mention_event).await {
+                    warn!(
+                        issue_id = %issue_id,
+                        error = %e,
+                        "⚠️ Erreur lors de la persistence d'un événement Mentioned"
+                    );
+                }
+            }
+
+            if !mention_result.resolved.is_empty() {
+                info!(
+                    issue_id = %issue_id,
+                    number = issue_number,
+                    mentions = mention_result.resolved.len(),
+                    "📣 Mentions traitées (fire-and-forget) pour Issue #{}",
+                    issue_number
+                );
+            }
+        });
 
         info!(
             issue_id = %issue.id,
             number = issue.number,
-            mentions = mention_result.resolved.len(),
             "✅ Issue #{} créée",
             issue.number
         );

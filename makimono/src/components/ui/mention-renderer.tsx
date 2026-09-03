@@ -1,11 +1,15 @@
 "use client";
 
 // ═══════════════════════════════════════════════════════════════
-// MentionRenderer — Phase 37C (Le Mégaphone)
+// MentionRenderer — Phase 37C (Le Mégaphone) + P1 Fix
 //
 // Transforme les @mentions dans un texte en liens cliquables :
 // - @handle local  → Link violet vers /{handle}
 // - @user@domain   → Lien externe vers https://domain/@user
+//
+// P1 Fix : Le backend fournit un tableau `validatedMentions` de
+// handles confirmés par l'AST Markdown. Seuls ces handles sont
+// linkifiés. Zéro faux positif (`@babel` reste du texte brut).
 //
 // N'altère PAS le body stocké en BDD — transformation côté client.
 // ═══════════════════════════════════════════════════════════════
@@ -18,6 +22,13 @@ interface MentionRendererProps {
   text: string;
   /** Classe CSS additionnelle pour le wrapper. */
   className?: string;
+  /**
+   * Liste des handles validés par le backend (AST-aware).
+   * Seuls les handles présents dans cette liste seront linkifiés.
+   * Inclut les handles locaux ("yusuf") et fédérés ("alice@mastodon.social").
+   * Si absent, aucune mention n'est linkifiée (sécurité par défaut).
+   */
+  validatedMentions?: string[];
 }
 
 // Regex JS côté client — miroir du parseur Rust
@@ -29,9 +40,18 @@ const MENTION_RE = /(?:^|[\s(\[{])(@([a-zA-Z0-9_-]+(?:@[a-zA-Z0-9][a-zA-Z0-9._-]
  *
  * - Mentions locales (`@yusuf`) → lien violet vers le profil `/yusuf`
  * - Mentions fédérées (`@alice@mastodon.social`) → lien externe bleu
+ *
+ * P1 Fix: Si `validatedMentions` est fourni, seuls les handles
+ * validés par le backend sont linkifiés. Les faux positifs comme
+ * `@babel` dans du code inline restent du texte brut.
  */
-export function MentionRenderer({ text, className }: MentionRendererProps) {
+export function MentionRenderer({ text, className, validatedMentions }: MentionRendererProps) {
   if (!text) return null;
+
+  // Créer un Set pour une lookup O(1)
+  const validatedSet = validatedMentions
+    ? new Set(validatedMentions)
+    : null;
 
   const parts: React.ReactNode[] = [];
   let lastIndex = 0;
@@ -48,6 +68,13 @@ export function MentionRenderer({ text, className }: MentionRendererProps) {
     // Index du @ dans le match (skip le whitespace/punc avant)
     const atIndex = fullMatch.indexOf("@");
     const mentionStart = match.index + atIndex;
+
+    // P1 Fix: Si le backend a fourni une liste de mentions validées,
+    // ne linkifier QUE les handles confirmés.
+    if (validatedSet && !validatedSet.has(rawHandle)) {
+      // Handle non validé → laisser en texte brut, continuer
+      continue;
+    }
 
     // Texte avant la mention
     if (mentionStart > lastIndex) {

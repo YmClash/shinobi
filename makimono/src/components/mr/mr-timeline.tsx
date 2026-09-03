@@ -74,12 +74,25 @@ export function MrTimeline({ events }: MrTimelineProps) {
             </div>
             <div className="mr-timeline-content">
               <div className="mr-timeline-header">
-                <span className="mr-timeline-label">{config.label}</span>
+                {event.event_type === "mentioned" && event.payload?.mentioned_handle ? (
+                  <span className="mr-timeline-label">
+                    {event.actor_handle ?? event.actor_id.slice(0, 8)}{" "}
+                    mentioned{" "}
+                    <a
+                      href={`/${event.payload.mentioned_handle}`}
+                      className="mention-link mention-link-local"
+                    >
+                      @{String(event.payload.mentioned_handle)}
+                    </a>
+                  </span>
+                ) : (
+                  <span className="mr-timeline-label">{config.label}</span>
+                )}
                 <span className="mr-timeline-time">
                   {formatRelativeTime(event.created_at)}
                 </span>
               </div>
-              {payloadInfo && (
+              {event.event_type !== "mentioned" && payloadInfo && (
                 <div className="mr-timeline-payload">{payloadInfo}</div>
               )}
             </div>

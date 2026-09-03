@@ -21,6 +21,7 @@ use application::use_cases::search_chunks::ChunkSearchFilter;
 use application::use_cases::sensei_chat::{ChatMessage, SenseiChatRequest};
 use domain::entities::operation::Operation;
 use domain::entities::repository::Visibility;
+use domain::entities::mention::extract_mentions;
 use domain::errors::DomainError;
 use domain::ports::chunk_repository::{SimilarChunk, StoredChunk};
 use domain::ports::review_repository::OperationReview;
@@ -2221,14 +2222,31 @@ async fn get_mr_handler(
     let repo_entity = state.resolve_repo.execute(&owner, &repo).await?;
 
     let detail = state.get_mr.execute(&repo_entity.id, number).await?;
+    let mr = &detail.mr;
+
+    // Résoudre les actor UUIDs en handles lisibles (cohérence avec get_issue_handler)
+    let mut actor_ids = std::collections::HashSet::new();
+    actor_ids.insert(mr.author_id);
+    if let Some(aid) = mr.merged_by { actor_ids.insert(aid); }
+    for r in &detail.reviews { actor_ids.insert(r.reviewer_id); }
+    for e in &detail.events { actor_ids.insert(e.actor_id); }
+
+    let mut handle_map = std::collections::HashMap::<uuid::Uuid, String>::new();
+    for aid in &actor_ids {
+        if let Ok(Some(actor)) = state.actor_repo.find_by_id(aid).await {
+            handle_map.insert(*aid, actor.handle);
+        }
+    }
 
     let reviews: Vec<serde_json::Value> = detail
         .reviews
         .into_iter()
         .map(|r| {
+            let handle = handle_map.get(&r.reviewer_id).cloned().unwrap_or_else(|| r.reviewer_id.to_string()[..8].to_string());
             serde_json::json!({
                 "id": r.id,
                 "reviewer_id": r.reviewer_id,
+                "reviewer_handle": handle,
                 "verdict": r.verdict,
                 "body": r.body,
                 "created_at": r.created_at,
@@ -2240,9 +2258,11 @@ async fn get_mr_handler(
         .events
         .into_iter()
         .map(|e| {
+            let handle = handle_map.get(&e.actor_id).cloned().unwrap_or_else(|| e.actor_id.to_string()[..8].to_string());
             serde_json::json!({
                 "id": e.id,
                 "actor_id": e.actor_id,
+                "actor_handle": handle,
                 "event_type": e.event_type.as_sql_str(),
                 "payload": e.payload,
                 "created_at": e.created_at,
@@ -2250,7 +2270,29 @@ async fn get_mr_handler(
         })
         .collect();
 
-    let mr = &detail.mr;
+    let author_handle = handle_map.get(&mr.author_id).cloned().unwrap_or_else(|| mr.author_id.to_string()[..8].to_string());
+
+    // P1 fix — Extraire les mentions validées (AST-aware) pour le frontend.
+    let mut all_text = String::new();
+    if let Some(desc) = &mr.description {
+        all_text.push_str(desc);
+        all_text.push('\n');
+    }
+    let raw_mentions = extract_mentions(&all_text);
+    let handle_values: std::collections::HashSet<&str> = handle_map.values().map(|s| s.as_str()).collect();
+    let validated_mentions: Vec<String> = raw_mentions
+        .into_iter()
+        .filter_map(|m| {
+            if m.is_remote() {
+                Some(m.raw)
+            } else if handle_values.contains(m.local_handle.as_str()) {
+                Some(m.local_handle)
+            } else {
+                None
+            }
+        })
+        .collect();
+
     Ok(Json(serde_json::json!({
         "id": mr.id,
         "number": mr.number,
@@ -2260,6 +2302,7 @@ async fn get_mr_handler(
         "target_branch": mr.target_branch,
         "status": mr.status,
         "author_id": mr.author_id,
+        "author_handle": author_handle,
         "merged_by": mr.merged_by,
         "merged_at": mr.merged_at,
         "closed_at": mr.closed_at,
@@ -2268,6 +2311,7 @@ async fn get_mr_handler(
         "has_conflicts": detail.has_conflicts,
         "reviews": reviews,
         "events": events,
+        "mentions": validated_mentions,
     })))
 }
 
@@ -2754,6 +2798,38 @@ async fn get_issue_handler(
 
     let author_handle = handle_map.get(&i.author_id).cloned().unwrap_or_else(|| i.author_id.to_string()[..8].to_string());
 
+    // P1 fix — Extraire les mentions validées (AST-aware) pour le frontend.
+    // Le frontend ne linkifiera QUE les handles présents dans cette liste.
+    // Combine : handles locaux confirmés par handle_map + handles fédérés bruts.
+    let mut all_text = String::new();
+    if let Some(body) = &i.body {
+        all_text.push_str(body);
+        all_text.push('\n');
+    }
+    for c in &comments {
+        if let Some(body) = c.get("body").and_then(|v| v.as_str()) {
+            all_text.push_str(body);
+            all_text.push('\n');
+        }
+    }
+    let raw_mentions = extract_mentions(&all_text);
+    let handle_values: std::collections::HashSet<&str> = handle_map.values().map(|s| s.as_str()).collect();
+    let validated_mentions: Vec<String> = raw_mentions
+        .into_iter()
+        .filter_map(|m| {
+            if m.is_remote() {
+                // Mention fédérée — inclure le raw complet (ex: "alice@mastodon.social")
+                Some(m.raw)
+            } else if handle_values.contains(m.local_handle.as_str()) {
+                // Mention locale — confirmée par la BDD
+                Some(m.local_handle)
+            } else {
+                // Handle local inconnu — on ne le linkifie pas
+                None
+            }
+        })
+        .collect();
+
     Ok(Json(serde_json::json!({
         "id": i.id, "number": i.number, "title": i.title, "body": i.body,
         "status": i.status, "author_id": i.author_id, "author_handle": author_handle,
@@ -2761,6 +2837,7 @@ async fn get_issue_handler(
         "closed_by": i.closed_by, "closed_at": i.closed_at,
         "created_at": i.created_at, "updated_at": i.updated_at,
         "comments": comments, "events": events, "labels": labels,
+        "mentions": validated_mentions,
     })))
 }
 

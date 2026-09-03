@@ -3,7 +3,7 @@
 //! Phase 37C: intègre l'extraction des @mentions dans le corps du commentaire.
 
 use std::sync::Arc;
-use tracing::{info, instrument};
+use tracing::{info, instrument, warn};
 use uuid::Uuid;
 use domain::entities::issue::{IssueComment, IssueEvent, IssueEventType};
 use domain::errors::DomainError;
@@ -63,29 +63,54 @@ impl CommentIssueUseCase {
         self.issue_repo.save_event(&event).await?;
 
         // Phase 37C — Extraction des @mentions dans le commentaire
-        let mention_result = mention_service::process_mentions(
-            &comment.body,
-            &cmd.author_id,
-            &self.actor_repo,
-        ).await;
+        //    P2 fix: Fire-and-forget via tokio::spawn — l'HTTP 201 revient immédiatement.
+        let comment_body = comment.body.clone();
+        let comment_id = comment.id;
+        let issue_id = issue.id;
+        let issue_number = issue.number;
+        let author_id = cmd.author_id;
+        let actor_repo = Arc::clone(&self.actor_repo);
+        let issue_repo = Arc::clone(&self.issue_repo);
 
-        for resolved in &mention_result.resolved {
-            let mention_event = IssueEvent::new(
-                issue.id,
-                cmd.author_id,
-                IssueEventType::Mentioned,
-                serde_json::json!({
-                    "mentioned_actor_id": resolved.actor_id,
-                    "mentioned_handle": resolved.handle,
-                    "comment_id": comment.id,
-                }),
-            );
-            self.issue_repo.save_event(&mention_event).await?;
-        }
+        tokio::spawn(async move {
+            let mention_result = mention_service::process_mentions(
+                &comment_body,
+                &author_id,
+                &actor_repo,
+            ).await;
+
+            for resolved in &mention_result.resolved {
+                let mention_event = IssueEvent::new(
+                    issue_id,
+                    author_id,
+                    IssueEventType::Mentioned,
+                    serde_json::json!({
+                        "mentioned_actor_id": resolved.actor_id,
+                        "mentioned_handle": resolved.handle,
+                        "comment_id": comment_id,
+                    }),
+                );
+                if let Err(e) = issue_repo.save_event(&mention_event).await {
+                    warn!(
+                        issue_id = %issue_id,
+                        error = %e,
+                        "⚠️ Erreur lors de la persistence d'un événement Mentioned (commentaire)"
+                    );
+                }
+            }
+
+            if !mention_result.resolved.is_empty() {
+                info!(
+                    comment_id = %comment_id,
+                    mentions = mention_result.resolved.len(),
+                    "📣 Mentions traitées (fire-and-forget) pour commentaire sur Issue #{}",
+                    issue_number
+                );
+            }
+        });
 
         info!(
             comment_id = %comment.id,
-            mentions = mention_result.resolved.len(),
             "💬 Commentaire ajouté à l'issue #{}",
             issue.number,
         );

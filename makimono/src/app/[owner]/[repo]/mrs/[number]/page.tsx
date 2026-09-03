@@ -130,7 +130,7 @@ export default function MrDetailPage() {
         </div>
 
         {mr.description && (
-          <div className="mr-detail-description"><MentionRenderer text={mr.description} /></div>
+          <div className="mr-detail-description"><MentionRenderer text={mr.description} validatedMentions={mr.mentions} /></div>
         )}
       </div>
 

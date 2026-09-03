@@ -104,7 +104,7 @@ export default function IssueDetailPage() {
           {/* Body */}
           {data.body && (
             <div className="issue-detail-body">
-              <MentionRenderer text={data.body} />
+              <MentionRenderer text={data.body} validatedMentions={data.mentions} />
             </div>
           )}
 
@@ -123,6 +123,7 @@ export default function IssueDetailPage() {
             <IssueTimeline
               comments={data.comments}
               events={data.events}
+              validatedMentions={data.mentions}
             />
           </div>
 

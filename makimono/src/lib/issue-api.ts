@@ -54,6 +54,8 @@ export interface IssueDetail extends Issue {
   comments: IssueComment[];
   events: IssueEvent[];
   labels: IssueLabel[];
+  /** Handles validés par le backend (AST-aware). P1 fix. */
+  mentions?: string[];
 }
 
 export interface IssueListResponse {

@@ -8,6 +8,8 @@ import { MentionRenderer } from "@/components/ui/mention-renderer";
 interface Props {
   comments: IssueComment[];
   events: IssueEvent[];
+  /** P1 fix: Handles validés par le backend (AST-aware). */
+  validatedMentions?: string[];
 }
 
 type TimelineItem =
@@ -25,7 +27,7 @@ const eventLabels: Record<string, string> = {
   label_removed: "removed a label",
   assigned: "assigned this issue",
   unassigned: "unassigned this issue",
-  mentioned: "mentioned someone",
+  mentioned: "was mentioned",
 };
 
 const eventIcons: Record<string, string> = {
@@ -42,7 +44,7 @@ const eventIcons: Record<string, string> = {
   mentioned: "📣",
 };
 
-export function IssueTimeline({ comments, events }: Props) {
+export function IssueTimeline({ comments, events, validatedMentions }: Props) {
   // Merge and sort by timestamp
   const items: TimelineItem[] = [
     ...comments.map((c) => ({
@@ -80,7 +82,7 @@ export function IssueTimeline({ comments, events }: Props) {
                   })}
                 </span>
               </div>
-              <div className="issue-comment-body"><MentionRenderer text={c.body} /></div>
+              <div className="issue-comment-body"><MentionRenderer text={c.body} validatedMentions={validatedMentions} /></div>
             </div>
           );
         } else {
@@ -90,10 +92,25 @@ export function IssueTimeline({ comments, events }: Props) {
               <span className="issue-event-icon">
                 {eventIcons[e.event_type] ?? "📌"}
               </span>
-              <span className="issue-event-actor">{e.actor_handle ?? e.actor_id.slice(0, 8)}</span>
-              <span className="issue-event-label">
-                {eventLabels[e.event_type] ?? e.event_type}
-              </span>
+              {e.event_type === "mentioned" && e.payload?.mentioned_handle ? (
+                <>
+                  <span className="issue-event-actor">{e.actor_handle ?? e.actor_id.slice(0, 8)}</span>
+                  <span className="issue-event-label">mentioned </span>
+                  <a
+                    href={`/${e.payload.mentioned_handle}`}
+                    className="mention-link mention-link-local"
+                  >
+                    @{String(e.payload.mentioned_handle)}
+                  </a>
+                </>
+              ) : (
+                <>
+                  <span className="issue-event-actor">{e.actor_handle ?? e.actor_id.slice(0, 8)}</span>
+                  <span className="issue-event-label">
+                    {eventLabels[e.event_type] ?? e.event_type}
+                  </span>
+                </>
+              )}
               <span className="issue-event-date">
                 {new Date(e.created_at).toLocaleDateString("fr-FR", {
                   day: "numeric", month: "short",

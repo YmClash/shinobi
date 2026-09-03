@@ -9,7 +9,7 @@
 
 use std::sync::Arc;
 
-use tracing::{info, instrument};
+use tracing::{info, instrument, warn};
 use uuid::Uuid;
 
 use domain::entities::merge_request::{MergeRequest, MrEvent, MrEventType};
@@ -120,36 +120,60 @@ impl CreateMrUseCase {
         self.mr_repo.save_event(&event).await?;
 
         // 7. Phase 37C — Extraction et traitement des @mentions
+        //    P2 fix: Fire-and-forget via tokio::spawn — l'HTTP 201 revient immédiatement.
         let mention_text = format!(
             "{}\n{}",
             &mr.title,
             mr.description.as_deref().unwrap_or("")
         );
-        let mention_result = mention_service::process_mentions(
-            &mention_text,
-            &cmd.author_id,
-            &self.actor_repo,
-        ).await;
+        let mr_id = mr.id;
+        let mr_number = mr.number;
+        let author_id = cmd.author_id;
+        let actor_repo = Arc::clone(&self.actor_repo);
+        let mr_repo = Arc::clone(&self.mr_repo);
 
-        for resolved in &mention_result.resolved {
-            let mention_event = MrEvent::new(
-                mr.id,
-                cmd.author_id,
-                MrEventType::Mentioned,
-                serde_json::json!({
-                    "mentioned_actor_id": resolved.actor_id,
-                    "mentioned_handle": resolved.handle,
-                }),
-            );
-            self.mr_repo.save_event(&mention_event).await?;
-        }
+        tokio::spawn(async move {
+            let mention_result = mention_service::process_mentions(
+                &mention_text,
+                &author_id,
+                &actor_repo,
+            ).await;
+
+            for resolved in &mention_result.resolved {
+                let mention_event = MrEvent::new(
+                    mr_id,
+                    author_id,
+                    MrEventType::Mentioned,
+                    serde_json::json!({
+                        "mentioned_actor_id": resolved.actor_id,
+                        "mentioned_handle": resolved.handle,
+                    }),
+                );
+                if let Err(e) = mr_repo.save_event(&mention_event).await {
+                    warn!(
+                        mr_id = %mr_id,
+                        error = %e,
+                        "⚠️ Erreur lors de la persistence d'un événement Mentioned (MR)"
+                    );
+                }
+            }
+
+            if !mention_result.resolved.is_empty() {
+                info!(
+                    mr_id = %mr_id,
+                    number = mr_number,
+                    mentions = mention_result.resolved.len(),
+                    "📣 Mentions traitées (fire-and-forget) pour MR #{}",
+                    mr_number
+                );
+            }
+        });
 
         info!(
             mr_id = %mr.id,
             number = mr.number,
             source = %mr.source_branch,
             target = %mr.target_branch,
-            mentions = mention_result.resolved.len(),
             "✅ MR #{} créée",
             mr.number
         );

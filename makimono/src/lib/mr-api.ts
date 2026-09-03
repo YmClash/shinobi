@@ -49,6 +49,10 @@ export interface MrDetail extends MergeRequest {
   has_conflicts: boolean;
   reviews: MrReview[];
   events: MrEvent[];
+  /** Handle lisible de l'auteur (résolu côté backend). */
+  author_handle?: string;
+  /** Handles validés par le backend (AST-aware). P1 fix. */
+  mentions?: string[];
 }
 
 export interface MrListResponse {
