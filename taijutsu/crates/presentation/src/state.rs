@@ -188,6 +188,10 @@ pub struct SharedState {
     pub comment_issue: Arc<application::use_cases::comment_issue::CommentIssueUseCase>,
     /// Use case: CRUD labels + assign/unassign.
     pub manage_labels: Arc<application::use_cases::manage_labels::ManageLabelsUseCase>,
+
+    // ── Phase 38 — Notifications (Le Carillon) 🔔 ────────
+    /// Repository des notifications in-app.
+    pub notification_repo: Arc<dyn domain::ports::notification_repository::NotificationRepository>,
 }
 
 // ── Phase 12A — Git Bridge HTTP ──────────────────────────────────────

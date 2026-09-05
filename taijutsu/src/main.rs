@@ -431,6 +431,14 @@ async fn main() -> anyhow::Result<()> {
 
     info!("🤖 Service Accounts initialisé (Phase 25 — L'Acte de Naissance)");
 
+    // ── Phase 38 — Notifications (Le Carillon) 🔔 ───────────────────────
+    let notification_repo: Arc<dyn domain::ports::notification_repository::NotificationRepository> =
+        Arc::new(
+            infrastructure::persistence::postgres_notification_repo::PostgresNotificationRepo::new(
+                pg_pool.clone(),
+            ),
+        );
+
     // ── Phase 26A : Merge Requests (Le Katana Croisé) ──────────────────
     let mr_repo: Arc<dyn domain::ports::mr_repository::MrRepository> = Arc::new(
         infrastructure::persistence::postgres_mr_repo::PostgresMrRepository::new(pg_pool.clone()),
@@ -440,6 +448,7 @@ async fn main() -> anyhow::Result<()> {
             mr_repo.clone(),
             repo_repo.clone(),
             actor_repo.clone(),
+            notification_repo.clone(),
         ),
     );
     let list_mrs = Arc::new(
@@ -499,6 +508,7 @@ async fn main() -> anyhow::Result<()> {
             issue_repo.clone(),
             repo_repo.clone(),
             actor_repo.clone(),
+            notification_repo.clone(),
         ),
     );
     let list_issues = Arc::new(
@@ -524,6 +534,7 @@ async fn main() -> anyhow::Result<()> {
             issue_repo.clone(),
             repo_repo.clone(),
             actor_repo.clone(),
+            notification_repo.clone(),
         ),
     );
     let manage_labels = Arc::new(
@@ -533,6 +544,7 @@ async fn main() -> anyhow::Result<()> {
         ),
     );
     info!("🎯 Issues/Tickets initialisé (Phase 33)");
+    info!("🔔 Notifications initialisé (Phase 38 — Le Carillon)");
 
     // ── Phase 27 — ForgeFed (Fédération ActivityPub) ──────────────────
     let federation_repo: Arc<dyn domain::ports::federation_repository::FederationRepository> =
@@ -663,6 +675,8 @@ async fn main() -> anyhow::Result<()> {
         close_issue,
         comment_issue,
         manage_labels,
+        // Phase 38 — Notifications (Le Carillon) 🔔
+        notification_repo: notification_repo.clone(),
     };
 
     // ── Git Bridge HTTP (Phase 12A) ────────────────────

@@ -6,7 +6,7 @@
 use axum::extract::{DefaultBodyLimit, Multipart, Path, Query, State};
 use axum::handler::Handler;
 use axum::response::sse::{Event, KeepAlive, Sse};
-use axum::{Json, Router, routing::get, routing::post};
+use axum::{Json, Router, routing::get, routing::post, routing::patch};
 use chrono::{DateTime, Utc};
 use futures_util::StreamExt;
 use serde::{Deserialize, Serialize};
@@ -510,6 +510,11 @@ pub fn create_router(state: SharedState) -> Router {
             post(semantic_search_handler),
         )
         .route("/api/v1/reviews/scores", get(get_score_history_handler))
+        // Phase 38 — Notifications (Le Carillon) 🔔
+        .route("/api/v1/notifications", get(list_notifications_handler))
+        .route("/api/v1/notifications/unread-count", get(unread_count_handler))
+        .route("/api/v1/notifications/{id}/read", patch(mark_read_handler))
+        .route("/api/v1/notifications/read-all", patch(mark_all_read_handler))
         // ── Bouclier Global : middleware auth sur TOUTES les routes privées ──
         .layer(auth_layer());
 
@@ -2970,4 +2975,102 @@ async fn remove_issue_label_handler(
     let repo_entity = state.resolve_repo.execute(&owner, &repo).await?;
     state.manage_labels.remove_label(&auth.0.actor_id(), &repo_entity.id, number, &label_id).await?;
     Ok(Json(serde_json::json!({ "status": "label_removed" })))
+}
+
+// ══════════════════════════════════════════════════════════════════════
+// Phase 38 — Notifications (Le Carillon) 🔔
+// ══════════════════════════════════════════════════════════════════════
+
+#[derive(Debug, Deserialize)]
+struct NotificationsQuery {
+    limit: Option<i64>,
+    offset: Option<i64>,
+}
+
+/// `GET /api/v1/notifications` — Liste paginée des notifications.
+async fn list_notifications_handler(
+    auth: AuthUser,
+    State(state): State<SharedState>,
+    Query(q): Query<NotificationsQuery>,
+) -> Result<Json<serde_json::Value>, AppError> {
+    let actor_id = auth.0.actor_id();
+    let limit = q.limit.unwrap_or(20).min(100);
+    let offset = q.offset.unwrap_or(0);
+
+    let (notifications, total) = state
+        .notification_repo
+        .list_for_recipient(&actor_id, limit, offset)
+        .await?;
+
+    let unread = state.notification_repo.count_unread(&actor_id).await?;
+
+    // Resolve actor handles for each notification
+    let mut items = Vec::with_capacity(notifications.len());
+    for n in &notifications {
+        let actor_handle = match state.actor_repo.find_by_id(&n.actor_id).await {
+            Ok(Some(actor)) => Some(actor.handle),
+            _ => None,
+        };
+        items.push(serde_json::json!({
+            "id": n.id,
+            "actor_id": n.actor_id,
+            "actor_handle": actor_handle,
+            "notification_type": n.notification_type,
+            "target_type": n.target_type,
+            "target_id": n.target_id,
+            "target_number": n.target_number,
+            "repository_owner": n.repository_owner,
+            "repository_name": n.repository_name,
+            "message": n.message,
+            "read": n.read,
+            "read_at": n.read_at,
+            "created_at": n.created_at,
+        }));
+    }
+
+    Ok(Json(serde_json::json!({
+        "notifications": items,
+        "total": total,
+        "unread_count": unread,
+    })))
+}
+
+/// `GET /api/v1/notifications/unread-count` — Compteur non-lu (léger, pour badge).
+async fn unread_count_handler(
+    auth: AuthUser,
+    State(state): State<SharedState>,
+) -> Result<Json<serde_json::Value>, AppError> {
+    let count = state
+        .notification_repo
+        .count_unread(&auth.0.actor_id())
+        .await?;
+
+    Ok(Json(serde_json::json!({ "unread_count": count })))
+}
+
+/// `PATCH /api/v1/notifications/{id}/read` — Marquer une notification comme lue.
+async fn mark_read_handler(
+    auth: AuthUser,
+    State(state): State<SharedState>,
+    Path(id): Path<Uuid>,
+) -> Result<Json<serde_json::Value>, AppError> {
+    state
+        .notification_repo
+        .mark_read(&id, &auth.0.actor_id())
+        .await?;
+
+    Ok(Json(serde_json::json!({ "status": "read" })))
+}
+
+/// `PATCH /api/v1/notifications/read-all` — Marquer toutes comme lues.
+async fn mark_all_read_handler(
+    auth: AuthUser,
+    State(state): State<SharedState>,
+) -> Result<Json<serde_json::Value>, AppError> {
+    let updated = state
+        .notification_repo
+        .mark_all_read(&auth.0.actor_id())
+        .await?;
+
+    Ok(Json(serde_json::json!({ "status": "all_read", "updated": updated })))
 }

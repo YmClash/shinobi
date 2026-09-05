@@ -18,6 +18,7 @@ pub mod github_service;
 pub mod issue_repository;
 pub mod llm_service;
 pub mod mr_repository;
+pub mod notification_repository;
 pub mod repo_repository;
 pub mod repository;
 pub mod review_repository;

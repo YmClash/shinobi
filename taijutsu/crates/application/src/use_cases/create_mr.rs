@@ -13,9 +13,11 @@ use tracing::{info, instrument, warn};
 use uuid::Uuid;
 
 use domain::entities::merge_request::{MergeRequest, MrEvent, MrEventType};
+use domain::entities::notification::{Notification, NotificationType, TargetType};
 use domain::errors::DomainError;
 use domain::ports::actor_repository::ActorRepository;
 use domain::ports::mr_repository::MrRepository;
+use domain::ports::notification_repository::NotificationRepository;
 use domain::ports::repo_repository::RepoRepository;
 
 use crate::use_cases::mention_service;
@@ -41,6 +43,7 @@ pub struct CreateMrUseCase {
     mr_repo: Arc<dyn MrRepository>,
     repo_repo: Arc<dyn RepoRepository>,
     actor_repo: Arc<dyn ActorRepository>,
+    notification_repo: Arc<dyn NotificationRepository>,
 }
 
 impl CreateMrUseCase {
@@ -48,8 +51,9 @@ impl CreateMrUseCase {
         mr_repo: Arc<dyn MrRepository>,
         repo_repo: Arc<dyn RepoRepository>,
         actor_repo: Arc<dyn ActorRepository>,
+        notification_repo: Arc<dyn NotificationRepository>,
     ) -> Self {
-        Self { mr_repo, repo_repo, actor_repo }
+        Self { mr_repo, repo_repo, actor_repo, notification_repo }
     }
 
     #[instrument(skip(self), fields(author = %cmd.author_id, repo = %cmd.repository_id))]
@@ -131,13 +135,37 @@ impl CreateMrUseCase {
         let author_id = cmd.author_id;
         let actor_repo = Arc::clone(&self.actor_repo);
         let mr_repo = Arc::clone(&self.mr_repo);
+        let notification_repo = Arc::clone(&self.notification_repo);
+        let repo_id = cmd.repository_id;
+
+        // Need repo entity for denormalized notification fields
+        let (repo_name, repo_owner_id) = match self.repo_repo.find_by_id(&repo_id).await {
+            Ok(Some(repo_entity)) => (repo_entity.name, repo_entity.owner_id),
+            _ => (String::new(), Uuid::nil()),
+        };
 
         tokio::spawn(async move {
+            // Resolve owner handle for denormalized notification storage
+            let owner_handle = if repo_owner_id != Uuid::nil() {
+                match actor_repo.find_by_id(&repo_owner_id).await {
+                    Ok(Some(actor)) => actor.handle,
+                    _ => "unknown".to_string(),
+                }
+            } else {
+                "unknown".to_string()
+            };
+
             let mention_result = mention_service::process_mentions(
                 &mention_text,
                 &author_id,
                 &actor_repo,
             ).await;
+
+            // Resolve author handle for notification message
+            let author_handle = match actor_repo.find_by_id(&author_id).await {
+                Ok(Some(actor)) => actor.handle,
+                _ => "someone".to_string(),
+            };
 
             for resolved in &mention_result.resolved {
                 let mention_event = MrEvent::new(
@@ -156,6 +184,23 @@ impl CreateMrUseCase {
                         "⚠️ Erreur lors de la persistence d'un événement Mentioned (MR)"
                     );
                 }
+
+                // Phase 38 — Notification 🔔
+                let notif = Notification::new(
+                    resolved.actor_id,
+                    author_id,
+                    NotificationType::Mentioned,
+                    TargetType::MergeRequest,
+                    mr_id,
+                    Some(mr_number),
+                    repo_id,
+                    owner_handle.clone(),
+                    repo_name.clone(),
+                    format!("{} mentioned you in MR #{}", author_handle, mr_number),
+                );
+                if let Err(e) = notification_repo.save(&notif).await {
+                    warn!("⚠️ Notification error: {}", e);
+                }
             }
 
             if !mention_result.resolved.is_empty() {
@@ -163,7 +208,7 @@ impl CreateMrUseCase {
                     mr_id = %mr_id,
                     number = mr_number,
                     mentions = mention_result.resolved.len(),
-                    "📣 Mentions traitées (fire-and-forget) pour MR #{}",
+                    "📣🔔 Mentions + notifications traitées pour MR #{}",
                     mr_number
                 );
             }

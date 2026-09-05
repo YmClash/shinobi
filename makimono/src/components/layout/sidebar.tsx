@@ -10,6 +10,7 @@ import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip
 import { Skeleton } from "@/components/ui/skeleton";
 import { useHealth, useRepositories } from "@/hooks/use-api";
 import { useAuth } from "@/hooks/use-auth";
+import { NotificationBell } from "@/components/ui/notification-bell";
 
 // ── Main navigation items ────────────────────────────────────
 
@@ -193,6 +194,8 @@ export function Sidebar() {
                 </div>
               )}
             </Link>
+            {/* Phase 38 — Notifications (Le Carillon) 🔔 */}
+            <NotificationBell collapsed={collapsed} />
             {/* Phase 25 — Service Accounts nav link */}
             {!collapsed && (
               <Link

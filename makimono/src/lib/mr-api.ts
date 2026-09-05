@@ -40,6 +40,7 @@ export interface MrReview {
 export interface MrEvent {
   id: string;
   actor_id: string;
+  actor_handle?: string;
   event_type: string;
   payload: Record<string, unknown> | null;
   created_at: string;

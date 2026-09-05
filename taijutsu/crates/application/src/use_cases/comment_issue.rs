@@ -6,9 +6,11 @@ use std::sync::Arc;
 use tracing::{info, instrument, warn};
 use uuid::Uuid;
 use domain::entities::issue::{IssueComment, IssueEvent, IssueEventType};
+use domain::entities::notification::{Notification, NotificationType, TargetType};
 use domain::errors::DomainError;
 use domain::ports::actor_repository::ActorRepository;
 use domain::ports::issue_repository::IssueRepository;
+use domain::ports::notification_repository::NotificationRepository;
 use domain::ports::repo_repository::RepoRepository;
 
 use crate::use_cases::mention_service;
@@ -25,6 +27,7 @@ pub struct CommentIssueUseCase {
     issue_repo: Arc<dyn IssueRepository>,
     repo_repo: Arc<dyn RepoRepository>,
     actor_repo: Arc<dyn ActorRepository>,
+    notification_repo: Arc<dyn NotificationRepository>,
 }
 
 impl CommentIssueUseCase {
@@ -32,8 +35,9 @@ impl CommentIssueUseCase {
         issue_repo: Arc<dyn IssueRepository>,
         repo_repo: Arc<dyn RepoRepository>,
         actor_repo: Arc<dyn ActorRepository>,
+        notification_repo: Arc<dyn NotificationRepository>,
     ) -> Self {
-        Self { issue_repo, repo_repo, actor_repo }
+        Self { issue_repo, repo_repo, actor_repo, notification_repo }
     }
 
     #[instrument(skip(self), fields(author = %cmd.author_id, number = cmd.issue_number))]
@@ -71,13 +75,29 @@ impl CommentIssueUseCase {
         let author_id = cmd.author_id;
         let actor_repo = Arc::clone(&self.actor_repo);
         let issue_repo = Arc::clone(&self.issue_repo);
+        let notification_repo = Arc::clone(&self.notification_repo);
+        let repo_id = repo_entity.id;
+        let repo_name = repo_entity.name.clone();
+        let repo_owner_id = repo_entity.owner_id;
 
         tokio::spawn(async move {
+            // Resolve owner handle for denormalized notification storage
+            let owner_handle = match actor_repo.find_by_id(&repo_owner_id).await {
+                Ok(Some(actor)) => actor.handle,
+                _ => "unknown".to_string(),
+            };
+
             let mention_result = mention_service::process_mentions(
                 &comment_body,
                 &author_id,
                 &actor_repo,
             ).await;
+
+            // Resolve author handle for notification message
+            let author_handle = match actor_repo.find_by_id(&author_id).await {
+                Ok(Some(actor)) => actor.handle,
+                _ => "someone".to_string(),
+            };
 
             for resolved in &mention_result.resolved {
                 let mention_event = IssueEvent::new(
@@ -97,13 +117,30 @@ impl CommentIssueUseCase {
                         "⚠️ Erreur lors de la persistence d'un événement Mentioned (commentaire)"
                     );
                 }
+
+                // Phase 38 — Notification 🔔
+                let notif = Notification::new(
+                    resolved.actor_id,
+                    author_id,
+                    NotificationType::Mentioned,
+                    TargetType::Issue,
+                    issue_id,
+                    Some(issue_number),
+                    repo_id,
+                    owner_handle.clone(),
+                    repo_name.clone(),
+                    format!("{} mentioned you in a comment on Issue #{}", author_handle, issue_number),
+                );
+                if let Err(e) = notification_repo.save(&notif).await {
+                    warn!("⚠️ Notification error: {}", e);
+                }
             }
 
             if !mention_result.resolved.is_empty() {
                 info!(
                     comment_id = %comment_id,
                     mentions = mention_result.resolved.len(),
-                    "📣 Mentions traitées (fire-and-forget) pour commentaire sur Issue #{}",
+                    "📣🔔 Mentions + notifications traitées pour commentaire sur Issue #{}",
                     issue_number
                 );
             }
