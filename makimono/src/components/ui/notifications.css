@@ -92,30 +92,32 @@
 
 .notif-panel {
   position: absolute;
-  bottom: 100%;
-  left: 0;
-  width: 340px;
-  max-height: 420px;
-  margin-bottom: 0.5rem;
+  left: calc(100% + 8px);
+  bottom: 0;
+  width: 360px;
+  max-height: 450px;
   border-radius: 0.75rem;
-  background: hsl(var(--card));
+  background: hsl(var(--card) / 0.97);
+  backdrop-filter: blur(16px);
+  -webkit-backdrop-filter: blur(16px);
   border: 1px solid hsl(var(--border));
   box-shadow:
-    0 8px 32px hsl(0 0% 0% / 0.25),
-    0 2px 8px hsl(0 0% 0% / 0.15);
+    0 12px 48px hsl(0 0% 0% / 0.35),
+    0 4px 12px hsl(0 0% 0% / 0.2),
+    inset 0 1px 0 hsl(var(--foreground) / 0.05);
   overflow: hidden;
-  z-index: 200;
+  z-index: 9999;
   animation: notif-panel-in 0.2s ease-out;
 }
 
 @keyframes notif-panel-in {
   from {
     opacity: 0;
-    transform: translateY(8px) scale(0.97);
+    transform: translateX(-8px) scale(0.97);
   }
   to {
     opacity: 1;
-    transform: translateY(0) scale(1);
+    transform: translateX(0) scale(1);
   }
 }
 

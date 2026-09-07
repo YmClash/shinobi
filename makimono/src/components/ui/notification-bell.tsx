@@ -5,7 +5,8 @@
 // Bell icon with unread badge + dropdown panel.
 // ═══════════════════════════════════════════════════════════════
 
-import { useState, useRef, useEffect } from "react";
+import { useState, useRef, useEffect, useCallback } from "react";
+import { createPortal } from "react-dom";
 import { useRouter } from "next/navigation";
 import {
   useUnreadCount,
@@ -71,6 +72,7 @@ interface NotificationBellProps {
 export function NotificationBell({ collapsed = false }: NotificationBellProps) {
   const [open, setOpen] = useState(false);
   const panelRef = useRef<HTMLDivElement>(null);
+  const buttonRef = useRef<HTMLButtonElement>(null);
   const router = useRouter();
   const { count, refetch: refetchCount } = useUnreadCount();
   const {
@@ -78,10 +80,27 @@ export function NotificationBell({ collapsed = false }: NotificationBellProps) {
     refetch: refetchList,
   } = useNotifications(10);
 
+  // Compute panel position relative to the bell button
+  const [panelPos, setPanelPos] = useState({ top: 0, left: 0 });
+
+  const updatePanelPos = useCallback(() => {
+    if (!buttonRef.current) return;
+    const rect = buttonRef.current.getBoundingClientRect();
+    // Position: to the right of the sidebar, aligned bottom with the button
+    setPanelPos({
+      top: Math.max(10, rect.bottom - 450), // 450 = max-height, clamped to viewport top
+      left: rect.right + 8,
+    });
+  }, []);
+
   // Close on outside click
   useEffect(() => {
     function handleClick(e: MouseEvent) {
-      if (panelRef.current && !panelRef.current.contains(e.target as Node)) {
+      const target = e.target as Node;
+      if (
+        panelRef.current && !panelRef.current.contains(target) &&
+        buttonRef.current && !buttonRef.current.contains(target)
+      ) {
         setOpen(false);
       }
     }
@@ -91,7 +110,10 @@ export function NotificationBell({ collapsed = false }: NotificationBellProps) {
 
   // Refresh list when opening panel
   function handleToggle() {
-    if (!open) refetchList();
+    if (!open) {
+      refetchList();
+      updatePanelPos();
+    }
     setOpen(!open);
   }
 
@@ -107,9 +129,10 @@ export function NotificationBell({ collapsed = false }: NotificationBellProps) {
   const notifications = notifData?.notifications ?? [];
 
   return (
-    <div className="notif-bell-container" ref={panelRef}>
+    <div className="notif-bell-container">
       {/* Bell Button */}
       <button
+        ref={buttonRef}
         className={`notif-bell-btn ${collapsed ? "collapsed" : ""}`}
         onClick={handleToggle}
         title="Notifications"
@@ -124,9 +147,13 @@ export function NotificationBell({ collapsed = false }: NotificationBellProps) {
         {!collapsed && <span className="notif-bell-label">Notifications</span>}
       </button>
 
-      {/* Dropdown Panel */}
-      {open && (
-        <div className="notif-panel">
+      {/* Dropdown Panel — Portal to escape sidebar overflow */}
+      {open && createPortal(
+        <div
+          className="notif-panel"
+          ref={panelRef}
+          style={{ top: panelPos.top, left: panelPos.left }}
+        >
           <div className="notif-panel-header">
             <span className="notif-panel-title">🔔 Notifications</span>
             {count > 0 && (
@@ -153,9 +180,6 @@ export function NotificationBell({ collapsed = false }: NotificationBellProps) {
                 tabIndex={0}
                 className={`notif-item ${n.read ? "read" : "unread"}`}
                 onClick={async () => {
-                  // Garde-fou 404 : markAsRead AVANT la navigation
-                  // Si l'issue/MR a été supprimée, Next.js affichera sa page 404
-                  // mais la notification sera déjà nettoyée du cache.
                   if (!n.read) {
                     await onMarkRead(n.id).catch(() => {});
                   }
@@ -179,7 +203,8 @@ export function NotificationBell({ collapsed = false }: NotificationBellProps) {
               </div>
             ))}
           </div>
-        </div>
+        </div>,
+        document.body
       )}
     </div>
   );
