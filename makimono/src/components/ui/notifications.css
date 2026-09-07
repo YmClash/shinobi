@@ -1,12 +1,20 @@
 /* ═══════════════════════════════════════════════════════════════
-   Phase 38 — Notifications (Le Carillon) 🔔
-   Styles for NotificationBell: bell, badge, dropdown panel.
+   Phase 38B — NotificationBell (Redesign) 🔔
+   Styles for bell button, badge, mini-dropdown panel.
+   Positioning handled by @floating-ui (inline styles).
    ═══════════════════════════════════════════════════════════════ */
 
 /* ── Bell Container ──────────────────────────────────────────── */
 
 .notif-bell-container {
   position: relative;
+}
+
+.notif-bell-icon-wrap {
+  position: relative;
+  display: inline-flex;
+  align-items: center;
+  flex-shrink: 0;
 }
 
 .notif-bell-btn {
@@ -88,14 +96,21 @@
   50% { box-shadow: 0 0 12px hsl(0, 85%, 55% / 0.7), 0 0 20px hsl(0, 85%, 55% / 0.3); }
 }
 
+/* ── Invisible Backdrop ──────────────────────────────────────── */
+
+.notif-backdrop {
+  position: fixed;
+  inset: 0;
+  z-index: 9998;
+  /* Transparent — just captures clicks */
+}
+
 /* ── Dropdown Panel ──────────────────────────────────────────── */
 
 .notif-panel {
-  position: absolute;
-  left: calc(100% + 8px);
-  bottom: 0;
-  width: 360px;
-  max-height: 450px;
+  /* Position managed by @floating-ui via inline style */
+  width: 340px;
+  max-height: 420px;
   border-radius: 0.75rem;
   background: hsl(var(--card) / 0.97);
   backdrop-filter: blur(16px);
@@ -108,6 +123,8 @@
   overflow: hidden;
   z-index: 9999;
   animation: notif-panel-in 0.2s ease-out;
+  display: flex;
+  flex-direction: column;
 }
 
 @keyframes notif-panel-in {
@@ -121,6 +138,8 @@
   }
 }
 
+/* ── Panel Header ────────────────────────────────────────────── */
+
 .notif-panel-header {
   display: flex;
   align-items: center;
@@ -128,6 +147,7 @@
   padding: 0.75rem 1rem;
   border-bottom: 1px solid hsl(var(--border));
   background: hsl(var(--muted) / 0.3);
+  flex-shrink: 0;
 }
 
 .notif-panel-title {
@@ -155,7 +175,7 @@
 /* ── Notification List ───────────────────────────────────────── */
 
 .notif-panel-list {
-  max-height: 340px;
+  flex: 1;
   overflow-y: auto;
   scrollbar-width: thin;
 }
@@ -246,4 +266,32 @@
   flex-shrink: 0;
   margin-top: 0.35rem;
   box-shadow: 0 0 6px hsl(var(--primary) / 0.5);
+}
+
+/* ── Panel Footer ────────────────────────────────────────────── */
+
+.notif-panel-footer {
+  padding: 0;
+  border-top: 1px solid hsl(var(--border));
+  flex-shrink: 0;
+}
+
+.notif-view-all-btn {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 100%;
+  padding: 0.65rem 1rem;
+  border: none;
+  background: transparent;
+  color: hsl(var(--primary));
+  font-size: 0.72rem;
+  font-weight: 600;
+  cursor: pointer;
+  transition: background 0.15s;
+  letter-spacing: 0.01em;
+}
+
+.notif-view-all-btn:hover {
+  background: hsl(var(--primary) / 0.06);
 }

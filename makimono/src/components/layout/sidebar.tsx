@@ -194,8 +194,10 @@ export function Sidebar() {
                 </div>
               )}
             </Link>
-            {/* Phase 38 — Notifications (Le Carillon) 🔔 */}
-            <NotificationBell collapsed={collapsed} />
+            {/* Phase 38B — Notifications (Redesign) 🔔 */}
+            <div className="flex items-center gap-0 w-full">
+              <NotificationBell collapsed={collapsed} />
+            </div>
             {/* Phase 25 — Service Accounts nav link */}
             {!collapsed && (
               <Link

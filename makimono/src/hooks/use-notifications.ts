@@ -105,6 +105,155 @@ export function useNotifications(
   return { data, error, loading, refetch: execute };
 }
 
+// ── Paginated Notifications Hook (Page /notifications) ──────
+
+type NotifFilter = "all" | "unread";
+
+interface UseNotificationsPage {
+  notifications: Notification[];
+  total: number;
+  unreadCount: number;
+  loading: boolean;
+  loadingMore: boolean;
+  error: string | null;
+  hasMore: boolean;
+  filter: NotifFilter;
+  setFilter: (f: NotifFilter) => void;
+  loadMore: () => void;
+  refetch: () => void;
+}
+
+const PAGE_SIZE = 20;
+
+/**
+ * Paginated notification hook for the dedicated /notifications page.
+ * Supports "all" / "unread" client-side filter and "load more" pagination.
+ */
+export function useNotificationsPage(): UseNotificationsPage {
+  const [all, setAll] = useState<Notification[]>([]);
+  const [total, setTotal] = useState(0);
+  const [unreadCount, setUnreadCount] = useState(0);
+  const [loading, setLoading] = useState(true);
+  const [loadingMore, setLoadingMore] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+  const [offset, setOffset] = useState(0);
+  const [hasMore, setHasMore] = useState(true);
+  const [filter, setFilter] = useState<NotifFilter>("all");
+  const mountedRef = useRef(true);
+
+  // Initial fetch
+  const fetchPage = useCallback(
+    async (pageOffset: number, append: boolean) => {
+      if (!append) setLoading(true);
+      else setLoadingMore(true);
+      setError(null);
+      try {
+        const result = await fetchNotifications(PAGE_SIZE, pageOffset);
+        if (!mountedRef.current) return;
+        if (append) {
+          setAll((prev) => [...prev, ...result.notifications]);
+        } else {
+          setAll(result.notifications);
+        }
+        setTotal(result.total);
+        setUnreadCount(result.unread_count);
+        setHasMore(pageOffset + PAGE_SIZE < result.total);
+      } catch (err) {
+        if (mountedRef.current) {
+          setError(err instanceof Error ? err.message : "Unknown error");
+        }
+      } finally {
+        if (mountedRef.current) {
+          setLoading(false);
+          setLoadingMore(false);
+        }
+      }
+    },
+    []
+  );
+
+  useEffect(() => {
+    mountedRef.current = true;
+    fetchPage(0, false);
+    return () => {
+      mountedRef.current = false;
+    };
+  }, [fetchPage]);
+
+  const loadMore = useCallback(() => {
+    const nextOffset = offset + PAGE_SIZE;
+    setOffset(nextOffset);
+    fetchPage(nextOffset, true);
+  }, [offset, fetchPage]);
+
+  const refetch = useCallback(() => {
+    setOffset(0);
+    fetchPage(0, false);
+  }, [fetchPage]);
+
+  // Client-side unread filter (applied on already-fetched data)
+  const filtered =
+    filter === "unread" ? all.filter((n) => !n.read) : all;
+
+  return {
+    notifications: filtered,
+    total,
+    unreadCount,
+    loading,
+    loadingMore,
+    error,
+    hasMore: filter === "all" ? hasMore : false, // disable load-more when filtering
+    filter,
+    setFilter,
+    loadMore,
+    refetch,
+  };
+}
+
+// ── Date Grouping Utility ───────────────────────────────────
+
+/** Group notifications by relative date for GitHub-style display. */
+export function groupByDate(
+  notifications: Notification[]
+): { label: string; items: Notification[] }[] {
+  const now = new Date();
+  const todayStr = now.toDateString();
+  const yesterday = new Date(now);
+  yesterday.setDate(yesterday.getDate() - 1);
+  const yesterdayStr = yesterday.toDateString();
+
+  const weekAgo = new Date(now);
+  weekAgo.setDate(weekAgo.getDate() - 7);
+
+  const groups: Record<string, Notification[]> = {};
+  const order: string[] = [];
+
+  for (const n of notifications) {
+    const d = new Date(n.created_at);
+    let label: string;
+    if (d.toDateString() === todayStr) {
+      label = "Aujourd'hui";
+    } else if (d.toDateString() === yesterdayStr) {
+      label = "Hier";
+    } else if (d >= weekAgo) {
+      label = "Cette semaine";
+    } else {
+      label = d.toLocaleDateString("fr-FR", {
+        day: "numeric",
+        month: "long",
+        year: "numeric",
+      });
+    }
+    if (!groups[label]) {
+      groups[label] = [];
+      order.push(label);
+    }
+    groups[label].push(n);
+  }
+
+  return order.map((label) => ({ label, items: groups[label] }));
+}
+
 // ── Mutation Helpers ────────────────────────────────────────
 
 /** Mark a notification as read, then refetch. */
