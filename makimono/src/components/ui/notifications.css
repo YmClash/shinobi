@@ -112,16 +112,14 @@
   width: 340px;
   max-height: 420px;
   border-radius: 0.75rem;
-  background: hsl(var(--card) / 0.97);
-  backdrop-filter: blur(16px);
-  -webkit-backdrop-filter: blur(16px);
-  border: 1px solid hsl(var(--border));
+  /* Vegapunk Tweak — Existence physique garantie */
+  background-color: hsl(var(--card));
+  border: 1px solid hsl(var(--border) / 0.5);
   box-shadow:
-    0 12px 48px hsl(0 0% 0% / 0.35),
-    0 4px 12px hsl(0 0% 0% / 0.2),
-    inset 0 1px 0 hsl(var(--foreground) / 0.05);
+    0 10px 40px -10px rgba(0, 0, 0, 0.5),
+    0 4px 12px rgba(0, 0, 0, 0.25);
   overflow: hidden;
-  z-index: 9999;
+  z-index: 100;
   animation: notif-panel-in 0.2s ease-out;
   display: flex;
   flex-direction: column;
@@ -146,7 +144,7 @@
   justify-content: space-between;
   padding: 0.75rem 1rem;
   border-bottom: 1px solid hsl(var(--border));
-  background: hsl(var(--muted) / 0.3);
+  background-color: hsl(var(--muted));
   flex-shrink: 0;
 }
 
