@@ -1,4 +1,4 @@
-//! PostgreSQL implementation du FederationRepository — Phase 27 + 27-quater.
+//! PostgreSQL implementation du FederationRepository — Phase 27 + 27-quater + 37D.
 //!
 //! Persiste les keypairs RSA, follows fédérés, outbox et inbox dans PostgreSQL.
 
@@ -7,7 +7,7 @@ use sqlx::PgPool;
 use tracing::info;
 use uuid::Uuid;
 
-use domain::entities::federation::{FederationActivity, FederationFollow, FederationKeypair, InboxActivity};
+use domain::entities::federation::{FederationActivity, FederationFollow, FederationKeypair, InboxActivity, RemoteFork};
 use domain::errors::DomainError;
 use domain::ports::federation_repository::FederationRepository;
 
@@ -324,6 +324,61 @@ impl FederationRepository for PostgresFederationRepository {
 
         Ok(row.0)
     }
+
+    // ── Remote Forks (Phase 37D — Fork Fédéré) ───────────────
+
+    async fn save_remote_fork(&self, fork: &RemoteFork) -> Result<(), DomainError> {
+        sqlx::query(
+            "INSERT INTO remote_forks (id, repository_id, remote_domain, remote_actor_uri, remote_repo_url, status, created_at)
+             VALUES ($1, $2, $3, $4, $5, $6, $7)
+             ON CONFLICT (repository_id, remote_actor_uri) DO NOTHING"
+        )
+        .bind(&fork.id)
+        .bind(&fork.repository_id)
+        .bind(&fork.remote_domain)
+        .bind(&fork.remote_actor_uri)
+        .bind(&fork.remote_repo_url)
+        .bind(&fork.status)
+        .bind(&fork.created_at)
+        .execute(&self.pool)
+        .await
+        .map_err(|e| DomainError::Persistence(e.to_string()))?;
+
+        info!(
+            fork_id = %fork.id,
+            repo_id = %fork.repository_id,
+            remote_domain = %fork.remote_domain,
+            remote_actor = %fork.remote_actor_uri,
+            "🍴 Remote fork enregistré (Phase 37D)"
+        );
+
+        Ok(())
+    }
+
+    async fn count_remote_forks(&self, repo_id: &Uuid) -> Result<i64, DomainError> {
+        let row: (i64,) = sqlx::query_as(
+            "SELECT COUNT(*) FROM remote_forks WHERE repository_id = $1 AND status = 'accepted'"
+        )
+        .bind(repo_id)
+        .fetch_one(&self.pool)
+        .await
+        .map_err(|e| DomainError::Persistence(e.to_string()))?;
+
+        Ok(row.0)
+    }
+
+    async fn has_remote_fork(&self, repo_id: &Uuid, remote_actor_uri: &str) -> Result<bool, DomainError> {
+        let row: (bool,) = sqlx::query_as(
+            "SELECT EXISTS(SELECT 1 FROM remote_forks WHERE repository_id = $1 AND remote_actor_uri = $2)"
+        )
+        .bind(repo_id)
+        .bind(remote_actor_uri)
+        .fetch_one(&self.pool)
+        .await
+        .map_err(|e| DomainError::Persistence(e.to_string()))?;
+
+        Ok(row.0)
+    }
 }
 
 // ── SQLx row types ──────────────────────────────────────────────────
@@ -371,5 +426,13 @@ struct InboxRow {
     processed_at: Option<chrono::DateTime<chrono::Utc>>,
 }
 
-
-
+#[derive(sqlx::FromRow)]
+struct RemoteForkRow {
+    id: Uuid,
+    repository_id: Uuid,
+    remote_domain: String,
+    remote_actor_uri: String,
+    remote_repo_url: Option<String>,
+    status: String,
+    created_at: chrono::DateTime<chrono::Utc>,
+}

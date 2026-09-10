@@ -896,8 +896,10 @@ async fn get_repository_handler(
 
     let repository = resolve_repo_with_access_check(&state, &owner, &repo, &auth).await?;
 
-    // Phase 37B : compter les forks on-the-fly
-    let fork_count = state.repo_repo.count_forks(&repository.id).await.unwrap_or(0);
+    // Phase 37B + 37D : compter les forks (local + distant agrégé)
+    let local_forks = state.repo_repo.count_forks(&repository.id).await.unwrap_or(0);
+    let remote_forks = state.federation_repo.count_remote_forks(&repository.id).await.unwrap_or(0);
+    let fork_count = local_forks + remote_forks as u64;
     let mut json = RepositoryJson::from(repository);
     json.fork_count = Some(fork_count);
 

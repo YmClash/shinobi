@@ -226,6 +226,13 @@ impl InboxWorker {
                 self.handle_undo(activity).await
             }
 
+            // ── Offer (Phase 37D — Fork Fédéré) ──────────────
+            // Accept a déjà été envoyé par inbox_handler.
+            // Le worker confirme le traitement.
+            "Offer" => {
+                self.handle_offer(activity).await
+            }
+
             // ── Inconnu ───────────────────────────────────────
             unknown_type => {
                 warn!(
@@ -352,6 +359,26 @@ impl InboxWorker {
 
         Ok(())
     }
+
+    /// Phase 37D — Offer(Fork) traitement différé.
+    ///
+    /// L'Accept(Offer) a déjà été envoyé par `inbox_handler` (réponse synchrone).
+    /// Le worker confirme simplement le traitement et logue les métadonnées.
+    async fn handle_offer(&self, activity: &InboxActivity) -> Result<(), String> {
+        let object_type = activity.activity_json
+            .get("object")
+            .and_then(|o| o.get("type"))
+            .and_then(|v| v.as_str())
+            .unwrap_or("Unknown");
+
+        info!(
+            activity_id = %activity.id,
+            remote_actor = %activity.remote_actor_uri,
+            object_type = %object_type,
+            "🤝 Inbox Worker — Offer({object_type}) traité (Accept envoyé par inbox_handler)"
+        );
+        Ok(())
+    }
 }
 
 // ── Tests ─────────────────────────────────────────────────────────────
@@ -398,6 +425,10 @@ mod tests {
         async fn count_inbox_activities(&self, _: &Uuid) -> Result<i64, DomainError> { Ok(0) }
         async fn count_local_users(&self) -> Result<i64, DomainError> { Ok(0) }
         async fn count_local_repos(&self) -> Result<i64, DomainError> { Ok(0) }
+        // Phase 37D remote fork stubs
+        async fn save_remote_fork(&self, _fork: &domain::entities::federation::RemoteFork) -> Result<(), DomainError> { Ok(()) }
+        async fn count_remote_forks(&self, _repo_id: &Uuid) -> Result<i64, DomainError> { Ok(0) }
+        async fn has_remote_fork(&self, _repo_id: &Uuid, _remote_actor_uri: &str) -> Result<bool, DomainError> { Ok(false) }
 
         async fn mark_inbox_processed(&self, activity_id: &Uuid) -> Result<(), DomainError> {
             self.processed_ids.lock().unwrap().push(*activity_id);

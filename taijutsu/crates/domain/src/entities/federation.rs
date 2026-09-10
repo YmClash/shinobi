@@ -132,6 +132,41 @@ pub struct InboxActivity {
     pub processed_at: Option<DateTime<Utc>>,
 }
 
+// ── Fork distant (Phase 37D) ─────────────────────────────────────────
+
+/// Fork distant d'un dépôt local — Phase 37D (La Diplomatie Décentralisée).
+///
+/// Enregistré quand une forge distante envoie un `Offer(Fork)` accepté
+/// par Shinobi. Ne contient aucune donnée Git — le clone est effectué
+/// par la forge distante via le Git Bridge HTTP existant.
+///
+/// Stocké dans PostgreSQL (table `remote_forks`).
+/// Contrainte UNIQUE `(repository_id, remote_actor_uri)` en SQL
+/// pour éviter qu'une instance buggée ne spamme de forks identiques.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct RemoteFork {
+    /// Identifiant unique.
+    pub id: Uuid,
+
+    /// ID du dépôt local forké.
+    pub repository_id: Uuid,
+
+    /// Domaine de la forge distante (ex: `"forgejo.org"`).
+    pub remote_domain: String,
+
+    /// URI ActivityPub de l'acteur distant (ex: `"https://forgejo.org/users/bob"`).
+    pub remote_actor_uri: String,
+
+    /// URL du fork sur la forge distante (si fournie dans l'Offer).
+    pub remote_repo_url: Option<String>,
+
+    /// Statut de l'offre : `"accepted"` ou `"rejected"`.
+    pub status: String,
+
+    /// Date de création.
+    pub created_at: DateTime<Utc>,
+}
+
 // ── Tests ─────────────────────────────────────────────────────────────
 
 #[cfg(test)]
@@ -194,5 +229,21 @@ mod tests {
         assert_eq!(inbox.activity_type, "Push");
         assert!(!inbox.processed);
         assert!(inbox.processed_at.is_none());
+    }
+
+    #[test]
+    fn test_remote_fork_creation() {
+        let fork = RemoteFork {
+            id: Uuid::new_v4(),
+            repository_id: Uuid::new_v4(),
+            remote_domain: "forgejo.org".into(),
+            remote_actor_uri: "https://forgejo.org/users/bob".into(),
+            remote_repo_url: Some("https://forgejo.org/bob/le-wm".into()),
+            status: "accepted".into(),
+            created_at: Utc::now(),
+        };
+        assert_eq!(fork.status, "accepted");
+        assert_eq!(fork.remote_domain, "forgejo.org");
+        assert!(fork.remote_repo_url.is_some());
     }
 }

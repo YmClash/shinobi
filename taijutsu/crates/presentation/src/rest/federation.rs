@@ -1,4 +1,4 @@
-//! Handlers de fédération ActivityPub / ForgeFed — Phase 27 + 27-quater.
+//! Handlers de fédération ActivityPub / ForgeFed — Phase 27 + 27-quater + 37D.
 //!
 //! Endpoints de découverte (WebFinger, NodeInfo) et protocole ActivityPub
 //! (Actor profiles, Inbox, Outbox, Followers, Following, Inbox Activities).
@@ -9,23 +9,25 @@
 //!   `application/ld+json; profile="https://www.w3.org/ns/activitystreams"`
 //! - **Clock Skew** : Vérification 30s sur le header Date des requêtes Inbox
 
+use axum::Json;
 use axum::extract::{Path, Query, State};
 use axum::http::{HeaderMap, StatusCode, header};
 use axum::response::{IntoResponse, Response};
-use axum::Json;
 use chrono::Utc;
 use serde::Deserialize;
 use tracing::{info, warn};
 use uuid::Uuid;
 
-use domain::entities::federation::{FederationActivity, FederationFollow, InboxActivity};
+use domain::entities::federation::{
+    FederationActivity, FederationFollow, InboxActivity, RemoteFork,
+};
 use domain::errors::DomainError;
 
 use crate::errors::AppError;
 use crate::state::SharedState;
 
 // Helper partagé : détecte http vs https selon le domaine (DEBT-002)
-use infrastructure::federation::activity_builder::federation_scheme;
+use infrastructure::federation::activity_builder::{accept_offer_activity, federation_scheme};
 
 // ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 // ── Phase 27A — Discovery Layer
@@ -51,19 +53,25 @@ pub async fn webfinger_handler(
     info!(resource = %params.resource, "🌐 WebFinger lookup");
 
     // Parse "acct:handle@domain" → handle
-    let handle = parse_acct_resource(&params.resource, &state.federation_domain)
-        .ok_or_else(|| AppError(DomainError::BusinessRule(
-            format!("Invalid WebFinger resource: {}. Expected acct:handle@{}", params.resource, state.federation_domain),
-        )))?;
+    let handle =
+        parse_acct_resource(&params.resource, &state.federation_domain).ok_or_else(|| {
+            AppError(DomainError::BusinessRule(format!(
+                "Invalid WebFinger resource: {}. Expected acct:handle@{}",
+                params.resource, state.federation_domain
+            )))
+        })?;
 
     // Vérifier que l'acteur existe
     let actor = state
         .actor_repo
         .find_by_handle(&handle)
         .await?
-        .ok_or_else(|| AppError(DomainError::BusinessRule(
-            format!("Acteur '{}' introuvable", handle),
-        )))?;
+        .ok_or_else(|| {
+            AppError(DomainError::BusinessRule(format!(
+                "Acteur '{}' introuvable",
+                handle
+            )))
+        })?;
 
     let domain = &state.federation_domain;
     let scheme = federation_scheme(domain);
@@ -94,7 +102,8 @@ pub async fn webfinger_handler(
         StatusCode::OK,
         [(header::CONTENT_TYPE, "application/jrd+json")],
         Json(jrd),
-    ).into_response())
+    )
+        .into_response())
 }
 
 /// NodeInfo well-known — `GET /.well-known/nodeinfo`
@@ -180,7 +189,8 @@ pub async fn actor_ap_handler(
                 "error": "Not Acceptable",
                 "message": "This endpoint requires Accept: application/activity+json",
             })),
-        ).into_response());
+        )
+            .into_response());
     }
 
     info!(handle = %handle, "🌐 ActivityPub actor fetch");
@@ -189,9 +199,12 @@ pub async fn actor_ap_handler(
         .actor_repo
         .find_by_handle(&handle)
         .await?
-        .ok_or_else(|| AppError(DomainError::BusinessRule(
-            format!("Acteur '{}' introuvable", handle),
-        )))?;
+        .ok_or_else(|| {
+            AppError(DomainError::BusinessRule(format!(
+                "Acteur '{}' introuvable",
+                handle
+            )))
+        })?;
 
     let domain = &state.federation_domain;
     let scheme = federation_scheme(domain);
@@ -276,9 +289,13 @@ pub async fn actor_ap_handler(
 
     Ok((
         StatusCode::OK,
-        [(header::CONTENT_TYPE, "application/activity+json; charset=utf-8")],
+        [(
+            header::CONTENT_TYPE,
+            "application/activity+json; charset=utf-8",
+        )],
         Json(ap_actor),
-    ).into_response())
+    )
+        .into_response())
 }
 
 // ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
@@ -312,20 +329,31 @@ pub async fn inbox_handler(
             return Ok((
                 StatusCode::UNAUTHORIZED,
                 Json(serde_json::json!({ "error": e.to_string() })),
-            ).into_response());
+            )
+                .into_response());
         }
     }
 
     // ── Phase 27-bis-A : Vérification de la signature HTTP ──
-    let signature_header = headers.get("signature")
+    let signature_header = headers
+        .get("signature")
         .and_then(|v| v.to_str().ok())
-        .ok_or_else(|| AppError(DomainError::Unauthorized(
-            "Missing Signature header — federation requires HTTP Signatures (Draft-Cavage-12)".into()
-        )))?;
+        .ok_or_else(|| {
+            AppError(DomainError::Unauthorized(
+                "Missing Signature header — federation requires HTTP Signatures (Draft-Cavage-12)"
+                    .into(),
+            ))
+        })?;
 
     // Parser le header pour extraire le keyId
-    let parsed_sig = infrastructure::federation::http_signature::parse_signature_header(signature_header)
-        .map_err(|e| AppError(DomainError::Unauthorized(format!("Invalid Signature header: {}", e))))?;
+    let parsed_sig =
+        infrastructure::federation::http_signature::parse_signature_header(signature_header)
+            .map_err(|e| {
+                AppError(DomainError::Unauthorized(format!(
+                    "Invalid Signature header: {}",
+                    e
+                )))
+            })?;
 
     // Fetch la clé publique distante (avec cache SSRF-guarded)
     let fetcher = infrastructure::federation::remote_actor::RemoteActorFetcher::new();
@@ -350,9 +378,13 @@ pub async fn inbox_handler(
         "POST",
         &format!("/actors/{}/inbox", handle),
         &request_headers,
-    ).map_err(|e| {
+    )
+    .map_err(|e| {
         warn!(key_id = %parsed_sig.key_id, error = %e, "🛡️ Signature verification failed");
-        AppError(DomainError::Unauthorized(format!("Invalid HTTP Signature: {}", e)))
+        AppError(DomainError::Unauthorized(format!(
+            "Invalid HTTP Signature: {}",
+            e
+        )))
     })?;
 
     info!(key_id = %parsed_sig.key_id, "✅ HTTP Signature verified");
@@ -362,26 +394,35 @@ pub async fn inbox_handler(
         .actor_repo
         .find_by_handle(&handle)
         .await?
-        .ok_or_else(|| AppError(DomainError::BusinessRule(
-            format!("Acteur '{}' introuvable", handle),
-        )))?;
+        .ok_or_else(|| {
+            AppError(DomainError::BusinessRule(format!(
+                "Acteur '{}' introuvable",
+                handle
+            )))
+        })?;
 
     // Dispatch selon le type d'activité
-    let activity_type = body.get("type")
+    let activity_type = body
+        .get("type")
         .and_then(|v| v.as_str())
         .unwrap_or("Unknown");
 
     match activity_type {
         "Follow" => {
-            let follower_uri = body.get("actor")
+            let follower_uri = body
+                .get("actor")
                 .and_then(|v| v.as_str())
                 .unwrap_or("")
                 .to_string();
 
             if follower_uri.is_empty() {
-                return Ok((StatusCode::BAD_REQUEST, Json(serde_json::json!({
-                    "error": "Missing 'actor' field in Follow activity"
-                }))).into_response());
+                return Ok((
+                    StatusCode::BAD_REQUEST,
+                    Json(serde_json::json!({
+                        "error": "Missing 'actor' field in Follow activity"
+                    })),
+                )
+                    .into_response());
             }
 
             info!(
@@ -442,7 +483,9 @@ pub async fn inbox_handler(
                     &target_inbox,
                     &keypair.private_key_pem,
                     &keypair.key_id,
-                ).await {
+                )
+                .await
+                {
                     warn!(target = %target_inbox, error = %e, "⚠️ Accept delivery failed (non-fatal)");
                 }
 
@@ -461,42 +504,69 @@ pub async fn inbox_handler(
                 }
             });
 
-            Ok((StatusCode::ACCEPTED, Json(serde_json::json!({
-                "status": "accepted",
-                "type": "Follow",
-            }))).into_response())
+            Ok((
+                StatusCode::ACCEPTED,
+                Json(serde_json::json!({
+                    "status": "accepted",
+                    "type": "Follow",
+                })),
+            )
+                .into_response())
         }
         "Undo" => {
             // Vérifier si c'est un Undo(Follow)
-            let inner_type = body.get("object")
+            let inner_type = body
+                .get("object")
                 .and_then(|o| o.get("type"))
                 .and_then(|v| v.as_str())
                 .unwrap_or("");
 
             if inner_type == "Follow" {
-                let follower_uri = body.get("actor")
-                    .and_then(|v| v.as_str())
-                    .unwrap_or("");
+                let follower_uri = body.get("actor").and_then(|v| v.as_str()).unwrap_or("");
 
                 info!(follower = %follower_uri, "👋 Undo Follow reçu");
-                state.federation_repo.delete_follow(follower_uri, &actor.id).await?;
+                state
+                    .federation_repo
+                    .delete_follow(follower_uri, &actor.id)
+                    .await?;
             } else {
                 // Undo d'autre chose — archiver dans l'inbox
                 let (obj_type, obj_uri) = extract_object_metadata(&body);
-                let remote_actor_uri = body.get("actor").and_then(|v| v.as_str()).unwrap_or("").to_string();
-                persist_inbox_activity(&state, actor.id, &remote_actor_uri, "Undo", &obj_type, &obj_uri, &body).await;
+                let remote_actor_uri = body
+                    .get("actor")
+                    .and_then(|v| v.as_str())
+                    .unwrap_or("")
+                    .to_string();
+                persist_inbox_activity(
+                    &state,
+                    actor.id,
+                    &remote_actor_uri,
+                    "Undo",
+                    &obj_type,
+                    &obj_uri,
+                    &body,
+                )
+                .await;
             }
 
-            Ok((StatusCode::ACCEPTED, Json(serde_json::json!({
-                "status": "accepted",
-                "type": "Undo",
-            }))).into_response())
+            Ok((
+                StatusCode::ACCEPTED,
+                Json(serde_json::json!({
+                    "status": "accepted",
+                    "type": "Undo",
+                })),
+            )
+                .into_response())
         }
 
         // ── Phase 27-quater : Activités ForgeFed étendues ──
         "Create" | "Update" | "Delete" => {
             let (obj_type, obj_uri) = extract_object_metadata(&body);
-            let remote_actor_uri = body.get("actor").and_then(|v| v.as_str()).unwrap_or("").to_string();
+            let remote_actor_uri = body
+                .get("actor")
+                .and_then(|v| v.as_str())
+                .unwrap_or("")
+                .to_string();
 
             info!(
                 activity_type = %activity_type,
@@ -506,25 +576,48 @@ pub async fn inbox_handler(
                 "📥 ForgeFed {} reçu — archivé dans l'inbox", activity_type
             );
 
-            persist_inbox_activity(&state, actor.id, &remote_actor_uri, activity_type, &obj_type, &obj_uri, &body).await;
+            persist_inbox_activity(
+                &state,
+                actor.id,
+                &remote_actor_uri,
+                activity_type,
+                &obj_type,
+                &obj_uri,
+                &body,
+            )
+            .await;
 
-            Ok((StatusCode::ACCEPTED, Json(serde_json::json!({
-                "status": "accepted",
-                "type": activity_type,
-                "objectType": obj_type,
-            }))).into_response())
+            Ok((
+                StatusCode::ACCEPTED,
+                Json(serde_json::json!({
+                    "status": "accepted",
+                    "type": activity_type,
+                    "objectType": obj_type,
+                })),
+            )
+                .into_response())
         }
         "Push" => {
             // ForgeFed §3.6.2 : Reporting Pushed Commits
-            let remote_actor_uri = body.get("actor").and_then(|v| v.as_str()).unwrap_or("").to_string();
+            let remote_actor_uri = body
+                .get("actor")
+                .and_then(|v| v.as_str())
+                .unwrap_or("")
+                .to_string();
 
             // Extraire les métadonnées spécifiques au Push
-            let target_repo = body.get("target")
+            let target_repo = body
+                .get("target")
                 .and_then(|v| v.as_str())
-                .or_else(|| body.get("object").and_then(|o| o.get("target")).and_then(|v| v.as_str()))
+                .or_else(|| {
+                    body.get("object")
+                        .and_then(|o| o.get("target"))
+                        .and_then(|v| v.as_str())
+                })
                 .unwrap_or("");
 
-            let total_commits = body.get("object")
+            let total_commits = body
+                .get("object")
                 .and_then(|o| o.get("totalItems"))
                 .and_then(|v| v.as_u64())
                 .unwrap_or(0);
@@ -536,18 +629,35 @@ pub async fn inbox_handler(
                 "📥 ForgeFed Push reçu — archivé dans l'inbox"
             );
 
-            persist_inbox_activity(&state, actor.id, &remote_actor_uri, "Push", "Repository", target_repo, &body).await;
+            persist_inbox_activity(
+                &state,
+                actor.id,
+                &remote_actor_uri,
+                "Push",
+                "Repository",
+                target_repo,
+                &body,
+            )
+            .await;
 
-            Ok((StatusCode::ACCEPTED, Json(serde_json::json!({
-                "status": "accepted",
-                "type": "Push",
-                "totalCommits": total_commits,
-            }))).into_response())
+            Ok((
+                StatusCode::ACCEPTED,
+                Json(serde_json::json!({
+                    "status": "accepted",
+                    "type": "Push",
+                    "totalCommits": total_commits,
+                })),
+            )
+                .into_response())
         }
         "Announce" => {
             // Boost/Partage (Mastodon-compatible)
             let (obj_type, obj_uri) = extract_object_metadata(&body);
-            let remote_actor_uri = body.get("actor").and_then(|v| v.as_str()).unwrap_or("").to_string();
+            let remote_actor_uri = body
+                .get("actor")
+                .and_then(|v| v.as_str())
+                .unwrap_or("")
+                .to_string();
 
             info!(
                 remote_actor = %remote_actor_uri,
@@ -555,17 +665,36 @@ pub async fn inbox_handler(
                 "📥 Announce reçu — archivé dans l'inbox"
             );
 
-            persist_inbox_activity(&state, actor.id, &remote_actor_uri, "Announce", &obj_type, &obj_uri, &body).await;
+            persist_inbox_activity(
+                &state,
+                actor.id,
+                &remote_actor_uri,
+                "Announce",
+                &obj_type,
+                &obj_uri,
+                &body,
+            )
+            .await;
 
-            Ok((StatusCode::ACCEPTED, Json(serde_json::json!({
-                "status": "accepted",
-                "type": "Announce",
-            }))).into_response())
+            Ok((
+                StatusCode::ACCEPTED,
+                Json(serde_json::json!({
+                    "status": "accepted",
+                    "type": "Announce",
+                })),
+            )
+                .into_response())
         }
+        // ── Phase 37D : Fork Fédéré — Offer(Fork) ───────────────
+        "Offer" => handle_offer_fork(&state, &actor, &body, &remote_actor).await,
         _ => {
             // Type inconnu : archive-first (on persiste quand même)
             let (obj_type, obj_uri) = extract_object_metadata(&body);
-            let remote_actor_uri = body.get("actor").and_then(|v| v.as_str()).unwrap_or("").to_string();
+            let remote_actor_uri = body
+                .get("actor")
+                .and_then(|v| v.as_str())
+                .unwrap_or("")
+                .to_string();
 
             info!(
                 activity_type = %activity_type,
@@ -573,13 +702,26 @@ pub async fn inbox_handler(
                 "📋 Activité fédérée inconnue — archivée dans l'inbox"
             );
 
-            persist_inbox_activity(&state, actor.id, &remote_actor_uri, activity_type, &obj_type, &obj_uri, &body).await;
+            persist_inbox_activity(
+                &state,
+                actor.id,
+                &remote_actor_uri,
+                activity_type,
+                &obj_type,
+                &obj_uri,
+                &body,
+            )
+            .await;
 
-            Ok((StatusCode::ACCEPTED, Json(serde_json::json!({
-                "status": "accepted",
-                "type": activity_type,
-                "note": "Activity archived in inbox"
-            }))).into_response())
+            Ok((
+                StatusCode::ACCEPTED,
+                Json(serde_json::json!({
+                    "status": "accepted",
+                    "type": activity_type,
+                    "note": "Activity archived in inbox"
+                })),
+            )
+                .into_response())
         }
     }
 }
@@ -594,9 +736,13 @@ pub async fn outbox_handler(
     headers: HeaderMap,
 ) -> Result<Response, AppError> {
     if !accepts_activitypub(&headers) {
-        return Ok((StatusCode::NOT_ACCEPTABLE, Json(serde_json::json!({
-            "error": "Requires Accept: application/activity+json",
-        }))).into_response());
+        return Ok((
+            StatusCode::NOT_ACCEPTABLE,
+            Json(serde_json::json!({
+                "error": "Requires Accept: application/activity+json",
+            })),
+        )
+            .into_response());
     }
 
     // Vérifier que l'acteur existe
@@ -604,9 +750,12 @@ pub async fn outbox_handler(
         .actor_repo
         .find_by_handle(&handle)
         .await?
-        .ok_or_else(|| AppError(DomainError::BusinessRule(
-            format!("Acteur '{}' introuvable", handle),
-        )))?;
+        .ok_or_else(|| {
+            AppError(DomainError::BusinessRule(format!(
+                "Acteur '{}' introuvable",
+                handle
+            )))
+        })?;
 
     let domain = &state.federation_domain;
     let scheme = federation_scheme(domain);
@@ -619,7 +768,10 @@ pub async fn outbox_handler(
 
     Ok((
         StatusCode::OK,
-        [(header::CONTENT_TYPE, "application/activity+json; charset=utf-8")],
+        [(
+            header::CONTENT_TYPE,
+            "application/activity+json; charset=utf-8",
+        )],
         Json(serde_json::json!({
             "@context": "https://www.w3.org/ns/activitystreams",
             "id": outbox_uri,
@@ -627,7 +779,8 @@ pub async fn outbox_handler(
             "totalItems": total,
             "orderedItems": items,
         })),
-    ).into_response())
+    )
+        .into_response())
 }
 
 /// Followers ActivityPub — `GET /actors/{handle}/followers`
@@ -639,18 +792,25 @@ pub async fn followers_handler(
     headers: HeaderMap,
 ) -> Result<Response, AppError> {
     if !accepts_activitypub(&headers) {
-        return Ok((StatusCode::NOT_ACCEPTABLE, Json(serde_json::json!({
-            "error": "Requires Accept: application/activity+json",
-        }))).into_response());
+        return Ok((
+            StatusCode::NOT_ACCEPTABLE,
+            Json(serde_json::json!({
+                "error": "Requires Accept: application/activity+json",
+            })),
+        )
+            .into_response());
     }
 
     let actor = state
         .actor_repo
         .find_by_handle(&handle)
         .await?
-        .ok_or_else(|| AppError(DomainError::BusinessRule(
-            format!("Acteur '{}' introuvable", handle),
-        )))?;
+        .ok_or_else(|| {
+            AppError(DomainError::BusinessRule(format!(
+                "Acteur '{}' introuvable",
+                handle
+            )))
+        })?;
 
     let followers = state.federation_repo.list_followers(&actor.id).await?;
     let count = followers.len();
@@ -662,7 +822,10 @@ pub async fn followers_handler(
 
     Ok((
         StatusCode::OK,
-        [(header::CONTENT_TYPE, "application/activity+json; charset=utf-8")],
+        [(
+            header::CONTENT_TYPE,
+            "application/activity+json; charset=utf-8",
+        )],
         Json(serde_json::json!({
             "@context": "https://www.w3.org/ns/activitystreams",
             "id": followers_uri,
@@ -670,7 +833,8 @@ pub async fn followers_handler(
             "totalItems": count,
             "orderedItems": uris,
         })),
-    ).into_response())
+    )
+        .into_response())
 }
 
 /// Following ActivityPub — `GET /actors/{handle}/following`
@@ -682,18 +846,25 @@ pub async fn following_handler(
     headers: HeaderMap,
 ) -> Result<Response, AppError> {
     if !accepts_activitypub(&headers) {
-        return Ok((StatusCode::NOT_ACCEPTABLE, Json(serde_json::json!({
-            "error": "Requires Accept: application/activity+json",
-        }))).into_response());
+        return Ok((
+            StatusCode::NOT_ACCEPTABLE,
+            Json(serde_json::json!({
+                "error": "Requires Accept: application/activity+json",
+            })),
+        )
+            .into_response());
     }
 
     let _actor = state
         .actor_repo
         .find_by_handle(&handle)
         .await?
-        .ok_or_else(|| AppError(DomainError::BusinessRule(
-            format!("Acteur '{}' introuvable", handle),
-        )))?;
+        .ok_or_else(|| {
+            AppError(DomainError::BusinessRule(format!(
+                "Acteur '{}' introuvable",
+                handle
+            )))
+        })?;
 
     let domain = &state.federation_domain;
     let scheme = federation_scheme(domain);
@@ -701,7 +872,10 @@ pub async fn following_handler(
 
     Ok((
         StatusCode::OK,
-        [(header::CONTENT_TYPE, "application/activity+json; charset=utf-8")],
+        [(
+            header::CONTENT_TYPE,
+            "application/activity+json; charset=utf-8",
+        )],
         Json(serde_json::json!({
             "@context": "https://www.w3.org/ns/activitystreams",
             "id": following_uri,
@@ -709,7 +883,8 @@ pub async fn following_handler(
             "totalItems": 0,
             "orderedItems": [],
         })),
-    ).into_response())
+    )
+        .into_response())
 }
 
 // ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
@@ -739,7 +914,8 @@ pub async fn repo_ap_handler(
                 "error": "Not Acceptable",
                 "message": "This endpoint requires Accept: application/activity+json",
             })),
-        ).into_response());
+        )
+            .into_response());
     }
 
     info!(owner = %owner, repo = %repo_name, "🌐 ForgeFed Repository profile fetch");
@@ -749,17 +925,23 @@ pub async fn repo_ap_handler(
         .actor_repo
         .find_by_handle(&owner)
         .await?
-        .ok_or_else(|| AppError(DomainError::BusinessRule(
-            format!("Acteur '{}' introuvable", owner),
-        )))?;
+        .ok_or_else(|| {
+            AppError(DomainError::BusinessRule(format!(
+                "Acteur '{}' introuvable",
+                owner
+            )))
+        })?;
 
     let repository = state
         .repo_repo
         .find_by_owner_and_name(&actor.id, &repo_name)
         .await?
-        .ok_or_else(|| AppError(DomainError::BusinessRule(
-            format!("Dépôt '{}/{}' introuvable", owner, repo_name),
-        )))?;
+        .ok_or_else(|| {
+            AppError(DomainError::BusinessRule(format!(
+                "Dépôt '{}/{}' introuvable",
+                owner, repo_name
+            )))
+        })?;
 
     let domain = &state.federation_domain;
     let scheme = federation_scheme(domain);
@@ -771,7 +953,10 @@ pub async fn repo_ap_handler(
         if let Ok(Some(parent)) = state.repo_repo.find_by_id(&parent_id).await {
             // Résoudre le handle du propriétaire parent
             if let Ok(Some(parent_actor)) = state.actor_repo.find_by_id(&parent.owner_id).await {
-                Some(format!("{}://{}/repos/{}/{}", scheme, domain, parent_actor.handle, parent.name))
+                Some(format!(
+                    "{}://{}/repos/{}/{}",
+                    scheme, domain, parent_actor.handle, parent.name
+                ))
             } else {
                 None
             }
@@ -799,9 +984,13 @@ pub async fn repo_ap_handler(
 
     Ok((
         StatusCode::OK,
-        [(header::CONTENT_TYPE, "application/activity+json; charset=utf-8")],
+        [(
+            header::CONTENT_TYPE,
+            "application/activity+json; charset=utf-8",
+        )],
         Json(ap_repo),
-    ).into_response())
+    )
+        .into_response())
 }
 
 // ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
@@ -847,6 +1036,404 @@ fn accepts_activitypub(headers: &HeaderMap) -> bool {
 }
 
 // ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+// ── Phase 37D — Fork Fédéré : Offer(Fork) Handler
+// ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+/// Traite un `Offer(Fork)` entrant — Phase 37D (La Diplomatie Décentralisée).
+///
+/// ## Flow de validation
+/// 1. Vérifier que `object.type == "Fork"`
+/// 2. Extraire l'URI du repo cible depuis `object.object`
+/// 3. Vérifier que l'URI pointe vers **notre** domaine (anti-SSRF logique)
+/// 4. Parser owner/repo depuis l'URI
+/// 5. Résoudre le repo en base
+/// 6. Vérifier la visibilité (private → 202 silencieux, sécurité par obscurité)
+/// 7. Vérifier le doublon (has_remote_fork)
+/// 8. Persister le RemoteFork
+/// 9. Envoyer `Accept(Offer)` signé via tokio::spawn
+/// 10. Sauvegarder dans l'outbox
+///
+/// ## Sécurité
+/// - L'URI du repo dans l'Offer doit pointer vers notre `federation_domain`
+/// - Les repos privés ne génèrent ni Reject ni erreur → 202 silencieux
+/// - La contrainte UNIQUE SQL empêche le spam
+async fn handle_offer_fork(
+    state: &SharedState,
+    actor: &domain::entities::actor::Actor,
+    body: &serde_json::Value,
+    remote_actor: &infrastructure::federation::remote_actor::RemoteActorProfile,
+) -> Result<Response, AppError> {
+    let remote_actor_uri = body
+        .get("actor")
+        .and_then(|v| v.as_str())
+        .unwrap_or("")
+        .to_string();
+
+    // 1. Vérifier object.type == "Fork"
+    let object_type = body
+        .get("object")
+        .and_then(|o| o.get("type"))
+        .and_then(|v| v.as_str())
+        .unwrap_or("");
+
+    if object_type != "Fork" {
+        info!(
+            object_type = %object_type,
+            remote_actor = %remote_actor_uri,
+            "📋 Offer reçu mais object.type != Fork — archivé dans l'inbox"
+        );
+        persist_inbox_activity(
+            state,
+            actor.id,
+            &remote_actor_uri,
+            "Offer",
+            object_type,
+            "",
+            body,
+        )
+        .await;
+        return Ok((
+            StatusCode::ACCEPTED,
+            Json(serde_json::json!({
+                "status": "accepted",
+                "type": "Offer",
+                "note": "Non-Fork Offer archived in inbox"
+            })),
+        )
+            .into_response());
+    }
+
+    // 2. Extraire l'URI du repo cible (object.object)
+    let repo_uri = body
+        .get("object")
+        .and_then(|o| o.get("object"))
+        .and_then(|v| v.as_str())
+        .unwrap_or("");
+
+    if repo_uri.is_empty() {
+        warn!(
+            remote_actor = %remote_actor_uri,
+            "⚠️ Offer(Fork) reçu sans object.object — rejeté"
+        );
+        return Ok((
+            StatusCode::BAD_REQUEST,
+            Json(serde_json::json!({
+                "error": "Missing object.object (target repository URI) in Offer(Fork)"
+            })),
+        )
+            .into_response());
+    }
+
+    info!(
+        remote_actor = %remote_actor_uri,
+        repo_uri = %repo_uri,
+        "🤝 Offer(Fork) reçu — validation en cours..."
+    );
+
+    // 3. Vérifier que l'URI pointe vers notre domaine (anti-SSRF logique)
+    let our_domain = &state.federation_domain;
+    if !repo_uri.contains(our_domain.as_str()) {
+        warn!(
+            repo_uri = %repo_uri,
+            our_domain = %our_domain,
+            remote_actor = %remote_actor_uri,
+            "🛡️ Offer(Fork) rejeté — URI ne pointe pas vers notre domaine (SSRF logique)"
+        );
+        return Ok((
+            StatusCode::ACCEPTED,
+            Json(serde_json::json!({
+                "status": "accepted",
+                "note": "Activity archived"
+            })),
+        )
+            .into_response());
+    }
+
+    // 4. Parser owner/repo depuis l'URI
+    //    Patterns supportés :
+    //      https://domain/repos/{owner}/{repo}
+    //      https://domain/api/v1/actors/{owner}/repos/{repo}
+    //      https://domain/{owner}/{repo}
+    let (owner, repo_name) = parse_repo_from_uri(repo_uri, our_domain);
+
+    if owner.is_empty() || repo_name.is_empty() {
+        warn!(
+            repo_uri = %repo_uri,
+            "⚠️ Offer(Fork) — impossible de parser owner/repo depuis l'URI"
+        );
+        return Ok((
+            StatusCode::BAD_REQUEST,
+            Json(serde_json::json!({
+                "error": "Cannot parse owner/repo from repository URI"
+            })),
+        )
+            .into_response());
+    }
+
+    // 5. Résoudre le repo en base
+    let repo_owner = match state.actor_repo.find_by_handle(&owner).await {
+        Ok(Some(a)) => a,
+        _ => {
+            // Acteur introuvable → 202 silencieux
+            return Ok((
+                StatusCode::ACCEPTED,
+                Json(serde_json::json!({
+                    "status": "accepted",
+                    "note": "Activity archived"
+                })),
+            )
+                .into_response());
+        }
+    };
+
+    let repository = match state
+        .repo_repo
+        .find_by_owner_and_name(&repo_owner.id, &repo_name)
+        .await
+    {
+        Ok(Some(r)) => r,
+        _ => {
+            // Repo introuvable → 202 silencieux
+            return Ok((
+                StatusCode::ACCEPTED,
+                Json(serde_json::json!({
+                    "status": "accepted",
+                    "note": "Activity archived"
+                })),
+            )
+                .into_response());
+        }
+    };
+
+    // 6. Vérifier la visibilité — private → 202 silencieux (sécurité par obscurité)
+    if repository.visibility == domain::entities::repository::Visibility::Private {
+        warn!(
+            repo_id = %repository.id,
+            remote_actor = %remote_actor_uri,
+            "🛡️ Offer(Fork) pour repo privé — ignoré silencieusement"
+        );
+        persist_inbox_activity(
+            state,
+            actor.id,
+            &remote_actor_uri,
+            "Offer",
+            "Fork",
+            repo_uri,
+            body,
+        )
+        .await;
+        return Ok((
+            StatusCode::ACCEPTED,
+            Json(serde_json::json!({
+                "status": "accepted",
+                "note": "Activity archived"
+            })),
+        )
+            .into_response());
+    }
+
+    // 7. Vérifier le doublon
+    if state
+        .federation_repo
+        .has_remote_fork(&repository.id, &remote_actor_uri)
+        .await
+        .unwrap_or(false)
+    {
+        info!(
+            repo_id = %repository.id,
+            remote_actor = %remote_actor_uri,
+            "🍴 Offer(Fork) doublon — déjà enregistré (idempotent)"
+        );
+        return Ok((
+            StatusCode::ACCEPTED,
+            Json(serde_json::json!({
+                "status": "accepted",
+                "type": "Offer",
+                "note": "Fork already registered (idempotent)"
+            })),
+        )
+            .into_response());
+    }
+
+    // 8. Persister le RemoteFork
+    let remote_domain = extract_domain_from_uri(&remote_actor_uri);
+    let remote_repo_url = body
+        .get("object")
+        .and_then(|o| o.get("result"))
+        .and_then(|v| v.as_str())
+        .map(|s| s.to_string());
+
+    let remote_fork = RemoteFork {
+        id: Uuid::new_v4(),
+        repository_id: repository.id,
+        remote_domain: remote_domain.clone(),
+        remote_actor_uri: remote_actor_uri.clone(),
+        remote_repo_url,
+        status: "accepted".into(),
+        created_at: Utc::now(),
+    };
+
+    if let Err(e) = state.federation_repo.save_remote_fork(&remote_fork).await {
+        warn!(
+            error = %e,
+            remote_actor = %remote_actor_uri,
+            "⚠️ Erreur persistence RemoteFork (non-fatal)"
+        );
+    }
+
+    // Archive dans l'inbox
+    persist_inbox_activity(
+        state,
+        actor.id,
+        &remote_actor_uri,
+        "Offer",
+        "Fork",
+        repo_uri,
+        body,
+    )
+    .await;
+
+    // 9. Envoyer Accept(Offer) signé via tokio::spawn
+    let domain = state.federation_domain.clone();
+    let actor_handle = actor.handle.clone();
+    let actor_id = actor.id;
+    let federation_repo = state.federation_repo.clone();
+    let offer_body = body.clone();
+    let remote_inbox = remote_actor.inbox.clone();
+    let fork_id = remote_fork.id;
+    let remote_actor_uri_for_log = remote_actor_uri.clone();
+
+    tokio::spawn(async move {
+        // Récupérer la keypair de l'acteur local
+        let keypair = match federation_repo.get_keypair(&actor_id).await {
+            Ok(Some(kp)) => kp,
+            _ => {
+                warn!(actor_id = %actor_id, "⚠️ No keypair for Accept(Offer) delivery — skipping");
+                return;
+            }
+        };
+
+        // Construire l'Accept(Offer) avec le champ "to"
+        let accept = accept_offer_activity(&domain, &actor_handle, offer_body);
+
+        // Déterminer l'inbox cible
+        let target_inbox = if remote_inbox.is_empty() {
+            format!("{}/inbox", remote_actor_uri)
+        } else {
+            remote_inbox
+        };
+
+        // Livrer l'Accept signé
+        if let Err(e) = infrastructure::federation::delivery::deliver_activity(
+            accept.clone(),
+            &target_inbox,
+            &keypair.private_key_pem,
+            &keypair.key_id,
+        )
+        .await
+        {
+            warn!(target = %target_inbox, error = %e, "⚠️ Accept(Offer) delivery failed (non-fatal)");
+        } else {
+            info!(
+                fork_id = %fork_id,
+                target = %target_inbox,
+                "📤 Accept(Offer) envoyé — le fork distant peut lancer git clone"
+            );
+        }
+
+        // 10. Enregistrer l'Accept dans l'outbox
+        let activity = FederationActivity {
+            id: Uuid::new_v4(),
+            actor_id,
+            activity_type: "Accept".into(),
+            object_type: "Offer".into(),
+            object_id: remote_actor_uri.clone(),
+            activity_json: accept,
+            published_at: Utc::now(),
+        };
+        if let Err(e) = federation_repo.save_activity(&activity).await {
+            warn!(error = %e, "⚠️ Failed to save Accept(Offer) activity to outbox");
+        }
+    });
+
+    info!(
+        repo = %format!("{}/{}", owner, repo_name),
+        remote_actor = %remote_actor_uri_for_log,
+        remote_domain = %remote_domain,
+        "🤝✅ Offer(Fork) accepté — Accept en cours d'envoi"
+    );
+
+    Ok((
+        StatusCode::ACCEPTED,
+        Json(serde_json::json!({
+            "status": "accepted",
+            "type": "Offer",
+            "objectType": "Fork",
+            "repository": format!("{}/{}", owner, repo_name),
+        })),
+    )
+        .into_response())
+}
+
+/// Parse owner et repo name depuis une URI de dépôt.
+///
+/// Patterns supportés :
+/// - `https://domain/repos/{owner}/{repo}`
+/// - `https://domain/api/v1/actors/{owner}/repos/{repo}`
+/// - `https://domain/{owner}/{repo}` (fallback)
+/// - `https://domain/{owner}/{repo}.git` (suffixe .git toléré)
+fn parse_repo_from_uri(uri: &str, _domain: &str) -> (String, String) {
+    // Supprimer le schéma et le domaine pour ne garder que le path
+    let path = uri
+        .split("//")
+        .nth(1)
+        .and_then(|s| s.split_once('/'))
+        .map(|(_, path)| path)
+        .unwrap_or("");
+
+    let segments: Vec<&str> = path.split('/').filter(|s| !s.is_empty()).collect();
+
+    // Pattern: /repos/{owner}/{repo}
+    if segments.len() >= 3 && segments[0] == "repos" {
+        let repo_name = segments[2].trim_end_matches(".git");
+        return (segments[1].to_string(), repo_name.to_string());
+    }
+
+    // Pattern: /api/v1/actors/{owner}/repos/{repo}
+    if segments.len() >= 6
+        && segments[0] == "api"
+        && segments[1] == "v1"
+        && segments[2] == "actors"
+        && segments[4] == "repos"
+    {
+        let repo_name = segments[5].trim_end_matches(".git");
+        return (segments[3].to_string(), repo_name.to_string());
+    }
+
+    // Fallback: /{owner}/{repo} (derniers 2 segments)
+    if segments.len() >= 2 {
+        let repo_name = segments[segments.len() - 1].trim_end_matches(".git");
+        return (
+            segments[segments.len() - 2].to_string(),
+            repo_name.to_string(),
+        );
+    }
+
+    (String::new(), String::new())
+}
+
+/// Extrait le domaine depuis une URI d'acteur.
+///
+/// Ex: `"https://forgejo.org/users/bob"` → `"forgejo.org"`
+fn extract_domain_from_uri(uri: &str) -> String {
+    uri.split("//")
+        .nth(1)
+        .and_then(|s| s.split('/').next())
+        .unwrap_or("unknown")
+        .to_string()
+}
+
+// ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 // ── Phase 27-quater — Inbox Helpers
 // ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 
@@ -861,19 +1448,19 @@ fn extract_object_metadata(body: &serde_json::Value) -> (String, String) {
 
     match object {
         Some(obj) if obj.is_object() => {
-            let obj_type = obj.get("type")
+            let obj_type = obj
+                .get("type")
                 .and_then(|v| v.as_str())
                 .unwrap_or("")
                 .to_string();
-            let obj_uri = obj.get("id")
+            let obj_uri = obj
+                .get("id")
                 .and_then(|v| v.as_str())
                 .unwrap_or("")
                 .to_string();
             (obj_type, obj_uri)
         }
-        Some(obj) if obj.is_string() => {
-            ("".to_string(), obj.as_str().unwrap_or("").to_string())
-        }
+        Some(obj) if obj.is_string() => ("".to_string(), obj.as_str().unwrap_or("").to_string()),
         _ => ("".to_string(), "".to_string()),
     }
 }
@@ -903,7 +1490,11 @@ async fn persist_inbox_activity(
         processed_at: None,
     };
 
-    if let Err(e) = state.federation_repo.save_inbox_activity(&inbox_activity).await {
+    if let Err(e) = state
+        .federation_repo
+        .save_inbox_activity(&inbox_activity)
+        .await
+    {
         warn!(
             error = %e,
             activity_type = %activity_type,
@@ -934,31 +1525,47 @@ pub async fn inbox_list_handler(
         .actor_repo
         .find_by_handle(&handle)
         .await?
-        .ok_or_else(|| AppError(DomainError::BusinessRule(
-            format!("Acteur '{}' introuvable", handle),
-        )))?;
+        .ok_or_else(|| {
+            AppError(DomainError::BusinessRule(format!(
+                "Acteur '{}' introuvable",
+                handle
+            )))
+        })?;
 
     let limit = params.limit.unwrap_or(50).min(200).max(1);
-    let total = state.federation_repo.count_inbox_activities(&actor.id).await?;
-    let activities = state.federation_repo.list_inbox_activities(&actor.id, limit).await?;
+    let total = state
+        .federation_repo
+        .count_inbox_activities(&actor.id)
+        .await?;
+    let activities = state
+        .federation_repo
+        .list_inbox_activities(&actor.id, limit)
+        .await?;
 
-    let items: Vec<serde_json::Value> = activities.into_iter().map(|a| {
-        serde_json::json!({
-            "id": a.id,
-            "remoteActorUri": a.remote_actor_uri,
-            "activityType": a.activity_type,
-            "objectType": a.object_type,
-            "objectUri": a.object_uri,
-            "processed": a.processed,
-            "receivedAt": a.received_at.to_rfc3339(),
-            "processedAt": a.processed_at.map(|dt| dt.to_rfc3339()),
+    let items: Vec<serde_json::Value> = activities
+        .into_iter()
+        .map(|a| {
+            serde_json::json!({
+                "id": a.id,
+                "remoteActorUri": a.remote_actor_uri,
+                "activityType": a.activity_type,
+                "objectType": a.object_type,
+                "objectUri": a.object_uri,
+                "processed": a.processed,
+                "receivedAt": a.received_at.to_rfc3339(),
+                "processedAt": a.processed_at.map(|dt| dt.to_rfc3339()),
+            })
         })
-    }).collect();
+        .collect();
 
-    Ok((StatusCode::OK, Json(serde_json::json!({
-        "totalItems": total,
-        "items": items,
-    }))).into_response())
+    Ok((
+        StatusCode::OK,
+        Json(serde_json::json!({
+            "totalItems": total,
+            "items": items,
+        })),
+    )
+        .into_response())
 }
 
 // ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
@@ -1021,7 +1628,9 @@ mod tests {
         let mut headers = HeaderMap::new();
         headers.insert(
             header::ACCEPT,
-            "application/ld+json; profile=\"https://www.w3.org/ns/activitystreams\"".parse().unwrap(),
+            "application/ld+json; profile=\"https://www.w3.org/ns/activitystreams\""
+                .parse()
+                .unwrap(),
         );
         assert!(accepts_activitypub(&headers));
     }
@@ -1089,5 +1698,70 @@ mod tests {
         assert_eq!(obj_type, "");
         assert_eq!(obj_uri, "");
     }
-}
 
+    // ── Phase 37D — Tests pour les helpers Fork Fédéré ────────
+
+    #[test]
+    fn test_parse_repo_from_uri_repos_pattern() {
+        let (owner, repo) =
+            parse_repo_from_uri("https://jjshinobi.dev/repos/naruto/le-wm", "jjshinobi.dev");
+        assert_eq!(owner, "naruto");
+        assert_eq!(repo, "le-wm");
+    }
+
+    #[test]
+    fn test_parse_repo_from_uri_api_pattern() {
+        let (owner, repo) = parse_repo_from_uri(
+            "https://jjshinobi.dev/api/v1/actors/naruto/repos/le-wm",
+            "jjshinobi.dev",
+        );
+        assert_eq!(owner, "naruto");
+        assert_eq!(repo, "le-wm");
+    }
+
+    #[test]
+    fn test_parse_repo_from_uri_fallback_pattern() {
+        let (owner, repo) =
+            parse_repo_from_uri("https://jjshinobi.dev/naruto/le-wm", "jjshinobi.dev");
+        assert_eq!(owner, "naruto");
+        assert_eq!(repo, "le-wm");
+    }
+
+    #[test]
+    fn test_parse_repo_from_uri_git_suffix() {
+        let (owner, repo) = parse_repo_from_uri(
+            "https://jjshinobi.dev/repos/naruto/le-wm.git",
+            "jjshinobi.dev",
+        );
+        assert_eq!(owner, "naruto");
+        assert_eq!(repo, "le-wm");
+    }
+
+    #[test]
+    fn test_parse_repo_from_uri_empty() {
+        let (owner, repo) = parse_repo_from_uri("", "jjshinobi.dev");
+        assert_eq!(owner, "");
+        assert_eq!(repo, "");
+    }
+
+    #[test]
+    fn test_extract_domain_from_uri_standard() {
+        assert_eq!(
+            extract_domain_from_uri("https://forgejo.org/users/bob"),
+            "forgejo.org"
+        );
+    }
+
+    #[test]
+    fn test_extract_domain_from_uri_with_port() {
+        assert_eq!(
+            extract_domain_from_uri("http://localhost:4000/users/alice"),
+            "localhost:4000"
+        );
+    }
+
+    #[test]
+    fn test_extract_domain_from_uri_invalid() {
+        assert_eq!(extract_domain_from_uri("not-a-url"), "unknown");
+    }
+}

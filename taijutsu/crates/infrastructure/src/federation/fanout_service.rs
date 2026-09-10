@@ -287,6 +287,16 @@ mod tests {
         async fn list_unprocessed_inbox(&self, _limit: i64) -> Result<Vec<domain::entities::federation::InboxActivity>, DomainError> {
             Ok(vec![])
         }
+        // Phase 37D remote fork stubs
+        async fn save_remote_fork(&self, _fork: &domain::entities::federation::RemoteFork) -> Result<(), DomainError> {
+            Ok(())
+        }
+        async fn count_remote_forks(&self, _repo_id: &Uuid) -> Result<i64, DomainError> {
+            Ok(0)
+        }
+        async fn has_remote_fork(&self, _repo_id: &Uuid, _remote_actor_uri: &str) -> Result<bool, DomainError> {
+            Ok(false)
+        }
     }
 
     #[tokio::test]

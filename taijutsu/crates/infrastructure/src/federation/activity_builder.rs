@@ -153,6 +153,51 @@ pub fn federation_scheme(domain: &str) -> &'static str {
     }
 }
 
+/// Construit une activité `Accept { Offer }` conforme ActivityStreams — Phase 37D.
+///
+/// Envoyée à la forge distante après validation d'un `Offer(Fork)`.
+/// Enveloppe l'Offer originale dans l'objet Accept (standard AP).
+///
+/// ## Champ `to`
+/// Le standard ActivityStreams exige que le `to` soit explicitement défini
+/// avec l'URI de l'acteur qui a fait l'Offre. Mastodon et les autres
+/// instances ignorent les activités sans destinataire explicite.
+///
+/// ## Exemple JSON-LD
+/// ```json
+/// {
+///   "@context": "https://www.w3.org/ns/activitystreams",
+///   "type": "Accept",
+///   "actor": "https://jjshinobi.dev/actors/naruto",
+///   "to": ["https://remote-forge.com/actors/bob"],
+///   "object": { ... l'objet Offer reçu ... }
+/// }
+/// ```
+pub fn accept_offer_activity(
+    federation_domain: &str,
+    actor_handle: &str,
+    original_offer: serde_json::Value,
+) -> serde_json::Value {
+    let scheme = federation_scheme(federation_domain);
+    let actor_uri = format!("{}://{}/actors/{}", scheme, federation_domain, actor_handle);
+    let activity_id = format!("{}://{}/activities/{}", scheme, federation_domain, Uuid::new_v4());
+
+    // Extraire l'URI de l'acteur qui a fait l'Offer pour le champ "to"
+    let offer_actor = original_offer
+        .get("actor")
+        .cloned()
+        .unwrap_or(json!(""));
+
+    json!({
+        "@context": "https://www.w3.org/ns/activitystreams",
+        "id": activity_id,
+        "type": "Accept",
+        "actor": actor_uri,
+        "to": [offer_actor],
+        "object": original_offer,
+    })
+}
+
 // ── Tests ─────────────────────────────────────────────────────────────
 
 #[cfg(test)]
@@ -246,5 +291,43 @@ mod tests {
         assert_eq!(federation_scheme("127.0.0.1:3000"), "http");
         assert_eq!(federation_scheme("forge.shinobi.dev"), "https");
         assert_eq!(federation_scheme("shinobi.duckdns.org"), "https");
+    }
+
+    #[test]
+    fn test_accept_offer_activity_structure() {
+        let offer = json!({
+            "@context": "https://www.w3.org/ns/activitystreams",
+            "type": "Offer",
+            "actor": "https://forgejo.org/users/bob",
+            "object": {
+                "type": "Fork",
+                "object": "https://jjshinobi.dev/repos/naruto/le-wm"
+            }
+        });
+
+        let activity = accept_offer_activity("jjshinobi.dev", "naruto", offer.clone());
+
+        assert_eq!(activity["type"], "Accept");
+        assert_eq!(activity["actor"], "https://jjshinobi.dev/actors/naruto");
+        assert_eq!(activity["object"]["type"], "Offer");
+        assert!(activity["id"].as_str().unwrap().starts_with("https://"));
+
+        // Vérifier le champ "to" — requis par le standard AP
+        let to = activity["to"].as_array().unwrap();
+        assert_eq!(to.len(), 1);
+        assert_eq!(to[0], "https://forgejo.org/users/bob");
+    }
+
+    #[test]
+    fn test_accept_offer_activity_localhost() {
+        let offer = json!({
+            "type": "Offer",
+            "actor": "http://localhost:4000/users/alice",
+        });
+
+        let activity = accept_offer_activity("localhost:3000", "yusuf", offer);
+
+        assert!(activity["id"].as_str().unwrap().starts_with("http://localhost"));
+        assert_eq!(activity["actor"], "http://localhost:3000/actors/yusuf");
     }
 }

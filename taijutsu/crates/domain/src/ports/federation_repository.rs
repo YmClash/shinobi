@@ -1,12 +1,12 @@
 //! Port: FederationRepository — Contrat de persistence pour la fédération.
 //!
 //! Ce trait définit le contrat pour stocker et récupérer les données
-//! nécessaires à la fédération ActivityPub / ForgeFed (Phase 27 + 27-quater).
+//! nécessaires à la fédération ActivityPub / ForgeFed (Phase 27 + 27-quater + 37D).
 
 use async_trait::async_trait;
 use uuid::Uuid;
 
-use crate::entities::federation::{FederationKeypair, FederationFollow, FederationActivity, InboxActivity};
+use crate::entities::federation::{FederationKeypair, FederationFollow, FederationActivity, InboxActivity, RemoteFork};
 use crate::errors::DomainError;
 
 /// Contrat de persistence pour les données de fédération.
@@ -76,5 +76,17 @@ pub trait FederationRepository: Send + Sync {
 
     /// Compte le nombre total de dépôts publics locaux.
     async fn count_local_repos(&self) -> Result<i64, DomainError>;
+
+    // ── Remote Forks (Phase 37D — Fork Fédéré) ───────────────
+
+    /// Enregistre un fork distant accepté.
+    /// Utilise ON CONFLICT DO NOTHING pour l'idempotence.
+    async fn save_remote_fork(&self, fork: &RemoteFork) -> Result<(), DomainError>;
+
+    /// Compte les forks distants acceptés d'un dépôt.
+    async fn count_remote_forks(&self, repo_id: &Uuid) -> Result<i64, DomainError>;
+
+    /// Vérifie si un acteur distant a déjà forké ce repo (anti-doublon).
+    async fn has_remote_fork(&self, repo_id: &Uuid, remote_actor_uri: &str) -> Result<bool, DomainError>;
 }
 
