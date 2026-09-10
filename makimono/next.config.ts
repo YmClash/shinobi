@@ -5,6 +5,9 @@ import type { NextConfig } from "next";
 const taijutsuUrl = process.env.TAIJUTSU_URL || "http://localhost:3000";
 
 const nextConfig: NextConfig = {
+  // Cloudflare Tunnel: autoriser le HMR depuis le domaine public
+  allowedDevOrigins: ["jjshinobi.dev"],
+
   // Mode standalone : produit un serveur autonome sans node_modules
   // Requis pour le Dockerfile multi-stage (Stage 3 runtime slim)
   output: "standalone",

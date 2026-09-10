@@ -158,7 +158,7 @@ export default function RegisterPage() {
               type="email"
               required
               autoComplete="email"
-              placeholder="ninja@shinobi.dev"
+              placeholder="ninja@jjshinobi.dev"
               value={email}
               onChange={(e) => setEmail(e.target.value)}
               className="auth-input"
