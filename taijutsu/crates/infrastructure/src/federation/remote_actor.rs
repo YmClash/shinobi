@@ -38,9 +38,17 @@ struct CachedActor {
 const CACHE_TTL: Duration = Duration::from_secs(300);
 
 /// Client de récupération d'acteurs distants avec cache DashMap.
+///
+/// Supporte le mode `AUTHORIZED_FETCH` de Mastodon (Secure Mode) :
+/// quand un GET non signé retourne 401, le fetcher retente avec une
+/// HTTP Signature signée avec la keypair de l'instance.
 pub struct RemoteActorFetcher {
     cache: Arc<DashMap<String, CachedActor>>,
     client: reqwest::Client,
+    /// Keypair optionnelle pour signer les requêtes (AUTHORIZED_FETCH).
+    private_key_pem: Option<String>,
+    /// Key ID pour la signature HTTP.
+    key_id: Option<String>,
 }
 
 impl RemoteActorFetcher {
@@ -51,15 +59,37 @@ impl RemoteActorFetcher {
     /// - Pas de redirect automatique (on vérifie manuellement)
     pub fn new() -> Self {
         let client = reqwest::Client::builder()
-            .timeout(Duration::from_secs(3))
+            .timeout(Duration::from_secs(5))
             .redirect(reqwest::redirect::Policy::none()) // Pas de redirect auto
-            .user_agent("SHINOBI/0.1.0 (+https://shinobi.dev)")
+            .user_agent("SHINOBI/0.1.0 (+https://jjshinobi.dev)")
             .build()
             .expect("Failed to build reqwest client");
 
         Self {
             cache: Arc::new(DashMap::new()),
             client,
+            private_key_pem: None,
+            key_id: None,
+        }
+    }
+
+    /// Crée un fetcher avec une keypair pour le Signed Fetch.
+    ///
+    /// Nécessaire pour les instances Mastodon en mode `AUTHORIZED_FETCH`
+    /// qui refusent les requêtes GET non signées (HTTP 401).
+    pub fn with_keypair(private_key_pem: String, key_id: String) -> Self {
+        let client = reqwest::Client::builder()
+            .timeout(Duration::from_secs(5))
+            .redirect(reqwest::redirect::Policy::none())
+            .user_agent("SHINOBI/0.1.0 (+https://jjshinobi.dev)")
+            .build()
+            .expect("Failed to build reqwest client");
+
+        Self {
+            cache: Arc::new(DashMap::new()),
+            client,
+            private_key_pem: Some(private_key_pem),
+            key_id: Some(key_id),
         }
     }
 
@@ -96,6 +126,22 @@ impl RemoteActorFetcher {
                 warn!(uri = %actor_uri, error = %e, "❌ Failed to fetch remote actor");
                 RemoteActorError::FetchFailed(e.to_string())
             })?;
+
+        // ── Phase 2: Signed fetch si 401 (Mastodon AUTHORIZED_FETCH / Secure Mode) ──
+        let response = if response.status() == reqwest::StatusCode::UNAUTHORIZED {
+            info!(uri = %actor_uri, "🔑 Retrying with HTTP Signature (AUTHORIZED_FETCH mode)");
+            match self.fetch_signed(actor_uri).await {
+                Ok(resp) => resp,
+                Err(e) => {
+                    warn!(uri = %actor_uri, error = %e, "❌ Signed fetch also failed");
+                    return Err(RemoteActorError::FetchFailed(
+                        format!("HTTP 401 from {} (unsigned + signed both failed: {})", actor_uri, e),
+                    ));
+                }
+            }
+        } else {
+            response
+        };
 
         if !response.status().is_success() {
             return Err(RemoteActorError::FetchFailed(
@@ -181,6 +227,79 @@ impl RemoteActorFetcher {
         }
 
         Ok(())
+    }
+
+    /// Fetch signé pour les instances en mode AUTHORIZED_FETCH.
+    ///
+    /// Signe la requête GET avec la keypair de l'instance Shinobi.
+    /// Pour les GET, on NE signe PAS le Digest (pas de body).
+    /// Headers signés : `(request-target) host date accept`
+    async fn fetch_signed(&self, actor_uri: &str) -> Result<reqwest::Response, String> {
+        use rsa::pkcs8::DecodePrivateKey;
+        use rsa::RsaPrivateKey;
+        use rsa::pkcs1v15::SigningKey;
+        use rsa::signature::{Signer, SignatureEncoding};
+        use sha2::Sha256;
+        use chrono::Utc;
+
+        let private_key_pem = self.private_key_pem.as_ref()
+            .ok_or_else(|| "No private key configured for signed fetch".to_string())?;
+        let key_id = self.key_id.as_ref()
+            .ok_or_else(|| "No key_id configured for signed fetch".to_string())?;
+
+        // Parser l'URL pour extraire host et path
+        let parsed = url::Url::parse(actor_uri)
+            .map_err(|e| format!("Invalid URI: {}", e))?;
+        let host = parsed.host_str().unwrap_or("");
+        let path = parsed.path();
+
+        // Date HTTP
+        let date = Utc::now().format("%a, %d %b %Y %H:%M:%S GMT").to_string();
+        let accept = "application/activity+json";
+
+        // Signing string pour GET (PAS de digest !)
+        let request_target = format!("get {}", path);
+        let signing_string = format!(
+            "(request-target): {}\nhost: {}\ndate: {}\naccept: {}",
+            request_target, host, date, accept
+        );
+
+        // Sign RSA-PKCS1-v1_5 + SHA-256
+        let private_key = RsaPrivateKey::from_pkcs8_pem(private_key_pem)
+            .map_err(|e| format!("Key parse error: {}", e))?;
+        let signing_key = SigningKey::<Sha256>::new(private_key);
+        let sig = signing_key.sign(signing_string.as_bytes());
+        let sig_b64 = base64::Engine::encode(
+            &base64::engine::general_purpose::STANDARD, sig.to_bytes()
+        );
+
+        let signature_header = format!(
+            "keyId=\"{}\",algorithm=\"rsa-sha256\",headers=\"(request-target) host date accept\",signature=\"{}\"",
+            key_id, sig_b64
+        );
+
+        info!(
+            uri = %actor_uri,
+            key_id = %key_id,
+            "🔑 Signed GET fetch (AUTHORIZED_FETCH)"
+        );
+
+        let response = self.client
+            .get(actor_uri)
+            .header("Accept", accept)
+            .header("Date", &date)
+            .header("Signature", &signature_header)
+            .send()
+            .await
+            .map_err(|e| format!("Signed fetch request failed: {}", e))?;
+
+        info!(
+            uri = %actor_uri,
+            status = %response.status(),
+            "🔑 Signed fetch response"
+        );
+
+        Ok(response)
     }
 }
 

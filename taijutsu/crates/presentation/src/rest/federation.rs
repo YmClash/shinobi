@@ -356,7 +356,20 @@ pub async fn inbox_handler(
             })?;
 
     // Fetch la clé publique distante (avec cache SSRF-guarded)
-    let fetcher = infrastructure::federation::remote_actor::RemoteActorFetcher::new();
+    // Utilise la keypair de l'instance pour le Signed Fetch (Mastodon AUTHORIZED_FETCH)
+    let fetcher = {
+        let system_actor_id = uuid::Uuid::parse_str("00000000-0000-0000-0000-000000000001")
+            .unwrap_or_else(|_| uuid::Uuid::nil());
+        match state.federation_repo.get_keypair(&system_actor_id).await {
+            Ok(Some(kp)) => {
+                infrastructure::federation::remote_actor::RemoteActorFetcher::with_keypair(
+                    kp.private_key_pem,
+                    kp.key_id,
+                )
+            }
+            _ => infrastructure::federation::remote_actor::RemoteActorFetcher::new(),
+        }
+    };
     let remote_actor = fetcher.fetch(&parsed_sig.key_id.split('#').next().unwrap_or(&parsed_sig.key_id)).await
         .map_err(|e| {
             warn!(key_id = %parsed_sig.key_id, error = %e, "❌ Failed to fetch remote actor for signature verification");
