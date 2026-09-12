@@ -88,6 +88,7 @@ export function NotificationBell({ collapsed = false }: NotificationBellProps) {
 
   // ── @floating-ui positioning ─────────────────────────────
   const { refs, floatingStyles } = useFloating({
+    strategy: "fixed",
     placement: "right-start",
     middleware: [
       offset(8),
