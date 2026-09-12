@@ -2252,6 +2252,333 @@ impl VcsEngine for JujutsuEngine {
         .await
         .map_err(|e| DomainError::Internal(format!("spawn_blocking join error: {e}")))?
     }
+
+    // ── Phase 37E — Le Trou de Ver Git (Cross-Repo MR) ──────────────────
+    //
+    // Importe les objets Git d'un fork dans le parent via un remote temporaire.
+    // Le fetch local utilise des hardlinks — instantané et quasi-zero espace disque.
+    //
+    // Remote naming convention: `fork-{source_repo_id}`
+    // Refs pattern: `refs/remotes/fork-{source_repo_id}/{branch}`
+    //
+    // ⚠️ ARCHITECTURE CRITIQUE — Pont de Givre (Phase 12)
+    // SHINOBI est bâti sur Jujutsu (jj-lib), pas sur Git directement.
+    // Chaque opération git doit être suivie de `import_refs()` + `tx.commit()`
+    // pour synchroniser l'état mental de jj (bookmarks, operation log, graphe).
+    // Sans ça, jj devient aveugle aux nouvelles refs → corruption potentielle.
+    //
+    // Pattern identique à `merge_fast_forward` (L1920-1952) :
+    //   1. Git plumbing (remote add/fetch/remove)
+    //   2. jj_lib::git::import_refs() → synchro bookmarks
+    //   3. tx.commit() → opération dans le log jj
+    //   4. wh.update_repo() → handle à jour
+
+    #[instrument(skip(self))]
+    async fn fetch_fork_refs(
+        &self,
+        parent_repo_id: &Uuid,
+        source_repo_id: &Uuid,
+    ) -> Result<(), DomainError> {
+        let source_git_dir = self.git_repo_path(source_repo_id);
+        let remote_name_str = format!("fork-{source_repo_id}");
+        let src_id = *source_repo_id;
+        let par_id = *parent_repo_id;
+
+        // Handle jj nécessaire — on travaille directement avec MutableRepo
+        let handle_arc = self.get_handle(parent_repo_id).ok_or_else(|| {
+            DomainError::VcsError(format!("workspace not initialized for repo {parent_repo_id}"))
+        })?;
+
+        info!(
+            parent = %parent_repo_id,
+            source = %source_repo_id,
+            remote = %remote_name_str,
+            "🕳️ Trou de Ver — fetch_fork_refs via jj-lib natif"
+        );
+
+        // Vérifier que le git dir source existe
+        if !source_git_dir.exists() {
+            return Err(DomainError::VcsError(format!(
+                "Source fork git dir does not exist: {}",
+                source_git_dir.display()
+            )));
+        }
+
+        let parent_git_dir = self.git_repo_path(parent_repo_id);
+
+        tokio::task::spawn_blocking(move || {
+            let mut guard = handle_arc.lock();
+            let wh = &mut *guard;
+
+            // Normaliser le chemin source pour Git (forward slashes, même sur Windows)
+            let source_url = source_git_dir
+                .to_string_lossy()
+                .replace('\\', "/");
+
+            // ── Recharger le repo jj pour ouvrir une transaction ──────
+            let settings = JujutsuEngine::create_settings()?;
+            let jj_repo_path = parent_git_dir
+                .parent() // store
+                .and_then(|p| p.parent()) // repo
+                .ok_or_else(|| DomainError::VcsError(
+                    "Cannot resolve jj repo path from git dir".to_string()
+                ))?;
+
+            let store_factories = jj_lib::repo::StoreFactories::default();
+            let repo_loader = jj_lib::repo::RepoLoader::init_from_file_system(
+                &settings,
+                &jj_repo_path,
+                &store_factories,
+            )
+            .map_err(|e| DomainError::VcsError(format!(
+                "RepoLoader reload failed: {e}"
+            )))?;
+
+            let reloaded_repo = pollster::block_on(repo_loader.load_at_head())
+                .map_err(|e| DomainError::VcsError(format!(
+                    "reload load_at_head failed: {e}"
+                )))?;
+
+            let import_options = jj_lib::git::GitImportOptions {
+                auto_local_bookmark: true,
+                abandon_unreachable_commits: false,
+                remote_auto_track_bookmarks: std::collections::HashMap::new(),
+            };
+
+            let mut tx = reloaded_repo.start_transaction();
+
+            // ── Étape 1 : jj_lib::git::add_remote() ─────────────────
+            // Ajoute le remote au graphe jj + config git en une seule opération.
+            // Idempotent : si le remote existe déjà, on skip.
+            let jj_remote_name = jj_lib::ref_name::RemoteName::new(&remote_name_str);
+            let add_result = jj_lib::git::add_remote(
+                tx.repo_mut(),
+                jj_remote_name,
+                &source_url,
+                None, // pas de push URL
+                gix::remote::fetch::Tags::All,
+            );
+
+            match add_result {
+                Ok(()) => {
+                    info!(remote = %remote_name_str, "🕳️ Remote ajouté via jj-lib");
+                }
+                Err(e) => {
+                    let err_msg = format!("{e}");
+                    if err_msg.contains("already exists") || err_msg.contains("AlreadyExists") {
+                        info!(remote = %remote_name_str, "🕳️ Remote existant — skip add");
+                    } else {
+                        return Err(DomainError::VcsError(format!(
+                            "jj_lib::git::add_remote failed: {e}"
+                        )));
+                    }
+                }
+            }
+
+            // ── Étape 2 : jj_lib::git::GitFetch — fetch + import_refs ──
+            // C'est LA bonne façon de faire un fetch dans jj :
+            // GitFetch::fetch() importe les objets Git ET met à jour les
+            // remote-tracking branches, puis import_refs() synchronise
+            // le graphe jj avec les nouvelles refs.
+
+            // Construire les refspecs AVANT GitFetch::new() pour éviter
+            // un conflit d'emprunt (get_git_repo emprunte tx en immutable,
+            // GitFetch::new emprunte tx.repo_mut() en mutable).
+            let git_repo = jj_lib::git::get_git_repo(tx.repo().store())
+                .map_err(|e| DomainError::VcsError(format!(
+                    "get_git_repo failed: {e}"
+                )))?;
+
+            let (_ignored, bookmark_expr) = jj_lib::git::load_default_fetch_bookmarks(
+                jj_remote_name,
+                &git_repo,
+            )
+            .map_err(|e| DomainError::VcsError(format!(
+                "load_default_fetch_bookmarks failed: {e}"
+            )))?;
+
+            let fetch_expr = jj_lib::git::GitFetchRefExpression {
+                bookmark: bookmark_expr,
+                tag: jj_lib::str_util::StringExpression::all(),
+            };
+
+            let expanded = jj_lib::git::expand_fetch_refspecs(jj_remote_name, fetch_expr)
+                .map_err(|e| DomainError::VcsError(format!(
+                    "expand_fetch_refspecs failed: {e}"
+                )))?;
+
+            drop(git_repo); // Libérer l'emprunt immutable avant le mut
+
+            let subprocess_options = jj_lib::git::GitSubprocessOptions::from_settings(&settings)
+                .map_err(|e| DomainError::VcsError(format!(
+                    "GitSubprocessOptions failed: {e}"
+                )))?;
+
+            let mut git_fetch = jj_lib::git::GitFetch::new(
+                tx.repo_mut(),
+                subprocess_options,
+                &import_options,
+            )
+            .map_err(|e| DomainError::VcsError(format!(
+                "GitFetch::new failed: {e}"
+            )))?;
+
+            // Callback no-op pour le fetch local (pas besoin de progress/auth)
+            struct NoopCallback;
+            impl jj_lib::git::GitSubprocessCallback for NoopCallback {
+                fn needs_progress(&self) -> bool { false }
+                fn progress(&mut self, _: &jj_lib::git::GitProgress) -> std::io::Result<()> { Ok(()) }
+                fn local_sideband(&mut self, _: &[u8], _: Option<jj_lib::git::GitSidebandLineTerminator>) -> std::io::Result<()> { Ok(()) }
+                fn remote_sideband(&mut self, _: &[u8], _: Option<jj_lib::git::GitSidebandLineTerminator>) -> std::io::Result<()> { Ok(()) }
+            }
+            let mut callback = NoopCallback;
+
+            git_fetch.fetch(
+                jj_remote_name,
+                expanded,
+                &mut callback,
+                None, // depth = None (full fetch)
+                None, // fetch_tags_override = None
+            )
+            .map_err(|e| DomainError::VcsError(format!(
+                "jj git fetch fork-{src_id} failed: {e}"
+            )))?;
+
+            // import_refs intégré dans GitFetch — synchronise jj avec les nouvelles refs
+            let _stats = pollster::block_on(git_fetch.import_refs())
+                .map_err(|e| DomainError::VcsError(format!(
+                    "jj git import_refs after fetch failed: {e}"
+                )))?;
+
+            drop(git_fetch); // Libérer l'emprunt mut sur tx
+
+            // ── Étape 3 : Commit de la transaction jj ────────────────
+            let new_repo = pollster::block_on(
+                tx.commit(format!(
+                    "SHINOBI: fetch fork refs fork-{src_id} into {par_id} (Phase 37E — Trou de Ver)"
+                )),
+            )
+            .map_err(|e| DomainError::VcsError(format!(
+                "fetch_fork_refs tx.commit failed: {e}"
+            )))?;
+
+            // ── Étape 4 : Mettre à jour le handle jj ────────────────
+            wh.update_repo(new_repo);
+
+            info!(
+                remote = %remote_name_str,
+                "🕳️⚡ Trou de Ver ouvert — 100% jj-lib natif, zero git CLI"
+            );
+
+            Ok(())
+        })
+        .await
+        .map_err(|e| DomainError::Internal(format!("spawn_blocking join error: {e}")))?
+    }
+
+    #[instrument(skip(self))]
+    async fn cleanup_fork_remote(
+        &self,
+        parent_repo_id: &Uuid,
+        source_repo_id: &Uuid,
+    ) -> Result<(), DomainError> {
+        let remote_name_str = format!("fork-{source_repo_id}");
+        let src_id = *source_repo_id;
+        let par_id = *parent_repo_id;
+
+        // Handle jj nécessaire pour la transaction
+        let handle_arc = self.get_handle(parent_repo_id).ok_or_else(|| {
+            DomainError::VcsError(format!("workspace not initialized for repo {parent_repo_id}"))
+        })?;
+
+        info!(
+            parent = %parent_repo_id,
+            source = %source_repo_id,
+            remote = %remote_name_str,
+            "🧹 Nettoyage du Trou de Ver via jj-lib natif"
+        );
+
+        let parent_git_dir = self.git_repo_path(parent_repo_id);
+
+        tokio::task::spawn_blocking(move || {
+            let mut guard = handle_arc.lock();
+            let wh = &mut *guard;
+
+            // ── Recharger le repo jj pour ouvrir une transaction ──────
+            let settings = JujutsuEngine::create_settings()?;
+            let jj_repo_path = parent_git_dir
+                .parent() // store
+                .and_then(|p| p.parent()) // repo
+                .ok_or_else(|| DomainError::VcsError(
+                    "Cannot resolve jj repo path from git dir".to_string()
+                ))?;
+
+            let store_factories = jj_lib::repo::StoreFactories::default();
+            let repo_loader = jj_lib::repo::RepoLoader::init_from_file_system(
+                &settings,
+                jj_repo_path,
+                &store_factories,
+            )
+            .map_err(|e| DomainError::VcsError(format!(
+                "RepoLoader reload failed after cleanup: {e}"
+            )))?;
+
+            let reloaded_repo = pollster::block_on(repo_loader.load_at_head())
+                .map_err(|e| DomainError::VcsError(format!(
+                    "reload load_at_head failed after cleanup: {e}"
+                )))?;
+
+            let mut tx = reloaded_repo.start_transaction();
+
+            // ── Étape 1 : jj_lib::git::remove_remote() ──────────────
+            // Supprime le remote + ses refs + ses bookmarks jj en une opération.
+            // Idempotent : si le remote n'existe pas, on skip.
+            let jj_remote_name = jj_lib::ref_name::RemoteName::new(&remote_name_str);
+            let remove_result = jj_lib::git::remove_remote(
+                tx.repo_mut(),
+                jj_remote_name,
+            );
+
+            match remove_result {
+                Ok(()) => {
+                    info!(remote = %remote_name_str, "🧹 Remote supprimé via jj-lib");
+                }
+                Err(e) => {
+                    let err_msg = format!("{e}");
+                    if err_msg.contains("NoSuchRemote") || err_msg.contains("not found") || err_msg.contains("no such remote") {
+                        info!(remote = %remote_name_str, "🧹 Remote déjà absent — noop");
+                        return Ok(());
+                    } else {
+                        return Err(DomainError::VcsError(format!(
+                            "jj_lib::git::remove_remote failed: {e}"
+                        )));
+                    }
+                }
+            }
+
+            // ── Étape 2 : Commit de la transaction jj ────────────────
+            let new_repo = pollster::block_on(
+                tx.commit(format!(
+                    "SHINOBI: cleanup fork remote fork-{src_id} from {par_id} (Phase 37E)"
+                )),
+            )
+            .map_err(|e| DomainError::VcsError(format!(
+                "cleanup_fork_remote tx.commit failed: {e}"
+            )))?;
+
+            // ── Étape 3 : Mettre à jour le handle jj ────────────────
+            wh.update_repo(new_repo);
+
+            info!(
+                remote = %remote_name_str,
+                "🧹✅ Remote nettoyé via jj-lib — zero git CLI, zero bookmarks fantômes"
+            );
+
+            Ok(())
+        })
+        .await
+        .map_err(|e| DomainError::Internal(format!("spawn_blocking join error: {e}")))?
+    }
 }
 
 // ── Tests ──────────────────────────────────────────────────────────────────

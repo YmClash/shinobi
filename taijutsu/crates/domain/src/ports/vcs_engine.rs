@@ -228,6 +228,42 @@ pub trait VcsEngine: Send + Sync {
         source_ref: &str,
         target_ref: &str,
     ) -> Result<Vec<FileDiff>, DomainError>;
+
+    // ── Phase 37E — Le Trou de Ver Git (Cross-Repo MR) ──────────────
+
+    /// Importe les objets Git d'un fork (source) dans le parent (target)
+    /// en ajoutant le fork comme Git remote temporaire, puis fetch.
+    ///
+    /// Après cette opération, les refs du fork sont accessibles
+    /// dans le parent sous `refs/remotes/fork-{source_repo_id}/{branch}`.
+    ///
+    /// ## Git sous le capot
+    /// 1. `git remote add fork-{id} {fork_git_path}` (si pas déjà ajouté)
+    /// 2. `git fetch fork-{id}`
+    /// 3. Les refs sont maintenant visibles dans le parent
+    ///
+    /// ## Performance
+    /// Le fetch local entre deux dossiers sur le même disque dur utilise
+    /// des hardlinks — instantané et quasi-zero espace disque.
+    async fn fetch_fork_refs(
+        &self,
+        parent_repo_id: &Uuid,
+        source_repo_id: &Uuid,
+    ) -> Result<(), DomainError>;
+
+    /// Nettoyage post-merge/close : supprime le remote temporaire et ses refs.
+    ///
+    /// Exécute `git remote remove fork-{source_repo_id}` sur le bare Git
+    /// du parent, ce qui supprime automatiquement les refs fetchées
+    /// sous `refs/remotes/fork-{id}/*`.
+    ///
+    /// ## Idempotent
+    /// Si le remote n'existe pas (déjà nettoyé), retourne Ok silencieusement.
+    async fn cleanup_fork_remote(
+        &self,
+        parent_repo_id: &Uuid,
+        source_repo_id: &Uuid,
+    ) -> Result<(), DomainError>;
 }
 
 // ── Phase 17 — Types de Diff Colorisé ────────────────────────────────

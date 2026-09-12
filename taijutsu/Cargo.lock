@@ -2741,6 +2741,7 @@ dependencies = [
  "domain",
  "fastembed",
  "futures",
+ "gix",
  "hex",
  "jj-lib",
  "jsonwebtoken",

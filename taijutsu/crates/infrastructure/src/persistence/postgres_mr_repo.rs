@@ -56,6 +56,8 @@ fn row_to_mr(row: sqlx::postgres::PgRow) -> Result<MergeRequest, DomainError> {
         closed_at: row.try_get::<Option<DateTime<Utc>>, _>("closed_at").map_err(|e| DomainError::Persistence(e.to_string()))?,
         created_at: row.try_get::<DateTime<Utc>, _>("created_at").map_err(|e| DomainError::Persistence(e.to_string()))?,
         updated_at: row.try_get::<DateTime<Utc>, _>("updated_at").map_err(|e| DomainError::Persistence(e.to_string()))?,
+        // Phase 37E — Le Trou de Ver Git
+        source_repository_id: row.try_get::<Option<Uuid>, _>("source_repository_id").map_err(|e| DomainError::Persistence(e.to_string()))?,
     })
 }
 
@@ -108,9 +110,9 @@ impl MrRepository for PostgresMrRepository {
             INSERT INTO merge_requests (
                 id, repository_id, author_id, number, title, description,
                 source_branch, target_branch, status, merged_by, merged_at,
-                closed_at, created_at, updated_at
+                closed_at, created_at, updated_at, source_repository_id
             )
-            VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9::mr_status, $10, $11, $12, $13, $14)
+            VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9::mr_status, $10, $11, $12, $13, $14, $15)
             "#,
         )
         .bind(mr.id)
@@ -127,6 +129,7 @@ impl MrRepository for PostgresMrRepository {
         .bind(mr.closed_at)
         .bind(mr.created_at)
         .bind(mr.updated_at)
+        .bind(mr.source_repository_id) // Phase 37E
         .execute(&self.pool)
         .await
         .map_err(|e| DomainError::Persistence(e.to_string()))?;
@@ -139,7 +142,7 @@ impl MrRepository for PostgresMrRepository {
         let row = sqlx::query(
             "SELECT id, repository_id, author_id, number, title, description, \
              source_branch, target_branch, status::text, merged_by, merged_at, \
-             closed_at, created_at, updated_at \
+             closed_at, created_at, updated_at, source_repository_id \
              FROM merge_requests WHERE id = $1",
         )
         .bind(id)
@@ -162,7 +165,7 @@ impl MrRepository for PostgresMrRepository {
         let row = sqlx::query(
             "SELECT id, repository_id, author_id, number, title, description, \
              source_branch, target_branch, status::text, merged_by, merged_at, \
-             closed_at, created_at, updated_at \
+             closed_at, created_at, updated_at, source_repository_id \
              FROM merge_requests WHERE repository_id = $1 AND number = $2",
         )
         .bind(repo_id)
@@ -189,7 +192,7 @@ impl MrRepository for PostgresMrRepository {
             sqlx::query(
                 "SELECT id, repository_id, author_id, number, title, description, \
                  source_branch, target_branch, status::text, merged_by, merged_at, \
-                 closed_at, created_at, updated_at \
+                 closed_at, created_at, updated_at, source_repository_id \
                  FROM merge_requests \
                  WHERE repository_id = $1 AND status = $2::mr_status \
                  ORDER BY number DESC LIMIT $3 OFFSET $4",
@@ -204,7 +207,7 @@ impl MrRepository for PostgresMrRepository {
             sqlx::query(
                 "SELECT id, repository_id, author_id, number, title, description, \
                  source_branch, target_branch, status::text, merged_by, merged_at, \
-                 closed_at, created_at, updated_at \
+                 closed_at, created_at, updated_at, source_repository_id \
                  FROM merge_requests \
                  WHERE repository_id = $1 \
                  ORDER BY number DESC LIMIT $2 OFFSET $3",
@@ -280,7 +283,7 @@ impl MrRepository for PostgresMrRepository {
         let row = sqlx::query(
             "SELECT id, repository_id, author_id, number, title, description, \
              source_branch, target_branch, status::text, merged_by, merged_at, \
-             closed_at, created_at, updated_at \
+             closed_at, created_at, updated_at, source_repository_id \
              FROM merge_requests \
              WHERE repository_id = $1 AND source_branch = $2 AND target_branch = $3 \
                    AND status = 'open'",

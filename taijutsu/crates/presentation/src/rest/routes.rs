@@ -2102,6 +2102,13 @@ async fn actor_profile_handler(
 
 // ── Phase 26A — Merge Requests (Le Katana Croisé) ────────────────────────
 
+/// Référence vers un dépôt source (fork) pour les MR cross-repo (Phase 37E).
+#[derive(Debug, Deserialize)]
+struct SourceRepoRef {
+    pub owner: String,
+    pub name: String,
+}
+
 /// Requête JSON pour créer une MR.
 #[derive(Debug, Deserialize)]
 struct CreateMrBody {
@@ -2110,6 +2117,9 @@ struct CreateMrBody {
     pub source_branch: String,
     #[serde(default = "default_target_branch")]
     pub target_branch: String,
+    /// Phase 37E — Référence au dépôt source (fork) pour une MR cross-repo.
+    /// Si absent, c'est une MR intra-repo classique.
+    pub source_repo: Option<SourceRepoRef>,
 }
 
 fn default_target_branch() -> String {
@@ -2148,7 +2158,7 @@ fn default_merge_strategy() -> String {
     "fast_forward".to_string()
 }
 
-/// `POST /api/v1/repos/{owner}/{repo}/mrs` — Créer une MR.
+/// `POST /api/v1/repos/{owner}/{repo}/mrs` — Créer une MR (intra-repo ou cross-repo).
 async fn create_mr_handler(
     auth: crate::rest::auth_middleware::AuthUser,
     State(state): State<SharedState>,
@@ -2157,16 +2167,32 @@ async fn create_mr_handler(
 ) -> Result<Json<serde_json::Value>, AppError> {
     let repo_entity = state.resolve_repo.execute(&owner, &repo).await?;
 
-    let cmd = application::use_cases::create_mr::CreateMrCommand {
-        author_id: auth.0.actor_id(),
-        repository_id: repo_entity.id,
-        title: body.title,
-        description: body.description,
-        source_branch: body.source_branch,
-        target_branch: body.target_branch,
+    // Phase 37E — Dispatcher selon le type de MR
+    let mr = if let Some(source) = body.source_repo {
+        // Cross-repo MR (fork → parent)
+        let cmd = application::use_cases::create_cross_repo_mr::CreateCrossRepoMrCommand {
+            author_id: auth.0.actor_id(),
+            source_owner: source.owner,
+            source_repo: source.name,
+            target_repository_id: repo_entity.id,
+            title: body.title,
+            description: body.description,
+            source_branch: body.source_branch,
+            target_branch: body.target_branch,
+        };
+        state.create_cross_repo_mr.execute(cmd).await?
+    } else {
+        // Intra-repo MR (comportement classique Phase 26A)
+        let cmd = application::use_cases::create_mr::CreateMrCommand {
+            author_id: auth.0.actor_id(),
+            repository_id: repo_entity.id,
+            title: body.title,
+            description: body.description,
+            source_branch: body.source_branch,
+            target_branch: body.target_branch,
+        };
+        state.create_mr.execute(cmd).await?
     };
-
-    let mr = state.create_mr.execute(cmd).await?;
 
     Ok(Json(serde_json::json!({
         "id": mr.id,
@@ -2178,6 +2204,8 @@ async fn create_mr_handler(
         "status": mr.status,
         "author_id": mr.author_id,
         "created_at": mr.created_at,
+        "source_repository_id": mr.source_repository_id,
+        "cross_repo": mr.is_cross_repo(),
     })))
 }
 
@@ -2210,6 +2238,8 @@ async fn list_mrs_handler(
                 "author_id": mr.author_id,
                 "created_at": mr.created_at,
                 "updated_at": mr.updated_at,
+                "source_repository_id": mr.source_repository_id,
+                "cross_repo": mr.is_cross_repo(),
             })
         })
         .collect();

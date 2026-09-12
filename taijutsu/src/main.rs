@@ -474,6 +474,7 @@ async fn main() -> anyhow::Result<()> {
         application::use_cases::close_mr::CloseMrUseCase::new(
             mr_repo.clone(),
             repo_repo.clone(),
+            vcs.clone(),
         ),
     );
     let mr_diff = Arc::new(
@@ -481,6 +482,18 @@ async fn main() -> anyhow::Result<()> {
     );
 
     info!("⚔️ Merge Requests initialisé (Phase 26A — Le Katana Croisé)");
+
+    // ── Phase 37E — Cross-Repo MR (Le Trou de Ver Git) ──────────
+    let create_cross_repo_mr = Arc::new(
+        application::use_cases::create_cross_repo_mr::CreateCrossRepoMrUseCase::new(
+            mr_repo.clone(),
+            repo_repo.clone(),
+            actor_repo.clone(),
+            notification_repo.clone(),
+            vcs.clone(),
+        ),
+    );
+    info!("🕳️⚡ Cross-Repo MR initialisé (Phase 37E — Le Trou de Ver Git)");
 
     // ── Phase 28B — ANBU Checkpoints ──────────────────
     let anbu_repo: Arc<dyn domain::ports::anbu_repository::AnbuRepository> = Arc::new(
@@ -659,6 +672,8 @@ async fn main() -> anyhow::Result<()> {
         merge_mr,
         close_mr,
         mr_diff,
+        // Phase 37E — Cross-Repo MR (Le Trou de Ver Git)
+        create_cross_repo_mr,
         // Phase 28B — ANBU Checkpoints
         create_checkpoint,
         list_checkpoints: list_checkpoints_uc,

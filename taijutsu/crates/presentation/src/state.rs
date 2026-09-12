@@ -157,6 +157,10 @@ pub struct SharedState {
     /// Use case: calculer le diff d'une MR.
     pub mr_diff: Arc<application::use_cases::mr_diff::MrDiffUseCase>,
 
+    // ── Phase 37E — Cross-Repo MR (Le Trou de Ver Git) ────────────
+    /// Use case: créer une MR cross-repo (fork → parent).
+    pub create_cross_repo_mr: Arc<application::use_cases::create_cross_repo_mr::CreateCrossRepoMrUseCase>,
+
     // ── Phase 28B — ANBU Checkpoints (Sync CLI → Serveur) ────────
     /// Use case: créer un checkpoint ANBU (multipart → IPFS + PG).
     pub create_checkpoint: Arc<application::use_cases::create_checkpoint::CreateCheckpointUseCase>,

@@ -46,10 +46,23 @@ pub struct MergeRequest {
     pub created_at: DateTime<Utc>,
     /// Date de dernière mise à jour.
     pub updated_at: DateTime<Utc>,
+
+    // ── Phase 37E — Le Trou de Ver Git (Cross-Repo MR) ────────────
+
+    /// UUID du dépôt source (fork) pour les MR cross-repo.
+    /// `None` = MR intra-repo (source et target dans le même repo).
+    /// Renseigné = MR cross-repo (fork → parent).
+    /// Le `repository_id` reste le repo cible (parent).
+    pub source_repository_id: Option<Uuid>,
 }
 
 impl MergeRequest {
-    /// Construit une nouvelle MR ouverte.
+    /// Construit une nouvelle MR ouverte (intra-repo ou cross-repo).
+    ///
+    /// ## Cross-Repo (Phase 37E)
+    /// Si `source_repository_id` est `Some`, la MR est cross-repo :
+    /// - `repository_id` = repo cible (parent)
+    /// - `source_repository_id` = repo source (fork)
     pub fn new(
         repository_id: Uuid,
         author_id: Uuid,
@@ -75,7 +88,32 @@ impl MergeRequest {
             closed_at: None,
             created_at: now,
             updated_at: now,
+            source_repository_id: None,
         }
+    }
+
+    /// Construit une nouvelle MR cross-repo (fork → parent).
+    pub fn new_cross_repo(
+        target_repository_id: Uuid,
+        source_repository_id: Uuid,
+        author_id: Uuid,
+        number: i32,
+        title: String,
+        description: Option<String>,
+        source_branch: String,
+        target_branch: String,
+    ) -> Self {
+        let mut mr = Self::new(
+            target_repository_id,
+            author_id,
+            number,
+            title,
+            description,
+            source_branch,
+            target_branch,
+        );
+        mr.source_repository_id = Some(source_repository_id);
+        mr
     }
 
     /// La MR est-elle ouverte ?
@@ -91,6 +129,12 @@ impl MergeRequest {
     /// La MR est-elle fermée sans merge ?
     pub fn is_closed(&self) -> bool {
         self.status == MrStatus::Closed
+    }
+
+    /// La MR est-elle cross-repo (fork → parent) ?
+    /// Phase 37E — Le Trou de Ver Git.
+    pub fn is_cross_repo(&self) -> bool {
+        self.source_repository_id.is_some()
     }
 }
 
@@ -328,8 +372,30 @@ mod tests {
         assert!(mr.is_open());
         assert!(!mr.is_merged());
         assert!(!mr.is_closed());
+        assert!(!mr.is_cross_repo()); // Phase 37E — intra-repo par défaut
         assert_eq!(mr.number, 1);
         assert!(mr.merged_by.is_none());
+        assert!(mr.source_repository_id.is_none());
+    }
+
+    #[test]
+    fn test_new_cross_repo_mr() {
+        let parent_id = Uuid::new_v4();
+        let fork_id = Uuid::new_v4();
+        let mr = MergeRequest::new_cross_repo(
+            parent_id,
+            fork_id,
+            Uuid::new_v4(),
+            1,
+            "Cross-repo feature".to_string(),
+            None,
+            "feature/wormhole".to_string(),
+            "main".to_string(),
+        );
+        assert!(mr.is_open());
+        assert!(mr.is_cross_repo());
+        assert_eq!(mr.repository_id, parent_id);
+        assert_eq!(mr.source_repository_id, Some(fork_id));
     }
 
     #[test]

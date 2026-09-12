@@ -6,6 +6,7 @@ pub mod comment_issue;
 pub mod create_checkpoint;
 pub mod create_issue;
 pub mod create_mr;
+pub mod create_cross_repo_mr;
 pub mod create_operation;
 pub mod create_pat;
 pub mod create_repository;

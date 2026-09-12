@@ -2,14 +2,16 @@
 //!
 //! Orchestre le merge complet :
 //! 1. RBAC (Maintainer ou Owner requis)
-//! 2. Vérification fast-forward possible
-//! 3. Exécution du merge VCS
-//! 4. Transition d'état + événement timeline
+//! 2. **Phase 37E** — Si cross-repo : fetch des refs du fork dans le parent
+//! 3. Vérification fast-forward possible
+//! 4. Exécution du merge VCS
+//! 5. Transition d'état + événement timeline
+//! 6. **Phase 37E** — Cleanup du remote temporaire (finally-style)
 
 use std::sync::Arc;
 
 use chrono::Utc;
-use tracing::{info, instrument};
+use tracing::{info, instrument, warn};
 use uuid::Uuid;
 
 use domain::entities::merge_request::{MergeStrategy, MrEvent, MrEventType, MrStatus};
@@ -90,10 +92,64 @@ impl MergeMrUseCase {
             ));
         }
 
+        // ── Phase 37E — Cross-Repo : Trou de Ver ────────────────────
+        //
+        // Si la MR est cross-repo, on doit :
+        // 1. Fetch les refs du fork dans le parent (re-fetch pour les derniers commits)
+        // 2. Utiliser la ref du remote temporaire comme source_ref
+        // 3. Cleanup le remote dans un finally-style (même si le merge échoue)
+
+        let is_cross_repo = mr.is_cross_repo();
+        let source_repo_id = mr.source_repository_id;
+
+        // La ref source effective : pour les MR cross-repo, c'est la ref du remote
+        let effective_source_ref = if let Some(src_id) = source_repo_id {
+            // Phase 37E — Fetch des objets Git du fork dans le parent
+            self.vcs
+                .fetch_fork_refs(&mr.repository_id, &src_id)
+                .await?;
+
+            // La branche source est accessible via le remote temporaire
+            format!("fork-{}/{}", src_id, mr.source_branch)
+        } else {
+            mr.source_branch.clone()
+        };
+
+        // Exécuter le merge (avec cleanup finally-style pour cross-repo)
+        let merge_result = self
+            .execute_merge_inner(&cmd, &mr, &effective_source_ref)
+            .await;
+
+        // ── Cleanup (finally-style) — toujours exécuté pour cross-repo ──
+        if is_cross_repo {
+            if let Some(src_id) = source_repo_id {
+                if let Err(e) = self.vcs.cleanup_fork_remote(&mr.repository_id, &src_id).await {
+                    // Ne pas propager l'erreur de cleanup — le merge a réussi ou échoué
+                    // indépendamment. Un remote orphelin sera nettoyé au prochain merge/close.
+                    warn!(
+                        mr_id = %mr.id,
+                        source_repo = %src_id,
+                        error = %e,
+                        "⚠️ Cleanup fork remote échoué (non-fatal) — sera retentée"
+                    );
+                }
+            }
+        }
+
+        merge_result
+    }
+
+    /// Logique de merge interne — extraite pour permettre le pattern finally sur le cleanup.
+    async fn execute_merge_inner(
+        &self,
+        cmd: &MergeMrCommand,
+        mr: &domain::entities::merge_request::MergeRequest,
+        effective_source_ref: &str,
+    ) -> Result<MergeResult, DomainError> {
         // 4. Vérifier fast-forward
         let can_ff = self
             .vcs
-            .can_fast_forward(&mr.repository_id, &mr.source_branch, &mr.target_branch)
+            .can_fast_forward(&mr.repository_id, effective_source_ref, &mr.target_branch)
             .await?;
 
         if !can_ff {
@@ -107,7 +163,7 @@ impl MergeMrUseCase {
         let merge_cid = match cmd.strategy {
             MergeStrategy::FastForward => {
                 self.vcs
-                    .merge_fast_forward(&mr.repository_id, &mr.source_branch, &mr.target_branch)
+                    .merge_fast_forward(&mr.repository_id, effective_source_ref, &mr.target_branch)
                     .await?
             }
             MergeStrategy::Squash => {
@@ -120,7 +176,7 @@ impl MergeMrUseCase {
                 self.vcs
                     .squash_merge(
                         &mr.repository_id,
-                        &mr.source_branch,
+                        effective_source_ref,
                         &mr.target_branch,
                         &message,
                     )
@@ -148,6 +204,7 @@ impl MergeMrUseCase {
             serde_json::json!({
                 "strategy": cmd.strategy,
                 "commit_id": merge_cid.as_str(),
+                "cross_repo": mr.is_cross_repo(),
             }),
         );
         self.mr_repo.save_event(&event).await?;
@@ -156,8 +213,10 @@ impl MergeMrUseCase {
             mr_id = %mr.id,
             mr_number = mr.number,
             commit = %merge_cid.as_str(),
-            "✅ MR #{} fusionnée avec succès",
-            mr.number
+            cross_repo = mr.is_cross_repo(),
+            "✅ MR #{} fusionnée avec succès{}",
+            mr.number,
+            if mr.is_cross_repo() { " (cross-repo 🕳️)" } else { "" }
         );
 
         Ok(MergeResult {

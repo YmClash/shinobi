@@ -16,6 +16,7 @@ redis = { workspace = true }
 
 # — Moteur VCS —
 jj-lib    = { workspace = true }
+gix       = { workspace = true }
 pollster  = { workspace = true }
 
 # — Synchronisation haute performance —

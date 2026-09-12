@@ -1,27 +1,34 @@
 //! Use Case: CloseMr — Fermeture d'une MR sans fusion.
+//!
+//! ## Phase 37E — Cross-Repo MR
+//! Si la MR est cross-repo, le cleanup du remote temporaire est déclenché
+//! à la fermeture (même logique finally-style que le merge).
 
 use std::sync::Arc;
 
 use chrono::Utc;
-use tracing::{info, instrument};
+use tracing::{info, instrument, warn};
 use uuid::Uuid;
 
 use domain::entities::merge_request::{MrEvent, MrEventType, MrStatus};
 use domain::errors::DomainError;
 use domain::ports::mr_repository::MrRepository;
 use domain::ports::repo_repository::RepoRepository;
+use domain::ports::vcs_engine::VcsEngine;
 
 pub struct CloseMrUseCase {
     mr_repo: Arc<dyn MrRepository>,
     repo_repo: Arc<dyn RepoRepository>,
+    vcs: Arc<dyn VcsEngine>,
 }
 
 impl CloseMrUseCase {
     pub fn new(
         mr_repo: Arc<dyn MrRepository>,
         repo_repo: Arc<dyn RepoRepository>,
+        vcs: Arc<dyn VcsEngine>,
     ) -> Self {
-        Self { mr_repo, repo_repo }
+        Self { mr_repo, repo_repo, vcs }
     }
 
     #[instrument(skip(self))]
@@ -67,11 +74,31 @@ impl CloseMrUseCase {
         );
         self.mr_repo.save_event(&event).await?;
 
+        // ── Phase 37E — Cleanup du Trou de Ver sur Close ────────────
+        if let Some(source_repo_id) = mr.source_repository_id {
+            if let Err(e) = self.vcs.cleanup_fork_remote(&mr.repository_id, &source_repo_id).await {
+                warn!(
+                    mr_id = %mr.id,
+                    source_repo = %source_repo_id,
+                    error = %e,
+                    "⚠️ Cleanup fork remote échoué à la fermeture (non-fatal)"
+                );
+            } else {
+                info!(
+                    mr_id = %mr.id,
+                    source_repo = %source_repo_id,
+                    "🧹 Remote fork nettoyé suite à la fermeture de la MR cross-repo"
+                );
+            }
+        }
+
         info!(
             mr_id = %mr.id,
             mr_number = mr.number,
-            "✅ MR #{} fermée sans fusion",
-            mr.number
+            cross_repo = mr.is_cross_repo(),
+            "✅ MR #{} fermée sans fusion{}",
+            mr.number,
+            if mr.is_cross_repo() { " (cross-repo 🕳️)" } else { "" }
         );
 
         Ok(())
