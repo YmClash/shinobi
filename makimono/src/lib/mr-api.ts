@@ -1,6 +1,7 @@
 // ═══════════════════════════════════════════════════════════════
-// SHINOBI — Makimono MR API Client (Phase 26B)
+// SHINOBI — Makimono MR API Client (Phase 26B + 37E-UI)
 // Typed wrappers for Merge Request REST endpoints
+// Cross-repo MR support: source_repo dispatches fork → parent
 // ═══════════════════════════════════════════════════════════════
 
 import { getBaseUrl, buildRepoPrefix } from "./api";
@@ -11,6 +12,12 @@ import { authHeaders } from "./auth";
 export type MrStatus = "open" | "merged" | "closed";
 export type MrVerdict = "approve" | "changes_requested";
 export type MergeStrategy = "fast_forward" | "squash";
+
+/** Référence vers un dépôt source (fork) pour les MR cross-repo (Phase 37E-UI). */
+export interface SourceRepoRef {
+  owner: string;
+  name: string;
+}
 
 export interface MergeRequest {
   id: string;
@@ -26,6 +33,10 @@ export interface MergeRequest {
   closed_at: string | null;
   created_at: string;
   updated_at: string;
+  /** UUID du dépôt source si cross-repo (Phase 37E). */
+  source_repository_id?: string | null;
+  /** True si la MR est cross-repo (fork → parent). */
+  cross_repo?: boolean;
 }
 
 export interface MrReview {
@@ -123,7 +134,13 @@ export async function getMergeRequest(
   return handleResponse(res);
 }
 
-/** POST /api/v1/repos/{o}/{r}/mrs — Create a new MR. */
+/**
+ * POST /api/v1/repos/{o}/{r}/mrs — Create a new MR.
+ *
+ * Phase 37E-UI: If `source_repo` is provided, the backend dispatches
+ * CreateCrossRepoMrCommand instead of CreateMrCommand.
+ * The POST must target the PARENT repo, not the fork.
+ */
 export async function createMergeRequest(
   owner: string,
   repo: string,
@@ -132,6 +149,8 @@ export async function createMergeRequest(
     description?: string;
     source_branch: string;
     target_branch: string;
+    /** Phase 37E-UI — Référence au fork source pour une MR cross-repo. */
+    source_repo?: SourceRepoRef;
   }
 ): Promise<MergeRequest> {
   const res = await fetch(mrPrefix(owner, repo), {

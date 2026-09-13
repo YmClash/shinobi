@@ -312,6 +312,118 @@
 .mr-form-textarea { resize: vertical; min-height: 120px; line-height: 1.6; }
 .mr-form-actions { display: flex; gap: 0.5rem; justify-content: flex-end; padding-top: 0.5rem; }
 
+/* ── Cross-Repo MR Banner (Phase 37E-UI) ──────────────────── */
+.mr-crossrepo-banner {
+  padding: 0.75rem 1rem; border-radius: 10px; margin-bottom: 0.25rem;
+  background: linear-gradient(135deg, oklch(0.22 0.06 280 / 80%), oklch(0.18 0.04 260 / 80%));
+  border: 1px solid oklch(0.55 0.18 280 / 25%);
+  backdrop-filter: blur(12px);
+  position: relative; overflow: hidden;
+}
+.mr-crossrepo-banner::before {
+  content: ""; position: absolute; inset: 0; pointer-events: none;
+  background: linear-gradient(135deg, oklch(0.55 0.2 280 / 6%), transparent 60%);
+}
+.mr-crossrepo-header {
+  display: flex; align-items: center; justify-content: space-between;
+  gap: 0.75rem; flex-wrap: wrap; position: relative; z-index: 1;
+}
+.mr-crossrepo-title {
+  display: flex; align-items: center; gap: 0.5rem;
+  font-size: 0.78rem; font-weight: 600; color: oklch(0.82 0.12 280);
+}
+.mr-crossrepo-title-icon { font-size: 1rem; }
+.mr-crossrepo-flow {
+  display: flex; align-items: center; gap: 0.4rem; flex-wrap: wrap;
+  font-size: 0.75rem; color: var(--muted-foreground); position: relative; z-index: 1;
+  padding-top: 0.4rem;
+}
+.mr-crossrepo-repo {
+  display: inline-flex; align-items: center; gap: 0.25rem;
+  padding: 0.15rem 0.5rem; border-radius: 6px; font-family: var(--font-mono);
+  font-size: 0.7rem; font-weight: 500;
+}
+.mr-crossrepo-repo-source {
+  background: oklch(0.55 0.18 150 / 12%); color: oklch(0.78 0.18 150);
+  border: 1px solid oklch(0.55 0.18 150 / 20%);
+}
+.mr-crossrepo-repo-target {
+  background: oklch(0.55 0.18 280 / 12%); color: oklch(0.78 0.18 280);
+  border: 1px solid oklch(0.55 0.18 280 / 20%);
+}
+.mr-crossrepo-arrow { color: oklch(0.6 0.1 280); font-weight: 700; font-size: 0.85rem; }
+.mr-crossrepo-hint {
+  font-size: 0.68rem; color: var(--muted-foreground); opacity: 0.6;
+  padding-top: 0.25rem; position: relative; z-index: 1;
+}
+
+/* Toggle switch */
+.mr-crossrepo-toggle-wrap {
+  display: flex; align-items: center; gap: 0.5rem; position: relative; z-index: 1;
+}
+.mr-crossrepo-toggle-label {
+  font-size: 0.72rem; color: var(--muted-foreground); cursor: pointer; user-select: none;
+}
+.mr-crossrepo-toggle {
+  position: relative; width: 36px; height: 20px; cursor: pointer;
+  appearance: none; -webkit-appearance: none;
+  background: oklch(0.35 0.02 260); border-radius: 10px;
+  border: 1px solid oklch(0.45 0.05 260);
+  transition: background 0.25s ease, border-color 0.25s ease;
+}
+.mr-crossrepo-toggle::after {
+  content: ""; position: absolute; top: 2px; left: 2px;
+  width: 14px; height: 14px; border-radius: 50%;
+  background: oklch(0.7 0.02 260);
+  transition: transform 0.25s cubic-bezier(0.34, 1.56, 0.64, 1), background 0.25s ease;
+}
+.mr-crossrepo-toggle:checked {
+  background: oklch(0.45 0.2 280); border-color: oklch(0.55 0.2 280 / 50%);
+}
+.mr-crossrepo-toggle:checked::after {
+  transform: translateX(16px); background: oklch(0.92 0.05 280);
+}
+.mr-crossrepo-toggle:focus-visible {
+  outline: none; box-shadow: 0 0 0 2px oklch(0.55 0.2 280 / 30%);
+}
+
+/* Error state — parent unreachable */
+.mr-crossrepo-error {
+  display: flex; align-items: center; gap: 0.4rem;
+  padding: 0.5rem 0.75rem; border-radius: 8px; margin-top: 0.5rem;
+  background: oklch(0.55 0.22 25 / 10%); color: oklch(0.72 0.2 25);
+  font-size: 0.75rem; font-weight: 500;
+  border: 1px solid oklch(0.55 0.22 25 / 20%);
+  animation: mr-crossrepo-pulse 2s ease-in-out infinite;
+}
+@keyframes mr-crossrepo-pulse {
+  0%, 100% { opacity: 1; }
+  50% { opacity: 0.7; }
+}
+
+/* Theme: cyberpunk */
+[data-theme="cyberpunk"] .mr-crossrepo-banner {
+  background: linear-gradient(135deg, oklch(0.15 0.08 310 / 80%), oklch(0.12 0.06 280 / 80%));
+  border-color: oklch(0.65 0.25 310 / 30%);
+  box-shadow: 0 0 12px oklch(0.55 0.25 310 / 10%);
+}
+[data-theme="cyberpunk"] .mr-crossrepo-title { color: oklch(0.85 0.2 310); }
+[data-theme="cyberpunk"] .mr-crossrepo-toggle:checked { background: oklch(0.45 0.25 310); border-color: oklch(0.6 0.25 310 / 50%); }
+
+/* Theme: glass */
+[data-theme="glass"] .mr-crossrepo-banner {
+  backdrop-filter: blur(16px); background: oklch(0.2 0.04 260 / 50%);
+}
+
+/* Theme: scroll */
+[data-theme="scroll"] .mr-crossrepo-banner {
+  background: oklch(0.92 0.02 60 / 90%);
+  border-color: oklch(0.60 0.08 280 / 25%);
+}
+[data-theme="scroll"] .mr-crossrepo-title { color: oklch(0.40 0.12 280); }
+[data-theme="scroll"] .mr-crossrepo-repo-source { background: oklch(0.55 0.12 150 / 15%); color: oklch(0.35 0.15 150); }
+[data-theme="scroll"] .mr-crossrepo-repo-target { background: oklch(0.55 0.12 280 / 15%); color: oklch(0.35 0.15 280); }
+
 /* ── Pre-diff ──────────────────────────────────────────────── */
 .mr-prediff-section { padding: 0.75rem; border: 1px solid var(--border); border-radius: 8px; background: var(--card); }
 .mr-prediff-count { font-size: 0.7rem; font-weight: 400; color: var(--muted-foreground); margin-left: 0.5rem; }
