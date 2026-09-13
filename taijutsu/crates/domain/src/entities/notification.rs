@@ -102,6 +102,8 @@ pub enum NotificationType {
     IssueClosed,
     /// MR fusionnée (future).
     MrMerged,
+    /// MR ouverte sur votre repo (Phase 37E-UI — Cross-Repo).
+    MrOpened,
 }
 
 impl NotificationType {
@@ -114,6 +116,7 @@ impl NotificationType {
             Self::Assigned => "assigned",
             Self::IssueClosed => "issue_closed",
             Self::MrMerged => "mr_merged",
+            Self::MrOpened => "mr_opened",
         }
     }
 
@@ -126,6 +129,7 @@ impl NotificationType {
             "assigned" => Some(Self::Assigned),
             "issue_closed" => Some(Self::IssueClosed),
             "mr_merged" => Some(Self::MrMerged),
+            "mr_opened" => Some(Self::MrOpened),
             _ => None,
         }
     }

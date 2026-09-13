@@ -12,6 +12,7 @@ use futures_util::StreamExt;
 use serde::{Deserialize, Serialize};
 use tracing::{info, warn};
 use uuid::Uuid;
+use std::sync::Arc;
 
 use application::use_cases::create_operation::CreateOperationCommand;
 use application::use_cases::create_repository::CreateRepositoryCommand;
@@ -1403,6 +1404,12 @@ async fn explorer_refs_handler(
     // Phase 23 : check visibilité
     let _repository = resolve_repo_with_access_check(&state, &owner, &repo, &auth).await?;
 
+    // Lazy-init : s'assurer que le workspace VCS est chargé en mémoire.
+    // init_workspace() est idempotent (re-open si déjà initialisé).
+    // Sans ceci, list_refs crashe après un restart serveur si le repo
+    // n'a pas encore été accédé via git push/pull/clone.
+    state.vcs_engine.init_workspace(&_repository.owner_id, &_repository.id).await?;
+
     let refs = state.list_refs.execute(&owner, &repo).await?;
 
     let branches: Vec<serde_json::Value> = refs
@@ -2378,6 +2385,63 @@ async fn review_mr_handler(
 
     let review = state.review_mr.execute(cmd).await?;
 
+    // ── Phase 37E-UI : Notification à l'auteur de la MR ──────────
+    // Fire-and-forget — on notifie l'auteur qu'une review a été soumise.
+    {
+        let mr_repo = Arc::clone(&state.mr_repo);
+        let actor_repo = Arc::clone(&state.actor_repo);
+        let notification_repo = Arc::clone(&state.notification_repo);
+        let reviewer_id = auth.0.actor_id();
+        let repo_id = repo_entity.id;
+        let repo_name = repo_entity.name.clone();
+        let repo_owner_id = repo_entity.owner_id;
+        let mr_number = number;
+        let verdict_str = body.verdict.clone();
+
+        tokio::spawn(async move {
+            // Retrouver la MR pour avoir l'auteur
+            let mr = match mr_repo.find_by_repo_and_number(&repo_id, mr_number).await {
+                Ok(Some(mr)) => mr,
+                _ => return,
+            };
+
+            // Ne pas notifier si le reviewer est l'auteur
+            if mr.author_id == reviewer_id {
+                return;
+            }
+
+            let reviewer_handle = match actor_repo.find_by_id(&reviewer_id).await {
+                Ok(Some(a)) => a.handle,
+                _ => "someone".to_string(),
+            };
+            let owner_handle = match actor_repo.find_by_id(&repo_owner_id).await {
+                Ok(Some(a)) => a.handle,
+                _ => "unknown".to_string(),
+            };
+
+            let notif = domain::entities::notification::Notification::new(
+                mr.author_id,
+                reviewer_id,
+                domain::entities::notification::NotificationType::ReviewReceived,
+                domain::entities::notification::TargetType::MergeRequest,
+                mr.id,
+                Some(mr_number),
+                repo_id,
+                owner_handle,
+                repo_name,
+                format!(
+                    "{} {} your MR #{}",
+                    reviewer_handle,
+                    if verdict_str == "approve" { "approved" } else { "requested changes on" },
+                    mr_number
+                ),
+            );
+            if let Err(e) = notification_repo.save(&notif).await {
+                tracing::warn!("⚠️ Notification ReviewReceived error: {e}");
+            }
+        });
+    }
+
     Ok(Json(serde_json::json!({
         "id": review.id,
         "mr_id": review.mr_id,
@@ -2416,6 +2480,55 @@ async fn merge_mr_handler(
     };
 
     let result = state.merge_mr.execute(cmd).await?;
+
+    // ── Phase 37E-UI : Notification à l'auteur de la MR mergée ───
+    {
+        let mr_repo = Arc::clone(&state.mr_repo);
+        let actor_repo = Arc::clone(&state.actor_repo);
+        let notification_repo = Arc::clone(&state.notification_repo);
+        let merger_id = auth.0.actor_id();
+        let repo_id = repo_entity.id;
+        let repo_name = repo_entity.name.clone();
+        let repo_owner_id = repo_entity.owner_id;
+        let mr_number = number;
+
+        tokio::spawn(async move {
+            let mr = match mr_repo.find_by_repo_and_number(&repo_id, mr_number).await {
+                Ok(Some(mr)) => mr,
+                _ => return,
+            };
+
+            // Ne pas notifier si le merger est l'auteur
+            if mr.author_id == merger_id {
+                return;
+            }
+
+            let merger_handle = match actor_repo.find_by_id(&merger_id).await {
+                Ok(Some(a)) => a.handle,
+                _ => "someone".to_string(),
+            };
+            let owner_handle = match actor_repo.find_by_id(&repo_owner_id).await {
+                Ok(Some(a)) => a.handle,
+                _ => "unknown".to_string(),
+            };
+
+            let notif = domain::entities::notification::Notification::new(
+                mr.author_id,
+                merger_id,
+                domain::entities::notification::NotificationType::MrMerged,
+                domain::entities::notification::TargetType::MergeRequest,
+                mr.id,
+                Some(mr_number),
+                repo_id,
+                owner_handle,
+                repo_name,
+                format!("{} merged your MR #{}", merger_handle, mr_number),
+            );
+            if let Err(e) = notification_repo.save(&notif).await {
+                tracing::warn!("⚠️ Notification MrMerged error: {e}");
+            }
+        });
+    }
 
     Ok(Json(serde_json::json!({
         "merge_commit_id": result.merge_commit_id,

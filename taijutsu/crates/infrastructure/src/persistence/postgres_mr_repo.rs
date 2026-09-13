@@ -188,13 +188,16 @@ impl MrRepository for PostgresMrRepository {
         limit: usize,
         offset: usize,
     ) -> Result<Vec<MergeRequest>, DomainError> {
+        // Phase 37E-UI : inclure les MR cross-repo dont le fork est la source.
+        // WHERE repository_id = $1 → MR locales (intra-repo + cross-repo reçues)
+        // OR source_repository_id = $1 → cross-repo envoyées depuis ce fork
         let rows = if let Some(s) = status {
             sqlx::query(
                 "SELECT id, repository_id, author_id, number, title, description, \
                  source_branch, target_branch, status::text, merged_by, merged_at, \
                  closed_at, created_at, updated_at, source_repository_id \
                  FROM merge_requests \
-                 WHERE repository_id = $1 AND status = $2::mr_status \
+                 WHERE (repository_id = $1 OR source_repository_id = $1) AND status = $2::mr_status \
                  ORDER BY number DESC LIMIT $3 OFFSET $4",
             )
             .bind(repo_id)
@@ -209,7 +212,7 @@ impl MrRepository for PostgresMrRepository {
                  source_branch, target_branch, status::text, merged_by, merged_at, \
                  closed_at, created_at, updated_at, source_repository_id \
                  FROM merge_requests \
-                 WHERE repository_id = $1 \
+                 WHERE repository_id = $1 OR source_repository_id = $1 \
                  ORDER BY number DESC LIMIT $2 OFFSET $3",
             )
             .bind(repo_id)
@@ -307,10 +310,11 @@ impl MrRepository for PostgresMrRepository {
         repo_id: &Uuid,
         status: Option<MrStatus>,
     ) -> Result<i64, DomainError> {
+        // Phase 37E-UI : cohérent avec list_by_repo — inclure les cross-repo
         let row = if let Some(s) = status {
             sqlx::query(
                 "SELECT COUNT(*) as count FROM merge_requests \
-                 WHERE repository_id = $1 AND status = $2::mr_status",
+                 WHERE (repository_id = $1 OR source_repository_id = $1) AND status = $2::mr_status",
             )
             .bind(repo_id)
             .bind(s.as_sql_str())
@@ -318,7 +322,8 @@ impl MrRepository for PostgresMrRepository {
             .await
         } else {
             sqlx::query(
-                "SELECT COUNT(*) as count FROM merge_requests WHERE repository_id = $1",
+                "SELECT COUNT(*) as count FROM merge_requests \
+                 WHERE repository_id = $1 OR source_repository_id = $1",
             )
             .bind(repo_id)
             .fetch_one(&self.pool)

@@ -739,7 +739,7 @@ fn resolve_revision_internal(
             .ok_or_else(|| DomainError::VcsError(format!("invalid hex commit id '{revision}'")));
     }
 
-    // 2. Loose ref Git filesystem
+    // 2. Loose ref Git filesystem — refs/heads/{revision}
     let loose_ref = git_dir.join("refs").join("heads").join(revision);
     if let Ok(sha) = std::fs::read_to_string(&loose_ref) {
         let sha = sha.trim();
@@ -750,19 +750,53 @@ fn resolve_revision_internal(
         }
     }
 
+    // 2b. Remote ref Git filesystem — refs/remotes/{revision}
+    // Phase 37E-UI fix: après fetch_fork_refs(), les branches du fork sont
+    // stockées dans refs/remotes/fork-{id}/{branch}. Le merge_mr.rs passe
+    // "fork-{id}/{branch}" comme effective_source_ref.
+    if revision.contains('/') {
+        let remote_ref = git_dir.join("refs").join("remotes").join(revision);
+        if let Ok(sha) = std::fs::read_to_string(&remote_ref) {
+            let sha = sha.trim();
+            if sha.len() == 40 && sha.chars().all(|c| c.is_ascii_hexdigit()) {
+                return CommitId::try_from_hex(sha).ok_or_else(|| {
+                    DomainError::VcsError(format!("invalid SHA in remote ref '{revision}'"))
+                });
+            }
+        }
+    }
+
     // 3. packed-refs
     let packed = git_dir.join("packed-refs");
     if let Ok(content) = std::fs::read_to_string(&packed) {
         let ref_name = format!("refs/heads/{revision}");
+        // Phase 37E-UI fix: chercher aussi dans refs/remotes/ pour les cross-repo refs
+        let remote_ref_name = if revision.contains('/') {
+            Some(format!("refs/remotes/{revision}"))
+        } else {
+            None
+        };
         for line in content.lines() {
             if line.starts_with('#') || line.starts_with('^') {
                 continue;
             }
             let parts: Vec<&str> = line.split_whitespace().collect();
-            if parts.len() >= 2 && parts[1] == ref_name {
-                return CommitId::try_from_hex(parts[0]).ok_or_else(|| {
-                    DomainError::VcsError(format!("invalid SHA in packed-refs for '{revision}'"))
-                });
+            if parts.len() >= 2 {
+                if parts[1] == ref_name {
+                    return CommitId::try_from_hex(parts[0]).ok_or_else(|| {
+                        DomainError::VcsError(format!("invalid SHA in packed-refs for '{revision}'"))
+
+                    
+                    });
+                }
+                // Check remote ref in packed-refs
+                if let Some(ref rr) = remote_ref_name {
+                    if parts[1] == rr.as_str() {
+                        return CommitId::try_from_hex(parts[0]).ok_or_else(|| {
+                            DomainError::VcsError(format!("invalid SHA in packed-refs (remote) for '{revision}'"))
+                        });
+                    }
+                }
             }
         }
     }
@@ -794,7 +828,7 @@ fn resolve_revision_internal(
     }
 
     Err(DomainError::VcsError(format!(
-        "révision '{revision}' introuvable (bookmark/SHA-1/HEAD)"
+        "révision '{revision}' introuvable (bookmark/SHA-1/HEAD/remote)"
     )))
 }
 

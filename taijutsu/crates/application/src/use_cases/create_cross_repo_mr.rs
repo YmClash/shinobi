@@ -296,6 +296,41 @@ impl CreateCrossRepoMrUseCase {
                     mr_number
                 );
             }
+
+            // ── Phase 37E-UI : Notification au owner du repo parent ──────
+            // Toujours envoyée (indépendamment des @mentions), sauf si
+            // l'auteur EST le owner (edge case : MR sur son propre parent).
+            if repo_owner_id != author_id {
+                let notif = Notification::new(
+                    repo_owner_id,
+                    author_id,
+                    NotificationType::MrOpened,
+                    TargetType::MergeRequest,
+                    mr_id,
+                    Some(mr_number),
+                    repo_id,
+                    owner_handle.clone(),
+                    repo_name.clone(),
+                    format!(
+                        "{} opened cross-repo MR #{} from {}/{}",
+                        author_handle, mr_number, source_owner_handle, repo_name
+                    ),
+                );
+                if let Err(e) = notification_repo.save(&notif).await {
+                    warn!(
+                        mr_id = %mr_id,
+                        recipient = %repo_owner_id,
+                        error = %e,
+                        "⚠️ Notification MrOpened au owner échouée (non-fatal)"
+                    );
+                } else {
+                    info!(
+                        mr_id = %mr_id,
+                        recipient = %repo_owner_id,
+                        "🔔 Notification MrOpened envoyée au owner du repo parent"
+                    );
+                }
+            }
         });
 
         info!(
