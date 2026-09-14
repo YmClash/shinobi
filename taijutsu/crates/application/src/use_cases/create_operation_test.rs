@@ -105,6 +105,12 @@ mod tests {
         async fn clone_workspace(&self, _source_owner_id: &Uuid, _source_repo_id: &Uuid, _target_owner_id: &Uuid, _target_repo_id: &Uuid) -> Result<(), DomainError> {
             Ok(())
         }
+        async fn fetch_fork_refs(&self, _repo_id: &Uuid, _fork_repo_id: &Uuid) -> Result<(), DomainError> {
+            Ok(())
+        }
+        async fn cleanup_fork_remote(&self, _repo_id: &Uuid, _fork_repo_id: &Uuid) -> Result<(), DomainError> {
+            Ok(())
+        }
     }
 
     // ── Mock OperationRepository ──────────────────────────

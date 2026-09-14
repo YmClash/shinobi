@@ -1,6 +1,7 @@
 //! Use Case: CommentIssue — Ajouter un commentaire à une issue.
 //!
 //! Phase 37C: intègre l'extraction des @mentions dans le corps du commentaire.
+//! Phase 37F: route les mentions fédérées via ActivityPub (Le Mégaphone Interstellaire).
 
 use std::sync::Arc;
 use tracing::{info, instrument, warn};
@@ -9,6 +10,7 @@ use domain::entities::issue::{IssueComment, IssueEvent, IssueEventType};
 use domain::entities::notification::{Notification, NotificationType, TargetType};
 use domain::errors::DomainError;
 use domain::ports::actor_repository::ActorRepository;
+use domain::ports::federation_repository::FederationRepository;
 use domain::ports::issue_repository::IssueRepository;
 use domain::ports::notification_repository::NotificationRepository;
 use domain::ports::repo_repository::RepoRepository;
@@ -28,6 +30,10 @@ pub struct CommentIssueUseCase {
     repo_repo: Arc<dyn RepoRepository>,
     actor_repo: Arc<dyn ActorRepository>,
     notification_repo: Arc<dyn NotificationRepository>,
+    // Phase 37F — Mégaphone Interstellaire
+    federation_repo: Arc<dyn FederationRepository>,
+    remote_fetcher: Arc<infrastructure::federation::remote_actor::RemoteActorFetcher>,
+    federation_domain: String,
 }
 
 impl CommentIssueUseCase {
@@ -36,8 +42,14 @@ impl CommentIssueUseCase {
         repo_repo: Arc<dyn RepoRepository>,
         actor_repo: Arc<dyn ActorRepository>,
         notification_repo: Arc<dyn NotificationRepository>,
+        federation_repo: Arc<dyn FederationRepository>,
+        remote_fetcher: Arc<infrastructure::federation::remote_actor::RemoteActorFetcher>,
+        federation_domain: String,
     ) -> Self {
-        Self { issue_repo, repo_repo, actor_repo, notification_repo }
+        Self {
+            issue_repo, repo_repo, actor_repo, notification_repo,
+            federation_repo, remote_fetcher, federation_domain,
+        }
     }
 
     #[instrument(skip(self), fields(author = %cmd.author_id, number = cmd.issue_number))]
@@ -79,6 +91,10 @@ impl CommentIssueUseCase {
         let repo_id = repo_entity.id;
         let repo_name = repo_entity.name.clone();
         let repo_owner_id = repo_entity.owner_id;
+        // Phase 37F — capture des dépendances fédération
+        let federation_repo = Arc::clone(&self.federation_repo);
+        let remote_fetcher = Arc::clone(&self.remote_fetcher);
+        let federation_domain = self.federation_domain.clone();
 
         tokio::spawn(async move {
             // Resolve owner handle for denormalized notification storage
@@ -143,6 +159,29 @@ impl CommentIssueUseCase {
                     "📣🔔 Mentions + notifications traitées pour commentaire sur Issue #{}",
                     issue_number
                 );
+            }
+
+            // ── Phase 37F — Mégaphone Interstellaire 📡 ──
+            // Route les mentions distantes (@handle@domain) via ActivityPub
+            if !mention_result.remote.is_empty() {
+                let context_url = format!(
+                    "https://{}/{}/{}/issues/{}",
+                    federation_domain.replace("api.", ""),
+                    owner_handle,
+                    repo_name,
+                    issue_number,
+                );
+                mention_service::deliver_remote_mentions(
+                    mention_result.remote,
+                    &author_id,
+                    &context_url,
+                    &comment_body,
+                    &comment_id.to_string(),
+                    &federation_domain,
+                    &actor_repo,
+                    &federation_repo,
+                    &remote_fetcher,
+                ).await;
             }
         });
 

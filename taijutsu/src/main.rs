@@ -542,14 +542,7 @@ async fn main() -> anyhow::Result<()> {
             repo_repo.clone(),
         ),
     );
-    let comment_issue = Arc::new(
-        application::use_cases::comment_issue::CommentIssueUseCase::new(
-            issue_repo.clone(),
-            repo_repo.clone(),
-            actor_repo.clone(),
-            notification_repo.clone(),
-        ),
-    );
+    // comment_issue construit après le bloc fédération (Phase 37F — besoin de remote_fetcher)
     let manage_labels = Arc::new(
         application::use_cases::manage_labels::ManageLabelsUseCase::new(
             issue_repo.clone(),
@@ -564,6 +557,8 @@ async fn main() -> anyhow::Result<()> {
         Arc::new(PostgresFederationRepository::new(pg_pool.clone()));
 
     // Auto-generate instance keypair (SYSTEM_ACTOR_ID) si absente
+    // Phase 37F: le remote_fetcher est extrait séparément pour réutilisation
+    let mut remote_fetcher_for_mentions: Option<Arc<infrastructure::federation::remote_actor::RemoteActorFetcher>> = None;
     let federation_service: Option<Arc<dyn domain::ports::federation_service::FederationService>> =
         if config.federation_enabled {
             if federation_repo.get_keypair(&SYSTEM_ACTOR_ID).await?.is_none() {
@@ -591,6 +586,7 @@ async fn main() -> anyhow::Result<()> {
             let remote_fetcher = Arc::new(
                 infrastructure::federation::remote_actor::RemoteActorFetcher::new(),
             );
+            remote_fetcher_for_mentions = Some(remote_fetcher.clone()); // Phase 37F
             let fanout = Arc::new(
                 infrastructure::federation::fanout_service::FanoutService::new(
                     federation_repo.clone(),
@@ -616,6 +612,25 @@ async fn main() -> anyhow::Result<()> {
     } else {
         create_repository
     };
+
+    // Phase 37F — RemoteActorFetcher (fallback si fédération désactivée)
+    let remote_fetcher_for_mentions = remote_fetcher_for_mentions.unwrap_or_else(|| Arc::new(
+        infrastructure::federation::remote_actor::RemoteActorFetcher::new(),
+    ));
+
+    // Phase 37F — CommentIssue construit ici (après les dépendances fédération)
+    let comment_issue = Arc::new(
+        application::use_cases::comment_issue::CommentIssueUseCase::new(
+            issue_repo.clone(),
+            repo_repo.clone(),
+            actor_repo.clone(),
+            notification_repo.clone(),
+            federation_repo.clone(),
+            remote_fetcher_for_mentions,
+            config.federation_domain.clone(),
+        ),
+    );
+
 
     let shared_state = SharedState {
         create_operation,
