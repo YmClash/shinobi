@@ -287,10 +287,14 @@ pub fn mention_note_activity(
         })
         .collect();
 
-    // ── Adressage to/cc (Vegapunk Tweak #3) ──
-    // to: Public (visibilité globale pour les dépôts publics)
-    // cc: les acteurs mentionnés (Mastodon génère la notification via le cc)
-    let cc: Vec<serde_json::Value> = mentions.iter().map(|m| json!(m.actor_uri)).collect();
+    // ── Adressage to/cc (Vegapunk Tweak #3 — FIXED) ──
+    // to: les acteurs mentionnés (Mastodon génère la notification via le `to`)
+    // cc: Public (visibilité globale pour les dépôts publics)
+    // Note: Mastodon ne déclenche la cloche que si l'acteur est dans `to`, pas `cc`.
+    let mut to_list: Vec<serde_json::Value> = mentions.iter().map(|m| json!(m.actor_uri)).collect();
+    // Ajouter aussi Public dans to pour la visibilité (comme Mastodon le fait)
+    to_list.push(json!("https://www.w3.org/ns/activitystreams#Public"));
+    let cc_followers = json!(format!("{}://{}/actors/{}/followers", federation_scheme(federation_domain), federation_domain, author_handle));
 
     json!({
         "@context": "https://www.w3.org/ns/activitystreams",
@@ -298,16 +302,16 @@ pub fn mention_note_activity(
         "type": "Create",
         "actor": actor_uri,
         "published": Utc::now().to_rfc3339(),
-        "to": ["https://www.w3.org/ns/activitystreams#Public"],
-        "cc": cc,
+        "to": to_list,
+        "cc": [cc_followers],
         "object": {
             "type": "Note",
             "id": note_id,
             "attributedTo": actor_uri,
             "content": html_content,
             "url": context_url,
-            "to": ["https://www.w3.org/ns/activitystreams#Public"],
-            "cc": cc,
+            "to": to_list,
+            "cc": [cc_followers],
             "tag": tags,
             "published": Utc::now().to_rfc3339(),
         }

@@ -516,14 +516,7 @@ async fn main() -> anyhow::Result<()> {
             pg_pool.clone(),
         ),
     );
-    let create_issue = Arc::new(
-        application::use_cases::create_issue::CreateIssueUseCase::new(
-            issue_repo.clone(),
-            repo_repo.clone(),
-            actor_repo.clone(),
-            notification_repo.clone(),
-        ),
-    );
+    // create_issue construit après le bloc fédération (Phase 37F — besoin de remote_fetcher)
     let list_issues = Arc::new(
         application::use_cases::list_issues::ListIssuesUseCase::new(issue_repo.clone()),
     );
@@ -583,8 +576,14 @@ async fn main() -> anyhow::Result<()> {
             );
 
             // Phase 27-ter : Instancier le FanoutService
+            // Phase 37F-Fix : Utiliser with_keypair() pour supporter AUTHORIZED_FETCH (Mastodon Secure Mode)
+            let system_kp = federation_repo.get_keypair(&SYSTEM_ACTOR_ID).await?
+                .expect("System keypair must exist at this point");
             let remote_fetcher = Arc::new(
-                infrastructure::federation::remote_actor::RemoteActorFetcher::new(),
+                infrastructure::federation::remote_actor::RemoteActorFetcher::with_keypair(
+                    system_kp.private_key_pem,
+                    system_kp.key_id,
+                ),
             );
             remote_fetcher_for_mentions = Some(remote_fetcher.clone()); // Phase 37F
             let fanout = Arc::new(
@@ -626,11 +625,23 @@ async fn main() -> anyhow::Result<()> {
             actor_repo.clone(),
             notification_repo.clone(),
             federation_repo.clone(),
-            remote_fetcher_for_mentions,
+            remote_fetcher_for_mentions.clone(),
             config.federation_domain.clone(),
         ),
     );
 
+    // Phase 37F — CreateIssue construit ici (après les dépendances fédération)
+    let create_issue = Arc::new(
+        application::use_cases::create_issue::CreateIssueUseCase::new(
+            issue_repo.clone(),
+            repo_repo.clone(),
+            actor_repo.clone(),
+            notification_repo.clone(),
+            federation_repo.clone(),
+            remote_fetcher_for_mentions.clone(),
+            config.federation_domain.clone(),
+        ),
+    );
 
     let shared_state = SharedState {
         create_operation,

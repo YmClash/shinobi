@@ -62,7 +62,7 @@ pub async fn deliver_activity(
         .header("Date", &sig_headers.date)
         .header("Digest", &sig_headers.digest)
         .header("Signature", &sig_headers.signature)
-        .header("Host", host)
+        // Note: pas de .header("Host", ...) — reqwest l'ajoute automatiquement
         .body(body)
         .send()
         .await
@@ -72,11 +72,17 @@ pub async fn deliver_activity(
         })?;
 
     let status = response.status();
+    let body_text = response.text().await.unwrap_or_default();
+
     if status.is_success() || status.as_u16() == 202 {
-        info!(target = %target_inbox, status = %status, "✅ Activity delivered");
+        info!(
+            target = %target_inbox,
+            status = %status,
+            response_body = %body_text,
+            "✅ Activity delivered"
+        );
         Ok(())
     } else {
-        let body_text = response.text().await.unwrap_or_default();
         warn!(
             target = %target_inbox,
             status = %status,

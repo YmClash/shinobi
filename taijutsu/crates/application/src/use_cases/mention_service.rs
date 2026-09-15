@@ -10,7 +10,7 @@
 //! Ce service est injecté dans `CreateIssue`, `CommentIssue`, et `CreateMR`.
 
 use std::sync::Arc;
-use tracing::{info, warn};
+use tracing::{debug, info, warn};
 use uuid::Uuid;
 
 use domain::entities::mention::extract_mentions;
@@ -254,6 +254,10 @@ pub async fn deliver_remote_mentions(
         note_id_suffix,
     );
 
+    debug!(
+        activity_json = %serde_json::to_string_pretty(&activity).unwrap_or_default(),
+        "📡 Activity payload (debug)"
+    );
     info!(
         author = %author_handle,
         targets = targets.len(),
