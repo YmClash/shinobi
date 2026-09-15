@@ -531,13 +531,12 @@ mod tests {
         assert_eq!(tags[0]["href"], "https://mastodon.social/users/alice");
         assert_eq!(tags[0]["name"], "@alice@mastodon.social");
 
-        // Addressing: to=Public, cc=mentioned actors
-        assert_eq!(
-            activity["to"][0],
-            "https://www.w3.org/ns/activitystreams#Public"
-        );
+        // Addressing: to=[mentioned actors, Public], cc=[followers]
+        let to = activity["to"].as_array().unwrap();
+        assert_eq!(to[0], "https://mastodon.social/users/alice");
+        assert_eq!(to[1], "https://www.w3.org/ns/activitystreams#Public");
         let cc = activity["cc"].as_array().unwrap();
-        assert_eq!(cc[0], "https://mastodon.social/users/alice");
+        assert_eq!(cc[0], "https://api.jjshinobi.dev/actors/yusuf/followers");
     }
 
     #[test]
