@@ -73,6 +73,9 @@ pkcs8 = { workspace = true }
 base64 = { workspace = true }
 url = { workspace = true }
 
+# — Phase 34 — Chakra (Webhooks HMAC-SHA256) —
+hmac = { workspace = true }
+
 [dev-dependencies]
 tempfile = { workspace = true }
 tokio = { workspace = true }

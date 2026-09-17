@@ -196,6 +196,13 @@ pub struct SharedState {
     // ── Phase 38 — Notifications (Le Carillon) 🔔 ────────
     /// Repository des notifications in-app.
     pub notification_repo: Arc<dyn domain::ports::notification_repository::NotificationRepository>,
+
+    // ── Phase 34 — Webhooks (Chakra チャクラ) 🔔 ────────
+    /// Use case: CRUD des webhooks d'un dépôt.
+    pub manage_webhooks: Arc<application::use_cases::manage_webhooks::ManageWebhooksUseCase>,
+    /// Use case: émission fire-and-forget d'événements webhook.
+    /// `None` si Chakra est désactivé (pas de broker Kafka).
+    pub emit_webhook: Option<Arc<application::use_cases::emit_webhook_event::EmitWebhookEventUseCase>>,
 }
 
 // ── Phase 12A — Git Bridge HTTP ──────────────────────────────────────

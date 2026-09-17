@@ -516,6 +516,26 @@ pub fn create_router(state: SharedState) -> Router {
         .route("/api/v1/notifications/unread-count", get(unread_count_handler))
         .route("/api/v1/notifications/{id}/read", patch(mark_read_handler))
         .route("/api/v1/notifications/read-all", patch(mark_all_read_handler))
+        // Phase 34 — Webhooks (Chakra チャクラ) 🔔
+        .route(
+            "/api/v1/repos/{owner}/{repo}/hooks",
+            post(crate::rest::webhook_routes::create_webhook_handler)
+                .get(crate::rest::webhook_routes::list_webhooks_handler),
+        )
+        .route(
+            "/api/v1/repos/{owner}/{repo}/hooks/{id}",
+            get(crate::rest::webhook_routes::get_webhook_handler)
+                .patch(crate::rest::webhook_routes::update_webhook_handler)
+                .delete(crate::rest::webhook_routes::delete_webhook_handler),
+        )
+        .route(
+            "/api/v1/repos/{owner}/{repo}/hooks/{id}/deliveries",
+            get(crate::rest::webhook_routes::list_deliveries_handler),
+        )
+        .route(
+            "/api/v1/repos/{owner}/{repo}/hooks/{id}/ping",
+            post(crate::rest::webhook_routes::ping_webhook_handler),
+        )
         // ── Bouclier Global : middleware auth sur TOUTES les routes privées ──
         .layer(auth_layer());
 

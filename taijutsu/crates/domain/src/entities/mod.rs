@@ -11,3 +11,4 @@ pub mod issue;
 pub mod mention;
 pub mod notification;
 pub mod session;
+pub mod webhook;

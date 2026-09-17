@@ -98,6 +98,25 @@ pub struct Config {
 
     /// Activer/désactiver la fédération ActivityPub. Défaut: false.
     pub federation_enabled: bool,
+
+    // ── Phase 34 — Chakra (Webhooks) ─────────────────────────────────
+    /// Activer/désactiver le système Chakra (webhooks). Défaut: true.
+    pub chakra_enabled: bool,
+
+    /// Topic Kafka pour les événements webhook. Défaut: "shinobi.events.webhooks".
+    pub chakra_topic: String,
+
+    /// Consumer group Kafka pour le dispatcher Chakra. Défaut: "shinobi-chakra-dispatcher".
+    pub chakra_consumer_group: String,
+
+    /// Nombre de workers dans le pool Chakra. Défaut: 4.
+    pub chakra_worker_count: usize,
+
+    /// Nombre maximum de webhooks par dépôt. Défaut: 20.
+    pub chakra_max_webhooks_per_repo: usize,
+
+    /// Autoriser les webhooks vers localhost (dev only). Défaut: false.
+    pub chakra_allow_local: bool,
 }
 
 impl Config {
@@ -146,6 +165,13 @@ impl Config {
                 &env_or("FEDERATION_DOMAIN", "localhost:3000"),
             ),
             federation_enabled: env_bool("FEDERATION_ENABLED", false),
+            // ── Phase 34 — Chakra (Webhooks) ────────────────
+            chakra_enabled: env_bool("CHAKRA_ENABLED", true),
+            chakra_topic: env_or("CHAKRA_TOPIC", "shinobi.events.webhooks"),
+            chakra_consumer_group: env_or("CHAKRA_CONSUMER_GROUP", "shinobi-chakra-dispatcher"),
+            chakra_worker_count: env_parse("CHAKRA_WORKER_COUNT", 4),
+            chakra_max_webhooks_per_repo: env_parse("CHAKRA_MAX_WEBHOOKS_PER_REPO", 20),
+            chakra_allow_local: env_bool("CHAKRA_ALLOW_LOCAL", false),
         };
 
         if !errors.is_empty() {
@@ -179,6 +205,7 @@ impl Config {
         eprintln!("│ Oracle          : {}", if self.oracle_consumer_enabled { "enabled" } else { "disabled" });
         eprintln!("│ Sensei          : {}", if self.sensei_enabled { "enabled" } else { "disabled" });
         eprintln!("│ Embedding       : {} ({}d)", if self.embedding_enabled { "enabled" } else { "disabled" }, self.embedding_dimensions);
+        eprintln!("│ Chakra          : {} ({}w, max {}/repo)", if self.chakra_enabled { "enabled" } else { "disabled" }, self.chakra_worker_count, self.chakra_max_webhooks_per_repo);
         eprintln!("└───────────────────────────────────────────────────────────────────────────────");
     }
 }

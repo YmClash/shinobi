@@ -133,6 +133,9 @@ rand = { version = "0.9" }
 sha2 = { version = "0.10" }
 hex = { version = "0.4" }
 
+# — Phase 34 — Chakra (Webhooks HMAC-SHA256) —
+hmac = { version = "0.12" }
+
 # — Fédération (Phase 27 — ForgeFed / ActivityPub) —
 rsa = { version = "0.9", features = ["pem", "sha2"] }
 pkcs8 = { version = "0.10", features = ["pem"] }

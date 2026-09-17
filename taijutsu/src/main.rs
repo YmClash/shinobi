@@ -54,6 +54,11 @@ use infrastructure::embeddings::nomic_service::NomicEmbedService;
 use infrastructure::events::kafka_consumer::KafkaEventConsumer;
 use infrastructure::events::kafka_producer::KafkaEventPublisher;
 use infrastructure::events::oracle_consumer::OracleKafkaConsumer;
+use infrastructure::events::chakra_producer::ChakraProducer;
+use infrastructure::events::chakra_consumer::ChakraConsumer;
+use infrastructure::events::chakra_dispatcher::ChakraDispatcher;
+use infrastructure::events::chakra_retry::ChakraRetryWorker;
+use infrastructure::persistence::postgres_webhook_repo::PostgresWebhookRepo;
 use infrastructure::github::github_client::GitHubClient;
 use infrastructure::llm::ollama_service::OllamaService;
 use infrastructure::persistence::postgres_actor_repo::PostgresActorRepository;
@@ -439,6 +444,51 @@ async fn main() -> anyhow::Result<()> {
             ),
         );
 
+    // ── Phase 34 — Chakra (チャクラ) Webhooks 🔔 ───────────────────
+    let webhook_repo: Arc<dyn domain::ports::webhook_repository::WebhookRepository> = Arc::new(
+        PostgresWebhookRepo::new(pg_pool.clone()),
+    );
+
+    let manage_webhooks = Arc::new(
+        application::use_cases::manage_webhooks::ManageWebhooksUseCase::new(
+            webhook_repo.clone(),
+            repo_repo.clone(),
+            actor_repo.clone(),
+            config.chakra_max_webhooks_per_repo,
+            config.chakra_allow_local,
+        ),
+    );
+
+    // Chakra Producer (Kafka) — optionnel (graceful degradation)
+    let chakra_producer: Option<Arc<ChakraProducer>> = if config.chakra_enabled {
+        match ChakraProducer::new(&config.kafka_brokers, &config.chakra_topic) {
+            Ok(p) => {
+                info!(
+                    topic = %config.chakra_topic,
+                    "🔔 Chakra Producer initialisé"
+                );
+                Some(Arc::new(p))
+            }
+            Err(e) => {
+                warn!("⚠️ Chakra Producer non disponible — webhooks désactivés: {e}");
+                None
+            }
+        }
+    } else {
+        info!("ℹ️ Chakra désactivé par configuration (CHAKRA_ENABLED=false)");
+        None
+    };
+
+    let emit_webhook = chakra_producer.as_ref().map(|p| {
+        Arc::new(application::use_cases::emit_webhook_event::EmitWebhookEventUseCase::new(
+            p.clone(),
+        ))
+    });
+
+    info!("🔔 Chakra Webhooks initialisé (Phase 34 — {} workers, max {}/repo)",
+        config.chakra_worker_count, config.chakra_max_webhooks_per_repo
+    );
+
     // ── Phase 26A : Merge Requests (Le Katana Croisé) ──────────────────
     let mr_repo: Arc<dyn domain::ports::mr_repository::MrRepository> = Arc::new(
         infrastructure::persistence::postgres_mr_repo::PostgresMrRepository::new(pg_pool.clone()),
@@ -718,6 +768,9 @@ async fn main() -> anyhow::Result<()> {
         manage_labels,
         // Phase 38 — Notifications (Le Carillon) 🔔
         notification_repo: notification_repo.clone(),
+        // Phase 34 — Webhooks (Chakra チャクラ) 🔔
+        manage_webhooks: manage_webhooks.clone(),
+        emit_webhook: emit_webhook.clone(),
     };
 
     // ── Git Bridge HTTP (Phase 12A) ────────────────────
@@ -804,6 +857,50 @@ async fn main() -> anyhow::Result<()> {
             worker.run().await;
         });
         info!("📥 Inbox Worker démarré (Phase 32 — poll 30s, batch 20, Poison Pill safe)");
+    }
+
+    // ── Phase 34 : Chakra Consumer + Retry Worker ───────────────
+    if config.chakra_enabled {
+        let chakra_dispatcher = Arc::new(ChakraDispatcher::new(
+            redis_cache.clone(),
+            webhook_repo.clone(),
+            config.federation_domain.clone(),
+            config.chakra_allow_local,
+        ));
+
+        // Chakra Consumer (Kafka → HTTP dispatch)
+        match ChakraConsumer::new(
+            &config.kafka_brokers,
+            &config.chakra_topic,
+            &config.chakra_consumer_group,
+            cancel_token.clone(),
+            config.chakra_worker_count,
+        ) {
+            Ok(consumer) => {
+                let dispatcher_clone = chakra_dispatcher.clone();
+                tokio::spawn(async move {
+                    if let Err(e) = consumer.start(dispatcher_clone).await {
+                        error!("❌ Chakra Consumer crashé: {e}");
+                    }
+                });
+                info!("🔔 Chakra Consumer démarré (Phase 34 — {} workers)", config.chakra_worker_count);
+            }
+            Err(e) => {
+                warn!("⚠️ Chakra Consumer non disponible: {e}");
+            }
+        }
+
+        // Chakra Retry Worker (Redis ZSET → backoff exponentiel)
+        let retry_worker = ChakraRetryWorker::new(
+            redis_cache.clone(),
+            chakra_dispatcher.clone(),
+            webhook_repo.clone(),
+            cancel_token.clone(),
+        );
+        tokio::spawn(async move {
+            retry_worker.start().await;
+        });
+        info!("🔄 Chakra Retry Worker démarré (Phase 34 — poll 10s, backoff exponentiel)");
     }
 
     // ── Serveur Tonic (gRPC / Ninpo) ───────────────

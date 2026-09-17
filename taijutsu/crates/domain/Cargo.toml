@@ -15,3 +15,7 @@ futures   = { workspace = true }
 tokio     = { workspace = true }
 pulldown-cmark = { workspace = true }
 regex     = { workspace = true }
+
+# — Phase 34 — Chakra (Webhook secret generation) —
+rand = { workspace = true }
+hex  = { workspace = true }

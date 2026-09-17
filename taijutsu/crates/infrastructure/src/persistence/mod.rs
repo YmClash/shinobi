@@ -10,3 +10,4 @@ pub mod postgres_notification_repo;
 pub mod postgres_repo;
 pub mod postgres_repo_repo;
 pub mod postgres_review_repo;
+pub mod postgres_webhook_repo;

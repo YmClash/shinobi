@@ -5,3 +5,4 @@ pub mod auth_routes;
 pub mod federation;
 pub mod git_http;
 pub mod routes;
+pub mod webhook_routes;
