@@ -13,6 +13,9 @@ use domain::entities::anbu_checkpoint::AnbuCheckpoint;
 use domain::errors::DomainError;
 use domain::ports::anbu_repository::AnbuRepository;
 use domain::ports::content_store::ContentStore;
+use domain::ports::event_publisher::EventPublisher;
+
+use crate::use_cases::webhook_emit;
 
 /// Commande pour créer un checkpoint ANBU côté serveur.
 #[derive(Debug)]
@@ -39,16 +42,20 @@ pub struct CreateCheckpointCommand {
 pub struct CreateCheckpointUseCase {
     anbu_repo: Arc<dyn AnbuRepository>,
     content_store: Option<Arc<dyn ContentStore>>,
+    /// Phase 34-V3 — Émission webhook audit B2B (optionnel si Chakra désactivé).
+    event_publisher: Option<Arc<dyn EventPublisher>>,
 }
 
 impl CreateCheckpointUseCase {
     pub fn new(
         anbu_repo: Arc<dyn AnbuRepository>,
         content_store: Option<Arc<dyn ContentStore>>,
+        event_publisher: Option<Arc<dyn EventPublisher>>,
     ) -> Self {
         Self {
             anbu_repo,
             content_store,
+            event_publisher,
         }
     }
 
@@ -122,6 +129,30 @@ impl CreateCheckpointUseCase {
             checkpoint_id = %checkpoint.id,
             ipfs_cid = %checkpoint.ipfs_cid,
             "ANBU: Checkpoint created successfully"
+        );
+
+        // Phase 34-V3 — Webhook AnbuCheckpoint (Levier Audit B2B)
+        // Chaque preuve de provenance IA est envoyée au système d'archivage du client.
+        webhook_emit::emit_webhook_fire_and_forget(
+            &self.event_publisher,
+            domain::entities::webhook::WebhookEventType::AnbuCheckpoint,
+            checkpoint.repository_id,
+            checkpoint.actor_id,
+            serde_json::json!({
+                "action": "created",
+                "checkpoint": {
+                    "id": checkpoint.id,
+                    "agent": &checkpoint.agent,
+                    "session_id": &checkpoint.session_id,
+                    "message": &checkpoint.message,
+                    "commit_id": &checkpoint.commit_id,
+                    "ipfs_cid": &checkpoint.ipfs_cid,
+                    "artifact_count": checkpoint.artifact_count,
+                    "total_size": checkpoint.total_size,
+                },
+                "repository": { "id": checkpoint.repository_id },
+                "sender": { "id": checkpoint.actor_id },
+            }),
         );
 
         Ok(checkpoint)

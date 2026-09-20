@@ -112,6 +112,8 @@ pub enum WebhookEventType {
     IssueClosed,
     /// Commentaire sur une issue.
     IssueComment,
+    /// Phase 34-V3 — Checkpoint ANBU (preuve de provenance IA).
+    AnbuCheckpoint,
 }
 
 impl WebhookEventType {
@@ -125,6 +127,7 @@ impl WebhookEventType {
             Self::IssueOpened => "issue_opened",
             Self::IssueClosed => "issue_closed",
             Self::IssueComment => "issue_comment",
+            Self::AnbuCheckpoint => "anbu_checkpoint",
         }
     }
 
@@ -138,6 +141,7 @@ impl WebhookEventType {
             "issue_opened" => Some(Self::IssueOpened),
             "issue_closed" => Some(Self::IssueClosed),
             "issue_comment" => Some(Self::IssueComment),
+            "anbu_checkpoint" => Some(Self::AnbuCheckpoint),
             _ => None,
         }
     }
@@ -154,6 +158,7 @@ impl WebhookEventType {
             Self::IssueOpened => "dev.jjshinobi.issue.opened",
             Self::IssueClosed => "dev.jjshinobi.issue.closed",
             Self::IssueComment => "dev.jjshinobi.issue.commented",
+            Self::AnbuCheckpoint => "dev.jjshinobi.anbu.checkpoint",
         }
     }
 
@@ -167,6 +172,7 @@ impl WebhookEventType {
             Self::IssueOpened,
             Self::IssueClosed,
             Self::IssueComment,
+            Self::AnbuCheckpoint,
         ]
     }
 }

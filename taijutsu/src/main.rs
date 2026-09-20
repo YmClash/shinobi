@@ -564,6 +564,7 @@ async fn main() -> anyhow::Result<()> {
         application::use_cases::create_checkpoint::CreateCheckpointUseCase::new(
             anbu_repo.clone(),
             content_store.clone(),
+            event_publisher.clone(), // Phase 34-V3 — Levier Audit B2B
         ),
     );
     let list_checkpoints_uc = Arc::new(
