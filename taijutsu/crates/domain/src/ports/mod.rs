@@ -24,3 +24,4 @@ pub mod repository;
 pub mod review_repository;
 pub mod vcs_engine;
 pub mod webhook_repository;
+pub mod commit_status_repository;

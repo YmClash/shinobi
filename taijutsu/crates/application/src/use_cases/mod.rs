@@ -48,6 +48,7 @@ pub mod search_chunks;
 pub mod sensei_chat;
 pub mod update_issue;
 pub mod webhook_emit;
+pub mod manage_commit_statuses;
 
 
 #[cfg(test)]

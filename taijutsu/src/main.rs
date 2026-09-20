@@ -442,6 +442,22 @@ async fn main() -> anyhow::Result<()> {
         ),
     );
 
+    // ── Phase 39 — Commit Status API (Le Pont CI/CD) 🌉 ──────────────
+    let commit_status_repo: Arc<dyn domain::ports::commit_status_repository::CommitStatusRepository> = Arc::new(
+        infrastructure::persistence::postgres_commit_status_repo::PostgresCommitStatusRepo::new(
+            pg_pool.clone(),
+        ),
+    );
+
+    let manage_commit_statuses = Arc::new(
+        application::use_cases::manage_commit_statuses::ManageCommitStatusesUseCase::new(
+            commit_status_repo,
+            repo_repo.clone(),
+            actor_repo.clone(),
+        ),
+    );
+    info!("🌉 Commit Status API initialisé (Phase 39 — Le Pont CI/CD)");
+
     // Chakra Producer (Kafka) — optionnel (graceful degradation)
     let chakra_producer: Option<Arc<ChakraProducer>> = if config.chakra_enabled {
         match ChakraProducer::new(&config.kafka_brokers, &config.chakra_topic) {
@@ -786,6 +802,8 @@ async fn main() -> anyhow::Result<()> {
         // Phase 34 — Webhooks (Chakra チャクラ) 🔔
         manage_webhooks: manage_webhooks.clone(),
         emit_webhook: emit_webhook.clone(),
+        // Phase 39 — Commit Status API (Le Pont CI/CD) 🌉
+        manage_commit_statuses,
     };
 
     // ── Git Bridge HTTP (Phase 12A) ────────────────────

@@ -6,3 +6,4 @@ pub mod federation;
 pub mod git_http;
 pub mod routes;
 pub mod webhook_routes;
+pub mod commit_status_routes;

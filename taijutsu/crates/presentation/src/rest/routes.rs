@@ -516,6 +516,16 @@ pub fn create_router(state: SharedState) -> Router {
         .route("/api/v1/notifications/unread-count", get(unread_count_handler))
         .route("/api/v1/notifications/{id}/read", patch(mark_read_handler))
         .route("/api/v1/notifications/read-all", patch(mark_all_read_handler))
+        // Phase 39 — Commit Status API (Le Pont CI/CD) 🌉
+        .route(
+            "/api/v1/repos/{owner}/{repo}/statuses/{commit_id}",
+            post(crate::rest::commit_status_routes::create_commit_status_handler)
+                .get(crate::rest::commit_status_routes::list_commit_statuses_handler),
+        )
+        .route(
+            "/api/v1/repos/{owner}/{repo}/statuses/{commit_id}/combined",
+            get(crate::rest::commit_status_routes::combined_commit_status_handler),
+        )
         // Phase 34 — Webhooks (Chakra チャクラ) 🔔
         .route(
             "/api/v1/repos/{owner}/{repo}/hooks",

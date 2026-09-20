@@ -203,6 +203,10 @@ pub struct SharedState {
     /// Use case: émission fire-and-forget d'événements webhook.
     /// `None` si Chakra est désactivé (pas de broker Kafka).
     pub emit_webhook: Option<Arc<application::use_cases::emit_webhook_event::EmitWebhookEventUseCase>>,
+
+    // ── Phase 39 — Commit Status API (Le Pont CI/CD) 🌉 ────────
+    /// Use case: CRUD des statuts de commit CI/CD.
+    pub manage_commit_statuses: Arc<application::use_cases::manage_commit_statuses::ManageCommitStatusesUseCase>,
 }
 
 // ── Phase 12A — Git Bridge HTTP ──────────────────────────────────────

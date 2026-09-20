@@ -1,0 +1,238 @@
+/* ═══════════════════════════════════════════════════════════════ */
+/* SHINOBI — Commit Status Badge Styles (Phase 39)               */
+/* Badges 🟢🔴🟡⚠️ pour l'affichage du statut CI/CD            */
+/* ═══════════════════════════════════════════════════════════════ */
+
+/* ── Badge Container ──────────────────────────────────────────── */
+
+.commit-status-badge {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  cursor: pointer;
+  position: relative;
+  transition: opacity 0.2s ease;
+}
+
+.commit-status-badge:hover {
+  opacity: 0.85;
+}
+
+/* ── Status Dot (Indicateur circulaire) ───────────────────────── */
+
+.commit-status-dot {
+  width: 10px;
+  height: 10px;
+  border-radius: 50%;
+  flex-shrink: 0;
+  transition: box-shadow 0.3s ease;
+}
+
+/* State Colors */
+.commit-status-dot--success {
+  background: #2da44e;
+  box-shadow: 0 0 0 2px rgba(45, 164, 78, 0.2);
+}
+
+.commit-status-dot--failure {
+  background: #cf222e;
+  box-shadow: 0 0 0 2px rgba(207, 34, 46, 0.2);
+}
+
+.commit-status-dot--error {
+  background: #d4841c;
+  box-shadow: 0 0 0 2px rgba(212, 132, 28, 0.2);
+}
+
+.commit-status-dot--pending {
+  background: #bf8700;
+  box-shadow: 0 0 0 2px rgba(191, 135, 0, 0.2);
+  animation: commit-status-pulse 2s ease-in-out infinite;
+}
+
+/* ── Pulse Animation (Pending) ────────────────────────────────── */
+
+@keyframes commit-status-pulse {
+  0%, 100% {
+    box-shadow: 0 0 0 2px rgba(191, 135, 0, 0.2);
+    opacity: 1;
+  }
+  50% {
+    box-shadow: 0 0 0 6px rgba(191, 135, 0, 0.15), 0 0 12px rgba(191, 135, 0, 0.1);
+    opacity: 0.8;
+  }
+}
+
+/* ── Status Label ─────────────────────────────────────────────── */
+
+.commit-status-label {
+  font-size: 0.75rem;
+  font-weight: 500;
+  line-height: 1;
+  color: var(--foreground);
+  opacity: 0.8;
+}
+
+/* ── Tooltip (Détails par contexte) ────────────────────────────── */
+
+.commit-status-tooltip {
+  position: absolute;
+  bottom: calc(100% + 8px);
+  left: 50%;
+  transform: translateX(-50%);
+  background: hsl(var(--popover));
+  border: 1px solid hsl(var(--border));
+  border-radius: 8px;
+  padding: 10px 14px;
+  min-width: 220px;
+  max-width: 320px;
+  box-shadow: 0 8px 24px rgba(0, 0, 0, 0.2);
+  z-index: 50;
+  opacity: 0;
+  visibility: hidden;
+  transition: opacity 0.2s ease, visibility 0.2s ease;
+  pointer-events: none;
+}
+
+.commit-status-badge:hover .commit-status-tooltip {
+  opacity: 1;
+  visibility: visible;
+  pointer-events: auto;
+}
+
+/* Arrow */
+.commit-status-tooltip::after {
+  content: "";
+  position: absolute;
+  top: 100%;
+  left: 50%;
+  transform: translateX(-50%);
+  border: 6px solid transparent;
+  border-top-color: hsl(var(--border));
+}
+
+/* Tooltip Header */
+.commit-status-tooltip__header {
+  font-size: 0.8rem;
+  font-weight: 600;
+  color: var(--foreground);
+  margin-bottom: 8px;
+  padding-bottom: 6px;
+  border-bottom: 1px solid hsl(var(--border));
+}
+
+/* Tooltip Row */
+.commit-status-tooltip__row {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 4px 0;
+  font-size: 0.75rem;
+  color: var(--foreground);
+  opacity: 0.9;
+}
+
+.commit-status-tooltip__context {
+  font-weight: 600;
+  flex: 1;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.commit-status-tooltip__description {
+  color: var(--muted-foreground);
+  font-size: 0.7rem;
+  margin-top: 2px;
+}
+
+/* Tooltip State Tag */
+.commit-status-tooltip__state {
+  font-size: 0.65rem;
+  font-weight: 600;
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+  padding: 2px 6px;
+  border-radius: 4px;
+  flex-shrink: 0;
+}
+
+.commit-status-tooltip__state--success {
+  color: #2da44e;
+  background: rgba(45, 164, 78, 0.1);
+}
+
+.commit-status-tooltip__state--failure {
+  color: #cf222e;
+  background: rgba(207, 34, 46, 0.1);
+}
+
+.commit-status-tooltip__state--error {
+  color: #d4841c;
+  background: rgba(212, 132, 28, 0.1);
+}
+
+.commit-status-tooltip__state--pending {
+  color: #bf8700;
+  background: rgba(191, 135, 0, 0.1);
+}
+
+/* ── Count Badge (Nombre de statuts) ──────────────────────────── */
+
+.commit-status-count {
+  font-size: 0.65rem;
+  font-weight: 600;
+  color: var(--muted-foreground);
+  background: hsl(var(--muted));
+  padding: 1px 5px;
+  border-radius: 10px;
+  line-height: 1.4;
+}
+
+/* ── Dark Mode Adjustments ────────────────────────────────────── */
+
+:is(.dark *) .commit-status-dot--success {
+  background: #3fb950;
+  box-shadow: 0 0 0 2px rgba(63, 185, 80, 0.25);
+}
+
+:is(.dark *) .commit-status-dot--failure {
+  background: #f85149;
+  box-shadow: 0 0 0 2px rgba(248, 81, 73, 0.25);
+}
+
+:is(.dark *) .commit-status-dot--error {
+  background: #d29922;
+  box-shadow: 0 0 0 2px rgba(210, 153, 34, 0.25);
+}
+
+:is(.dark *) .commit-status-dot--pending {
+  background: #d29922;
+  box-shadow: 0 0 0 2px rgba(210, 153, 34, 0.25);
+}
+
+@keyframes commit-status-pulse {
+  0%, 100% {
+    box-shadow: 0 0 0 2px rgba(210, 153, 34, 0.25);
+    opacity: 1;
+  }
+  50% {
+    box-shadow: 0 0 0 6px rgba(210, 153, 34, 0.15), 0 0 12px rgba(210, 153, 34, 0.1);
+    opacity: 0.75;
+  }
+}
+
+/* ── Loading Skeleton ─────────────────────────────────────────── */
+
+.commit-status-skeleton {
+  width: 10px;
+  height: 10px;
+  border-radius: 50%;
+  background: hsl(var(--muted));
+  animation: commit-status-skeleton-pulse 1.5s ease-in-out infinite;
+}
+
+@keyframes commit-status-skeleton-pulse {
+  0%, 100% { opacity: 0.4; }
+  50% { opacity: 0.8; }
+}
