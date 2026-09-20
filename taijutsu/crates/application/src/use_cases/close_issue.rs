@@ -13,18 +13,24 @@ use domain::entities::issue::{IssueEvent, IssueEventType, IssueStatus};
 use domain::errors::DomainError;
 use domain::ports::issue_repository::IssueRepository;
 use domain::ports::repo_repository::RepoRepository;
+use domain::ports::event_publisher::EventPublisher;
+
+use crate::use_cases::webhook_emit;
 
 pub struct CloseIssueUseCase {
     issue_repo: Arc<dyn IssueRepository>,
     repo_repo: Arc<dyn RepoRepository>,
+    /// Phase 34-V2 — Émission webhook (optionnel si Chakra désactivé).
+    event_publisher: Option<Arc<dyn EventPublisher>>,
 }
 
 impl CloseIssueUseCase {
     pub fn new(
         issue_repo: Arc<dyn IssueRepository>,
         repo_repo: Arc<dyn RepoRepository>,
+        event_publisher: Option<Arc<dyn EventPublisher>>,
     ) -> Self {
-        Self { issue_repo, repo_repo }
+        Self { issue_repo, repo_repo, event_publisher }
     }
 
     /// Fermer une issue ouverte.
@@ -72,6 +78,26 @@ impl CloseIssueUseCase {
         self.issue_repo.save_event(&event).await?;
 
         info!(number = issue.number, "🔒 Issue #{} fermée", issue.number);
+
+        // Phase 34-V2 — Webhook IssueClosed (fire-and-forget via Kafka)
+        webhook_emit::emit_webhook_fire_and_forget(
+            &self.event_publisher,
+            domain::entities::webhook::WebhookEventType::IssueClosed,
+            *repo_id,
+            *actor_id,
+            serde_json::json!({
+                "action": "closed",
+                "number": issue.number,
+                "issue": {
+                    "id": issue.id,
+                    "number": issue.number,
+                    "title": &issue.title,
+                },
+                "repository": { "id": repo_id },
+                "sender": { "id": actor_id },
+            }),
+        );
+
         Ok(())
     }
 

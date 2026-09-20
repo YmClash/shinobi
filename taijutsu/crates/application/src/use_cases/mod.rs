@@ -47,6 +47,7 @@ pub mod review_operation;
 pub mod search_chunks;
 pub mod sensei_chat;
 pub mod update_issue;
+pub mod webhook_emit;
 
 
 #[cfg(test)]

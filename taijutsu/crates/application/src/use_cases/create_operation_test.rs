@@ -245,6 +245,13 @@ mod tests {
         ) -> Result<(), DomainError> {
             Ok(())
         }
+
+        async fn publish_webhook_event(
+            &self,
+            _event: &domain::entities::webhook::WebhookEvent,
+        ) -> Result<(), DomainError> {
+            Ok(()) // Phase 34-V2 — No-op dans les tests
+        }
     }
 
     // ── Helpers ──────────────────────────────────────────

@@ -15,11 +15,16 @@ use domain::errors::DomainError;
 use domain::ports::mr_repository::MrRepository;
 use domain::ports::repo_repository::RepoRepository;
 use domain::ports::vcs_engine::VcsEngine;
+use domain::ports::event_publisher::EventPublisher;
+
+use crate::use_cases::webhook_emit;
 
 pub struct CloseMrUseCase {
     mr_repo: Arc<dyn MrRepository>,
     repo_repo: Arc<dyn RepoRepository>,
     vcs: Arc<dyn VcsEngine>,
+    /// Phase 34-V2 — Émission webhook (optionnel si Chakra désactivé).
+    event_publisher: Option<Arc<dyn EventPublisher>>,
 }
 
 impl CloseMrUseCase {
@@ -27,8 +32,9 @@ impl CloseMrUseCase {
         mr_repo: Arc<dyn MrRepository>,
         repo_repo: Arc<dyn RepoRepository>,
         vcs: Arc<dyn VcsEngine>,
+        event_publisher: Option<Arc<dyn EventPublisher>>,
     ) -> Self {
-        Self { mr_repo, repo_repo, vcs }
+        Self { mr_repo, repo_repo, vcs, event_publisher }
     }
 
     #[instrument(skip(self))]
@@ -99,6 +105,28 @@ impl CloseMrUseCase {
             "✅ MR #{} fermée sans fusion{}",
             mr.number,
             if mr.is_cross_repo() { " (cross-repo 🕳️)" } else { "" }
+        );
+
+        // Phase 34-V2 — Webhook MrClosed (fire-and-forget via Kafka)
+        webhook_emit::emit_webhook_fire_and_forget(
+            &self.event_publisher,
+            domain::entities::webhook::WebhookEventType::MrClosed,
+            *repository_id,
+            *actor_id,
+            serde_json::json!({
+                "action": "closed",
+                "number": mr.number,
+                "merge_request": {
+                    "id": mr.id,
+                    "number": mr.number,
+                    "title": &mr.title,
+                    "source_branch": &mr.source_branch,
+                    "target_branch": &mr.target_branch,
+                    "cross_repo": mr.is_cross_repo(),
+                },
+                "repository": { "id": repository_id },
+                "sender": { "id": actor_id },
+            }),
         );
 
         Ok(())

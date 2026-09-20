@@ -6,6 +6,7 @@
 //! ## Topics
 //! - `shinobi.vcs.operations` : opérations VCS créées
 //! - `shinobi.tensai.analysis-complete` : analyse sémantique terminée
+//! - `shinobi.events.webhooks` : événements webhook (Phase 34-V2 — pont Nen→Chakra)
 //!
 //! ## Architecture
 //! - `FutureProducer` : producteur async natif rdkafka (compatible tokio).
@@ -13,24 +14,35 @@
 //!   toutes les mutations d'une opération arrivent sur la même partition.
 //! - Payload : JSON sérialisé.
 //!
+//! ## Phase 34-V2 — Pont Nen→Chakra
+//! Le `KafkaEventPublisher` encapsule un `ChakraProducer` optionnel.
+//! Quand un Use Case appelle `publish_webhook_event()`, l'événement est
+//! publié sur le topic Chakra via le même producteur Kafka.
+//!
 //! ## Gestion d'erreurs
 //! Pattern at-most-once : si Kafka est down, l'opération VCS est quand
 //! même persistée en base. L'événement est perdu, pas l'opération.
 
+use std::sync::Arc;
 use std::time::Duration;
 
 use async_trait::async_trait;
 use rdkafka::config::ClientConfig;
 use rdkafka::producer::{FutureProducer, FutureRecord};
-use tracing::{info, warn};
+use tracing::{debug, info, warn};
 
 use domain::entities::operation::Operation;
+use domain::entities::webhook::WebhookEvent;
 use domain::errors::DomainError;
 use domain::ports::event_publisher::{AnalysisCompleteSummary, EventPublisher};
 
+use super::chakra_producer::ChakraProducer;
+
 /// Producteur d'événements Kafka (Nen).
 ///
-/// Encapsule un `FutureProducer` rdkafka configuré pour le cluster SHINOBI.
+/// Encapsule un `FutureProducer` rdkafka configuré pour le cluster SHINOBI,
+/// plus un `ChakraProducer` optionnel pour le pont Nen→Chakra (Phase 34-V2).
+///
 /// Thread-safe (`Send + Sync`) par conception — le `FutureProducer` est
 /// conçu pour être partagé via `Arc`.
 pub struct KafkaEventPublisher {
@@ -39,6 +51,9 @@ pub struct KafkaEventPublisher {
     /// Topic dédié pour les événements d'analyse (Phase 7B).
     /// Séparé de `topic` pour éviter la boucle infinie du consumer Tensai.
     analysis_topic: String,
+    /// Producteur Chakra optionnel — pont vers le topic webhook (Phase 34-V2).
+    /// `None` si le système Chakra est désactivé (`CHAKRA_ENABLED=false`).
+    chakra_producer: Option<Arc<ChakraProducer>>,
 }
 
 impl KafkaEventPublisher {
@@ -48,12 +63,18 @@ impl KafkaEventPublisher {
     /// - `brokers` : liste de brokers Kafka (ex: `"localhost:9092"`)
     /// - `topic` : topic opérations VCS (ex: `"shinobi.vcs.operations"`)
     /// - `analysis_topic` : topic analyse terminée (ex: `"shinobi.tensai.analysis-complete"`)
+    /// - `chakra_producer` : producteur Chakra optionnel (Phase 34-V2)
     ///
     /// # Errors
     /// Retourne une erreur si la configuration rdkafka est invalide.
     /// **Ne vérifie PAS** la connectivité au cluster — la connexion
     /// est lazy (premier message envoyé).
-    pub fn new(brokers: &str, topic: &str, analysis_topic: &str) -> Result<Self, DomainError> {
+    pub fn new(
+        brokers: &str,
+        topic: &str,
+        analysis_topic: &str,
+        chakra_producer: Option<Arc<ChakraProducer>>,
+    ) -> Result<Self, DomainError> {
         let producer: FutureProducer = ClientConfig::new()
             .set("bootstrap.servers", brokers)
             .set("message.timeout.ms", "5000")
@@ -67,13 +88,16 @@ impl KafkaEventPublisher {
             brokers = %brokers,
             topic = %topic,
             analysis_topic = %analysis_topic,
-            "KafkaEventPublisher initialisé (connexion lazy)"
+            chakra_bridge = chakra_producer.is_some(),
+            "KafkaEventPublisher initialisé (connexion lazy{})",
+            if chakra_producer.is_some() { " + pont Chakra" } else { "" }
         );
 
         Ok(Self {
             producer,
             topic: topic.to_string(),
             analysis_topic: analysis_topic.to_string(),
+            chakra_producer,
         })
     }
 }
@@ -174,4 +198,27 @@ impl EventPublisher for KafkaEventPublisher {
             }
         }
     }
+
+    /// Phase 34-V2 — Pont Nen→Chakra.
+    ///
+    /// Délègue au `ChakraProducer` pour publier sur le topic webhook.
+    /// Si Chakra est désactivé (`chakra_producer: None`), retourne `Ok(())`
+    /// silencieusement (graceful degradation).
+    async fn publish_webhook_event(
+        &self,
+        event: &WebhookEvent,
+    ) -> Result<(), DomainError> {
+        match &self.chakra_producer {
+            Some(producer) => producer.publish(event).await,
+            None => {
+                debug!(
+                    event_id = %event.id,
+                    event_type = %event.event_type.as_sql_str(),
+                    "Chakra désactivé — événement webhook ignoré (graceful degradation)"
+                );
+                Ok(())
+            }
+        }
+    }
 }
+

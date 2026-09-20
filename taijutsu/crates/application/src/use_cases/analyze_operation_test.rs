@@ -252,6 +252,13 @@ mod tests {
             *self.analysis_published.lock().await += 1;
             Ok(())
         }
+
+        async fn publish_webhook_event(
+            &self,
+            _event: &domain::entities::webhook::WebhookEvent,
+        ) -> Result<(), DomainError> {
+            Ok(()) // Phase 34-V2 — No-op dans les tests
+        }
     }
 
     // ── Mock EmbeddingService (Phase 7A) ─────────────

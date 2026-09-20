@@ -21,8 +21,10 @@ use domain::ports::federation_repository::FederationRepository;
 use domain::ports::issue_repository::IssueRepository;
 use domain::ports::notification_repository::NotificationRepository;
 use domain::ports::repo_repository::RepoRepository;
+use domain::ports::event_publisher::EventPublisher;
 
 use crate::use_cases::mention_service;
+use crate::use_cases::webhook_emit;
 
 /// Commande de création d'une issue.
 #[derive(Debug)]
@@ -48,6 +50,8 @@ pub struct CreateIssueUseCase {
     federation_repo: Arc<dyn FederationRepository>,
     remote_fetcher: Arc<infrastructure::federation::remote_actor::RemoteActorFetcher>,
     federation_domain: String,
+    /// Phase 34-V2 — Émission webhook (optionnel si Chakra désactivé).
+    event_publisher: Option<Arc<dyn EventPublisher>>,
 }
 
 impl CreateIssueUseCase {
@@ -59,10 +63,17 @@ impl CreateIssueUseCase {
         federation_repo: Arc<dyn FederationRepository>,
         remote_fetcher: Arc<infrastructure::federation::remote_actor::RemoteActorFetcher>,
         federation_domain: String,
+        event_publisher: Option<Arc<dyn EventPublisher>>,
     ) -> Self {
         Self {
-            issue_repo, repo_repo, actor_repo, notification_repo,
-            federation_repo, remote_fetcher, federation_domain,
+            issue_repo,
+            repo_repo,
+            actor_repo,
+            notification_repo,
+            federation_repo,
+            remote_fetcher,
+            federation_domain,
+            event_publisher,
         }
     }
 
@@ -70,7 +81,10 @@ impl CreateIssueUseCase {
     pub async fn execute(&self, cmd: CreateIssueCommand) -> Result<Issue, DomainError> {
         // 1. RBAC — sur un repo public, tout utilisateur authentifié peut ouvrir une issue.
         //    Sur un repo privé, seuls les collaborateurs peuvent le faire.
-        let repo_entity = self.repo_repo.find_by_id(&cmd.repository_id).await?
+        let repo_entity = self
+            .repo_repo
+            .find_by_id(&cmd.repository_id)
+            .await?
             .ok_or_else(|| DomainError::NotFound {
                 entity_type: "Repository",
                 id: cmd.repository_id,
@@ -83,7 +97,8 @@ impl CreateIssueUseCase {
                 .await?;
             if !is_collab {
                 return Err(DomainError::Forbidden(
-                    "Seuls les collaborateurs peuvent ouvrir une issue sur un dépôt privé".to_string(),
+                    "Seuls les collaborateurs peuvent ouvrir une issue sur un dépôt privé"
+                        .to_string(),
                 ));
             }
         }
@@ -120,7 +135,9 @@ impl CreateIssueUseCase {
 
         // 6. Labels optionnels
         for label_id in &cmd.label_ids {
-            self.issue_repo.add_label_to_issue(&issue.id, label_id).await?;
+            self.issue_repo
+                .add_label_to_issue(&issue.id, label_id)
+                .await?;
             let label_event = IssueEvent::new(
                 issue.id,
                 cmd.author_id,
@@ -133,11 +150,7 @@ impl CreateIssueUseCase {
         // 7. Phase 37C — Extraction et traitement des @mentions
         //    P2 fix: Fire-and-forget via tokio::spawn — l'HTTP 201 revient immédiatement.
         //    Les événements Mentioned apparaissent quelques ms plus tard.
-        let mention_text = format!(
-            "{}\n{}",
-            &issue.title,
-            issue.body.as_deref().unwrap_or("")
-        );
+        let mention_text = format!("{}\n{}", &issue.title, issue.body.as_deref().unwrap_or(""));
         let issue_id = issue.id;
         let author_id = cmd.author_id;
         let actor_repo = Arc::clone(&self.actor_repo);
@@ -159,11 +172,8 @@ impl CreateIssueUseCase {
                 _ => "unknown".to_string(),
             };
 
-            let mention_result = mention_service::process_mentions(
-                &mention_text,
-                &author_id,
-                &actor_repo,
-            ).await;
+            let mention_result =
+                mention_service::process_mentions(&mention_text, &author_id, &actor_repo).await;
 
             // Resolve author handle for notification message
             let author_handle = match actor_repo.find_by_id(&author_id).await {
@@ -237,9 +247,29 @@ impl CreateIssueUseCase {
                     &actor_repo,
                     &federation_repo,
                     &remote_fetcher,
-                ).await;
+                )
+                .await;
             }
         });
+
+        // Phase 34-V2 — Webhook IssueOpened (fire-and-forget via Kafka)
+        webhook_emit::emit_webhook_fire_and_forget(
+            &self.event_publisher,
+            domain::entities::webhook::WebhookEventType::IssueOpened,
+            cmd.repository_id,
+            cmd.author_id,
+            serde_json::json!({
+                "action": "opened",
+                "number": issue.number,
+                "issue": {
+                    "id": issue.id,
+                    "number": issue.number,
+                    "title": &issue.title,
+                },
+                "repository": { "id": cmd.repository_id },
+                "sender": { "id": cmd.author_id },
+            }),
+        );
 
         info!(
             issue_id = %issue.id,

@@ -19,8 +19,10 @@ use domain::ports::actor_repository::ActorRepository;
 use domain::ports::mr_repository::MrRepository;
 use domain::ports::notification_repository::NotificationRepository;
 use domain::ports::repo_repository::RepoRepository;
+use domain::ports::event_publisher::EventPublisher;
 
 use crate::use_cases::mention_service;
+use crate::use_cases::webhook_emit;
 
 /// Commande de création d'une MR.
 #[derive(Debug)]
@@ -44,6 +46,8 @@ pub struct CreateMrUseCase {
     repo_repo: Arc<dyn RepoRepository>,
     actor_repo: Arc<dyn ActorRepository>,
     notification_repo: Arc<dyn NotificationRepository>,
+    /// Phase 34-V2 — Émission webhook (optionnel si Chakra désactivé).
+    event_publisher: Option<Arc<dyn EventPublisher>>,
 }
 
 impl CreateMrUseCase {
@@ -52,8 +56,9 @@ impl CreateMrUseCase {
         repo_repo: Arc<dyn RepoRepository>,
         actor_repo: Arc<dyn ActorRepository>,
         notification_repo: Arc<dyn NotificationRepository>,
+        event_publisher: Option<Arc<dyn EventPublisher>>,
     ) -> Self {
-        Self { mr_repo, repo_repo, actor_repo, notification_repo }
+        Self { mr_repo, repo_repo, actor_repo, notification_repo, event_publisher }
     }
 
     #[instrument(skip(self), fields(author = %cmd.author_id, repo = %cmd.repository_id))]
@@ -213,6 +218,27 @@ impl CreateMrUseCase {
                 );
             }
         });
+
+        // Phase 34-V2 — Webhook MrCreated (fire-and-forget via Kafka)
+        webhook_emit::emit_webhook_fire_and_forget(
+            &self.event_publisher,
+            domain::entities::webhook::WebhookEventType::MrCreated,
+            cmd.repository_id,
+            cmd.author_id,
+            serde_json::json!({
+                "action": "opened",
+                "number": mr.number,
+                "merge_request": {
+                    "id": mr.id,
+                    "number": mr.number,
+                    "title": &mr.title,
+                    "source_branch": &mr.source_branch,
+                    "target_branch": &mr.target_branch,
+                },
+                "repository": { "id": cmd.repository_id },
+                "sender": { "id": cmd.author_id },
+            }),
+        );
 
         info!(
             mr_id = %mr.id,

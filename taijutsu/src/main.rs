@@ -135,26 +135,9 @@ async fn main() -> anyhow::Result<()> {
         "✅ VCS Engine initialisé (jj-lib ACL — Phase 21 Multi-Tenant)"
     );
 
-    // Nen: Kafka Event Publisher (optionnel — graceful degradation)
-    let event_publisher: Option<Arc<dyn domain::ports::event_publisher::EventPublisher>> =
-        match KafkaEventPublisher::new(
-            &config.kafka_brokers,
-            &config.kafka_topic,
-            &config.kafka_analysis_topic,
-        ) {
-            Ok(publisher) => {
-                info!(
-                    brokers = %config.kafka_brokers,
-                    topic = %config.kafka_topic,
-                    "✅ Kafka Event Publisher initialisé"
-                );
-                Some(Arc::new(publisher))
-            }
-            Err(e) => {
-                warn!("⚠️ Kafka non disponible — événements désactivés: {e}");
-                None
-            }
-        };
+    // Nen: Kafka Event Publisher — Phase 34-V2 : construit après ChakraProducer (voir ci-dessous)
+    // Placeholder — sera remplacé par la vraie valeur après l'init Chakra.
+    let mut event_publisher: Option<Arc<dyn domain::ports::event_publisher::EventPublisher>> = None;
 
     // Genjutsu: IPFS Content Store (optionnel — graceful degradation)
     let content_store: Option<Arc<dyn domain::ports::content_store::ContentStore>> =
@@ -489,6 +472,30 @@ async fn main() -> anyhow::Result<()> {
         config.chakra_worker_count, config.chakra_max_webhooks_per_repo
     );
 
+    // Nen: Kafka Event Publisher (Phase 34-V2 — pont Nen→Chakra)
+    // Construit ICI (après ChakraProducer) pour pouvoir passer le bridge.
+    event_publisher = match KafkaEventPublisher::new(
+        &config.kafka_brokers,
+        &config.kafka_topic,
+        &config.kafka_analysis_topic,
+        chakra_producer.clone(), // Phase 34-V2 : pont Nen→Chakra
+    ) {
+        Ok(publisher) => {
+            info!(
+                brokers = %config.kafka_brokers,
+                topic = %config.kafka_topic,
+                chakra_bridge = chakra_producer.is_some(),
+                "✅ Kafka Event Publisher initialisé{}",
+                if chakra_producer.is_some() { " + pont Chakra" } else { "" }
+            );
+            Some(Arc::new(publisher))
+        }
+        Err(e) => {
+            warn!("⚠️ Kafka non disponible — événements désactivés: {e}");
+            None
+        }
+    };
+
     // ── Phase 26A : Merge Requests (Le Katana Croisé) ──────────────────
     let mr_repo: Arc<dyn domain::ports::mr_repository::MrRepository> = Arc::new(
         infrastructure::persistence::postgres_mr_repo::PostgresMrRepository::new(pg_pool.clone()),
@@ -499,6 +506,7 @@ async fn main() -> anyhow::Result<()> {
             repo_repo.clone(),
             actor_repo.clone(),
             notification_repo.clone(),
+            event_publisher.clone(), // Phase 34-V2
         ),
     );
     let list_mrs = Arc::new(
@@ -518,6 +526,7 @@ async fn main() -> anyhow::Result<()> {
             mr_repo.clone(),
             repo_repo.clone(),
             vcs.clone(),
+            event_publisher.clone(), // Phase 34-V2
         ),
     );
     let close_mr = Arc::new(
@@ -525,6 +534,7 @@ async fn main() -> anyhow::Result<()> {
             mr_repo.clone(),
             repo_repo.clone(),
             vcs.clone(),
+            event_publisher.clone(), // Phase 34-V2
         ),
     );
     let mr_diff = Arc::new(
@@ -541,6 +551,7 @@ async fn main() -> anyhow::Result<()> {
             actor_repo.clone(),
             notification_repo.clone(),
             vcs.clone(),
+            event_publisher.clone(), // Phase 34-V2
         ),
     );
     info!("🕳️⚡ Cross-Repo MR initialisé (Phase 37E — Le Trou de Ver Git)");
@@ -583,6 +594,7 @@ async fn main() -> anyhow::Result<()> {
         application::use_cases::close_issue::CloseIssueUseCase::new(
             issue_repo.clone(),
             repo_repo.clone(),
+            event_publisher.clone(), // Phase 34-V2
         ),
     );
     // comment_issue construit après le bloc fédération (Phase 37F — besoin de remote_fetcher)
@@ -677,6 +689,7 @@ async fn main() -> anyhow::Result<()> {
             federation_repo.clone(),
             remote_fetcher_for_mentions.clone(),
             config.federation_domain.clone(),
+            event_publisher.clone(), // Phase 34-V2
         ),
     );
 
@@ -690,6 +703,7 @@ async fn main() -> anyhow::Result<()> {
             federation_repo.clone(),
             remote_fetcher_for_mentions.clone(),
             config.federation_domain.clone(),
+            event_publisher.clone(), // Phase 34-V2
         ),
     );
 

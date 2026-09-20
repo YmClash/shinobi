@@ -15,6 +15,7 @@ use async_trait::async_trait;
 use uuid::Uuid;
 
 use crate::entities::operation::Operation;
+use crate::entities::webhook::WebhookEvent;
 use crate::errors::DomainError;
 
 /// Résumé d'analyse sémantique publié sur le bus après traitement Tensai.
@@ -43,7 +44,7 @@ pub struct AnalysisCompleteSummary {
 ///
 /// Conçu pour le pattern événementiel : chaque mutation métier
 /// significative est propagée sur le bus pour les consommateurs
-/// downstream (CI/CD, monitoring, IA).
+/// downstream (CI/CD, monitoring, IA, webhooks).
 #[async_trait]
 pub trait EventPublisher: Send + Sync {
     /// Publie un événement "opération créée" sur le bus.
@@ -62,5 +63,18 @@ pub trait EventPublisher: Send + Sync {
     async fn publish_analysis_complete(
         &self,
         summary: &AnalysisCompleteSummary,
+    ) -> Result<(), DomainError>;
+
+    /// Publie un événement webhook sur le bus Chakra (Phase 34-V2).
+    ///
+    /// Topic: `shinobi.events.webhooks`
+    /// Le ChakraConsumer en background dispatche vers les endpoints HTTP abonnés.
+    /// Fire-and-forget : le Use Case ne bloque pas sur la livraison HTTP.
+    ///
+    /// Si le système Chakra est désactivé, cette méthode retourne `Ok(())`
+    /// silencieusement (graceful degradation).
+    async fn publish_webhook_event(
+        &self,
+        event: &WebhookEvent,
     ) -> Result<(), DomainError>;
 }

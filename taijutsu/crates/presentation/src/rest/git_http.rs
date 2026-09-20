@@ -1205,11 +1205,43 @@ async fn sync_hook_process_single_ref(
         );
     }
 
+    // 8. Phase 34-V2 — Webhook Push (fire-and-forget via Kafka → Chakra)
+    if let Some(publisher) = &state.event_publisher {
+        let publisher_wh = publisher.clone();
+        let wh_event = domain::entities::webhook::WebhookEvent::new(
+            domain::entities::webhook::WebhookEventType::Push,
+            repository.id,
+            repository.owner_id,
+            serde_json::json!({
+                "action": "push",
+                "ref": format!("refs/heads/{}", branch_name),
+                "after": content_id.as_str(),
+                "repository": {
+                    "id": repository.id,
+                    "name": &repository.name,
+                },
+                "sender": { "id": repository.owner_id },
+                "commits": [{
+                    "id": content_id.as_str(),
+                    "message": &description,
+                }],
+            }),
+        );
+        tokio::spawn(async move {
+            if let Err(e) = publisher_wh.publish_webhook_event(&wh_event).await {
+                warn!(
+                    error = %e,
+                    "⚠️ Phase 34-V2 — Push webhook failed (non-fatal)"
+                );
+            }
+        });
+    }
+
     info!(
         repo_id = %repo_id,
         branch = %branch_name,
         operation_id = %operation.id,
-        "Sync Hook: ref complete (PG + IPFS + Kafka + Federation)"
+        "Sync Hook: ref complete (PG + IPFS + Kafka + Federation + Webhook)"
     );
 
     Ok(())

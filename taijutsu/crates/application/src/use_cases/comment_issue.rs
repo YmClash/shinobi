@@ -14,8 +14,10 @@ use domain::ports::federation_repository::FederationRepository;
 use domain::ports::issue_repository::IssueRepository;
 use domain::ports::notification_repository::NotificationRepository;
 use domain::ports::repo_repository::RepoRepository;
+use domain::ports::event_publisher::EventPublisher;
 
 use crate::use_cases::mention_service;
+use crate::use_cases::webhook_emit;
 
 #[derive(Debug)]
 pub struct CommentIssueCommand {
@@ -34,6 +36,8 @@ pub struct CommentIssueUseCase {
     federation_repo: Arc<dyn FederationRepository>,
     remote_fetcher: Arc<infrastructure::federation::remote_actor::RemoteActorFetcher>,
     federation_domain: String,
+    /// Phase 34-V2 — Émission webhook (optionnel si Chakra désactivé).
+    event_publisher: Option<Arc<dyn EventPublisher>>,
 }
 
 impl CommentIssueUseCase {
@@ -45,10 +49,12 @@ impl CommentIssueUseCase {
         federation_repo: Arc<dyn FederationRepository>,
         remote_fetcher: Arc<infrastructure::federation::remote_actor::RemoteActorFetcher>,
         federation_domain: String,
+        event_publisher: Option<Arc<dyn EventPublisher>>,
     ) -> Self {
         Self {
             issue_repo, repo_repo, actor_repo, notification_repo,
             federation_repo, remote_fetcher, federation_domain,
+            event_publisher,
         }
     }
 
@@ -184,6 +190,24 @@ impl CommentIssueUseCase {
                 ).await;
             }
         });
+
+        // Phase 34-V2 — Webhook IssueComment (fire-and-forget via Kafka)
+        webhook_emit::emit_webhook_fire_and_forget(
+            &self.event_publisher,
+            domain::entities::webhook::WebhookEventType::IssueComment,
+            cmd.repository_id,
+            cmd.author_id,
+            serde_json::json!({
+                "action": "created",
+                "comment": {
+                    "id": comment.id,
+                    "body": &comment.body,
+                },
+                "issue": { "number": cmd.issue_number },
+                "repository": { "id": cmd.repository_id },
+                "sender": { "id": cmd.author_id },
+            }),
+        );
 
         info!(
             comment_id = %comment.id,

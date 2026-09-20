@@ -28,8 +28,10 @@ use domain::ports::mr_repository::MrRepository;
 use domain::ports::notification_repository::NotificationRepository;
 use domain::ports::repo_repository::RepoRepository;
 use domain::ports::vcs_engine::VcsEngine;
+use domain::ports::event_publisher::EventPublisher;
 
 use crate::use_cases::mention_service;
+use crate::use_cases::webhook_emit;
 
 // ── Command ──────────────────────────────────────────────────────────
 
@@ -62,6 +64,8 @@ pub struct CreateCrossRepoMrUseCase {
     actor_repo: Arc<dyn ActorRepository>,
     notification_repo: Arc<dyn NotificationRepository>,
     vcs: Arc<dyn VcsEngine>,
+    /// Phase 34-V2 — Émission webhook (optionnel si Chakra désactivé).
+    event_publisher: Option<Arc<dyn EventPublisher>>,
 }
 
 impl CreateCrossRepoMrUseCase {
@@ -71,6 +75,7 @@ impl CreateCrossRepoMrUseCase {
         actor_repo: Arc<dyn ActorRepository>,
         notification_repo: Arc<dyn NotificationRepository>,
         vcs: Arc<dyn VcsEngine>,
+        event_publisher: Option<Arc<dyn EventPublisher>>,
     ) -> Self {
         Self {
             mr_repo,
@@ -78,6 +83,7 @@ impl CreateCrossRepoMrUseCase {
             actor_repo,
             notification_repo,
             vcs,
+            event_publisher,
         }
     }
 
@@ -341,6 +347,29 @@ impl CreateCrossRepoMrUseCase {
             target_branch = %mr.target_branch,
             "✅🕳️ Cross-repo MR #{} créée — Le Trou de Ver est stabilisé",
             mr.number
+        );
+
+        // Phase 34-V2 — Webhook MrCreated / cross-repo (fire-and-forget via Kafka)
+        webhook_emit::emit_webhook_fire_and_forget(
+            &self.event_publisher,
+            domain::entities::webhook::WebhookEventType::MrCreated,
+            parent.id,
+            cmd.author_id,
+            serde_json::json!({
+                "action": "opened",
+                "number": mr.number,
+                "merge_request": {
+                    "id": mr.id,
+                    "number": mr.number,
+                    "title": &mr.title,
+                    "source_branch": &mr.source_branch,
+                    "target_branch": &mr.target_branch,
+                    "cross_repo": true,
+                    "source_repository_id": fork.id,
+                },
+                "repository": { "id": parent.id },
+                "sender": { "id": cmd.author_id },
+            }),
         );
 
         Ok(mr)
