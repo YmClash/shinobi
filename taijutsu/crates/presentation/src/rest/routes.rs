@@ -536,6 +536,10 @@ pub fn create_router(state: SharedState) -> Router {
             "/api/v1/repos/{owner}/{repo}/hooks/{id}/ping",
             post(crate::rest::webhook_routes::ping_webhook_handler),
         )
+        .route(
+            "/api/v1/repos/{owner}/{repo}/hooks/{id}/regenerate-secret",
+            post(crate::rest::webhook_routes::regenerate_secret_handler),
+        )
         // ── Bouclier Global : middleware auth sur TOUTES les routes privées ──
         .layer(auth_layer());
 

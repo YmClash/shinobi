@@ -100,6 +100,10 @@ pub struct DeliveryResponse {
     pub attempt: i16,
     pub duration_ms: Option<i64>,
     pub error_message: Option<String>,
+    /// Body de la requête envoyée (pour l'inspection payload).
+    pub request_body: Option<String>,
+    /// Body de la réponse reçue (tronqué à 10KB).
+    pub response_body: Option<String>,
     pub created_at: String,
 }
 
@@ -115,6 +119,8 @@ impl DeliveryResponse {
             attempt: d.attempt,
             duration_ms: d.duration_ms,
             error_message: d.error_message.clone(),
+            request_body: Some(d.request_body.clone()),
+            response_body: d.response_body.clone(),
             created_at: d.created_at.to_rfc3339(),
         }
     }
@@ -254,4 +260,19 @@ pub(crate) async fn ping_webhook_handler(
     }
 
     Ok(Json(serde_json::json!({ "pong": true })))
+}
+
+/// POST /api/v1/repos/:owner/:repo/hooks/:id/regenerate-secret — Régénérer le secret
+pub(crate) async fn regenerate_secret_handler(
+    auth: AuthUser,
+    State(state): State<SharedState>,
+    Path((_owner, _repo, id)): Path<(String, String, Uuid)>,
+) -> Result<Json<WebhookResponse>, AppError> {
+    let webhook = state
+        .manage_webhooks
+        .regenerate_secret(auth.0.actor_id(), id)
+        .await?;
+
+    // Renvoyer le secret dans la réponse (comme à la création)
+    Ok(Json(WebhookResponse::from_webhook_with_secret(&webhook)))
 }

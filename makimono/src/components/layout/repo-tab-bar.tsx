@@ -21,6 +21,7 @@ const tabs = [
   { key: "ops",         label: "Operations",       icon: "⚡", match: (p: string) => /\/operations(?!\/)/.test(p) || /\/operations\//.test(p) },
   { key: "refs",        label: "Bookmarks",        icon: "🔖", match: (p: string) => p.includes("/bookmarks") },
   { key: "checkpoints", label: "AI Checkpoints",   icon: "🧠", match: (p: string) => p.includes("/checkpoints") },
+  { key: "settings",    label: "Settings",          icon: "⚙️", match: (p: string) => p.includes("/settings") },
 ];
 
 function buildHref(owner: string, repo: string, key: string): string {
@@ -33,6 +34,7 @@ function buildHref(owner: string, repo: string, key: string): string {
     case "ops":     return `${base}/operations`;
     case "refs":    return `${base}/bookmarks`;
     case "checkpoints": return `${base}/checkpoints`;
+    case "settings":    return `${base}/settings/webhooks`;
     default:        return base;
   }
 }

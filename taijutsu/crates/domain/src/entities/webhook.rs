@@ -79,7 +79,7 @@ impl Webhook {
 }
 
 /// Génère un secret HMAC aléatoire (32 bytes → 64 chars hex).
-fn generate_webhook_secret() -> String {
+pub fn generate_webhook_secret() -> String {
     use rand::Rng;
     let mut rng = rand::rng();
     let bytes: [u8; 32] = rng.random();

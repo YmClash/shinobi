@@ -266,6 +266,31 @@ impl ManageWebhooksUseCase {
         Ok(())
     }
 
+    /// Régénère le secret HMAC d'un webhook.
+    ///
+    /// Le nouveau secret est retourné dans la réponse (affiché une seule fois).
+    /// L'ancien secret est invalidé immédiatement.
+    pub async fn regenerate_secret(
+        &self,
+        actor_id: Uuid,
+        webhook_id: Uuid,
+    ) -> Result<Webhook, DomainError> {
+        let mut webhook = self.get_webhook(actor_id, webhook_id).await?;
+
+        // Utiliser la fonction domaine pour générer le nouveau secret
+        webhook.secret = domain::entities::webhook::generate_webhook_secret();
+        webhook.updated_at = chrono::Utc::now();
+
+        self.webhook_repo.update(&webhook).await?;
+
+        info!(
+            webhook_id = %webhook.id,
+            "🔔 Chakra — Secret webhook régénéré"
+        );
+
+        Ok(webhook)
+    }
+
     /// Liste l'historique des livraisons d'un webhook.
     pub async fn list_deliveries(
         &self,

@@ -3,6 +3,7 @@
 @import "shadcn/tailwind.css";
 @import "../styles/themes.css";
 @import "../styles/mr.css";
+@import "../styles/webhooks.css";
 
 @custom-variant dark (&:is(.dark *));
 
