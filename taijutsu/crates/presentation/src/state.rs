@@ -207,6 +207,13 @@ pub struct SharedState {
     // ── Phase 39 — Commit Status API (Le Pont CI/CD) 🌉 ────────
     /// Use case: CRUD des statuts de commit CI/CD.
     pub manage_commit_statuses: Arc<application::use_cases::manage_commit_statuses::ManageCommitStatusesUseCase>,
+
+    // ── Phase 40 — Jutsu Runner (CI/CD natif) 🥷⚡ ────────
+    /// Use case: exécution d'un pipeline CI/CD natif.
+    /// `None` si Docker n'est pas disponible.
+    pub run_pipeline: Option<Arc<application::use_cases::run_pipeline::RunPipelineUseCase>>,
+    /// Repository des pipelines CI/CD natifs.
+    pub pipeline_repo: Arc<dyn domain::ports::pipeline_repository::PipelineRepository>,
 }
 
 // ── Phase 12A — Git Bridge HTTP ──────────────────────────────────────

@@ -9,6 +9,7 @@
 //! Un shutdown gracieux est déclenché via Ctrl+C.
 
 mod config;
+mod jutsu_consumer;
 
 use std::net::SocketAddr;
 use std::sync::Arc;
@@ -58,6 +59,8 @@ use infrastructure::events::chakra_producer::ChakraProducer;
 use infrastructure::events::chakra_consumer::ChakraConsumer;
 use infrastructure::events::chakra_dispatcher::ChakraDispatcher;
 use infrastructure::events::chakra_retry::ChakraRetryWorker;
+use infrastructure::events::jutsu_runner::JutsuRunner;
+use jutsu_consumer::JutsuConsumer;
 use infrastructure::persistence::postgres_webhook_repo::PostgresWebhookRepo;
 use infrastructure::github::github_client::GitHubClient;
 use infrastructure::llm::ollama_service::OllamaService;
@@ -458,6 +461,41 @@ async fn main() -> anyhow::Result<()> {
     );
     info!("🌉 Commit Status API initialisé (Phase 39 — Le Pont CI/CD)");
 
+    // ── Phase 40 — Jutsu Runner (CI/CD natif) 🥷⚡ ────────────────────
+    let pipeline_repo: Arc<dyn domain::ports::pipeline_repository::PipelineRepository> = Arc::new(
+        infrastructure::persistence::postgres_pipeline_repo::PostgresPipelineRepo::new(
+            pg_pool.clone(),
+        ),
+    );
+
+    let container_runner: Option<Arc<dyn domain::ports::container_runner::ContainerRunner>> =
+        if config.jutsu_enabled {
+            match JutsuRunner::new() {
+                Ok(runner) => Some(Arc::new(runner)),
+                Err(e) => {
+                    warn!("⚠️ Docker non disponible — Jutsu Runner désactivé: {e}");
+                    None
+                }
+            }
+        } else {
+            info!("ℹ️ Jutsu Runner désactivé par configuration (JUTSU_ENABLED=false)");
+            None
+        };
+
+    let parse_jutsu = Arc::new(
+        application::use_cases::parse_jutsu_config::ParseJutsuConfigUseCase::new(),
+    );
+
+    let run_pipeline = container_runner.as_ref().map(|runner| {
+        Arc::new(application::use_cases::run_pipeline::RunPipelineUseCase::new(
+            pipeline_repo.clone(),
+            runner.clone(),
+            manage_commit_statuses.clone(),
+            std::time::Duration::from_secs(config.jutsu_stage_timeout_secs),
+            std::time::Duration::from_secs(config.jutsu_pipeline_timeout_secs),
+        ))
+    });
+
     // Chakra Producer (Kafka) — optionnel (graceful degradation)
     let chakra_producer: Option<Arc<ChakraProducer>> = if config.chakra_enabled {
         match ChakraProducer::new(&config.kafka_brokers, &config.chakra_topic) {
@@ -495,6 +533,7 @@ async fn main() -> anyhow::Result<()> {
         &config.kafka_topic,
         &config.kafka_analysis_topic,
         chakra_producer.clone(), // Phase 34-V2 : pont Nen→Chakra
+        &config.jutsu_topic,     // Phase 40 : topic pipeline CI/CD
     ) {
         Ok(publisher) => {
             info!(
@@ -804,6 +843,9 @@ async fn main() -> anyhow::Result<()> {
         emit_webhook: emit_webhook.clone(),
         // Phase 39 — Commit Status API (Le Pont CI/CD) 🌉
         manage_commit_statuses,
+        // Phase 40 — Jutsu Runner (CI/CD natif) 🥷⚡
+        run_pipeline: run_pipeline.clone(),
+        pipeline_repo,
     };
 
     // ── Git Bridge HTTP (Phase 12A) ────────────────────
@@ -934,6 +976,41 @@ async fn main() -> anyhow::Result<()> {
             retry_worker.start().await;
         });
         info!("🔄 Chakra Retry Worker démarré (Phase 34 — poll 10s, backoff exponentiel)");
+    }
+
+    // ── Phase 40 : Jutsu Consumer (Kafka → Docker CI/CD) ───────────
+    if config.jutsu_enabled {
+        if let Some(run_pipeline_uc) = run_pipeline.clone() {
+            match JutsuConsumer::new(
+                &config.kafka_brokers,
+                &config.jutsu_topic,
+                &config.jutsu_consumer_group,
+                cancel_token.clone(),
+            ) {
+                Ok(consumer) => {
+                    let workspace_root = std::path::PathBuf::from(&config.vcs_workspace_root);
+                    let worker_count = config.jutsu_worker_count;
+                    let vcs_for_jutsu: Arc<dyn domain::ports::vcs_engine::VcsEngine> = vcs.clone();
+
+                    tokio::spawn(consumer.run(
+                        run_pipeline_uc,
+                        parse_jutsu.clone(),
+                        vcs_for_jutsu,
+                        workspace_root,
+                        worker_count,
+                    ));
+                    info!(
+                        "🥷 Jutsu Consumer démarré (Phase 40 — {} workers, topic: {})",
+                        config.jutsu_worker_count, config.jutsu_topic
+                    );
+                }
+                Err(e) => {
+                    warn!("⚠️ Jutsu Consumer non disponible: {e}");
+                }
+            }
+        } else {
+            warn!("⚠️ Jutsu Consumer non démarré — Docker non disponible");
+        }
     }
 
     // ── Serveur Tonic (gRPC / Ninpo) ───────────────

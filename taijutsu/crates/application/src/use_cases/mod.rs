@@ -49,6 +49,8 @@ pub mod sensei_chat;
 pub mod update_issue;
 pub mod webhook_emit;
 pub mod manage_commit_statuses;
+pub mod parse_jutsu_config;
+pub mod run_pipeline;
 
 
 #[cfg(test)]

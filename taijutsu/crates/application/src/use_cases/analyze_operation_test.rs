@@ -259,6 +259,15 @@ mod tests {
         ) -> Result<(), DomainError> {
             Ok(()) // Phase 34-V2 — No-op dans les tests
         }
+
+        async fn publish_pipeline_requested(
+            &self,
+            _repository_id: uuid::Uuid,
+            _commit_id: &str,
+            _trigger_event: &str,
+        ) -> Result<(), DomainError> {
+            Ok(()) // Phase 40 — No-op dans les tests
+        }
     }
 
     // ── Mock EmbeddingService (Phase 7A) ─────────────

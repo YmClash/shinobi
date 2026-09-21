@@ -117,6 +117,25 @@ pub struct Config {
 
     /// Autoriser les webhooks vers localhost (dev only). Défaut: false.
     pub chakra_allow_local: bool,
+
+    // ── Phase 40 — Jutsu Runner (CI/CD natif) 🥷⚡ ─────────────────
+    /// Activer/désactiver le Jutsu Runner. Défaut: true.
+    pub jutsu_enabled: bool,
+
+    /// Topic Kafka pour les événements pipeline. Défaut: "shinobi.jutsu.pipeline".
+    pub jutsu_topic: String,
+
+    /// Consumer group Kafka pour le Jutsu Runner. Défaut: "shinobi-jutsu-runner".
+    pub jutsu_consumer_group: String,
+
+    /// Nombre de workers dans le pool Jutsu. Défaut: 2.
+    pub jutsu_worker_count: usize,
+
+    /// Timeout par stage en secondes. Défaut: 600 (10 min).
+    pub jutsu_stage_timeout_secs: u64,
+
+    /// Timeout global par pipeline en secondes. Défaut: 1800 (30 min).
+    pub jutsu_pipeline_timeout_secs: u64,
 }
 
 impl Config {
@@ -172,6 +191,13 @@ impl Config {
             chakra_worker_count: env_parse("CHAKRA_WORKER_COUNT", 4),
             chakra_max_webhooks_per_repo: env_parse("CHAKRA_MAX_WEBHOOKS_PER_REPO", 20),
             chakra_allow_local: env_bool("CHAKRA_ALLOW_LOCAL", false),
+            // ── Phase 40 — Jutsu Runner (CI/CD natif) 🥷⚡ ────
+            jutsu_enabled: env_bool("JUTSU_ENABLED", true),
+            jutsu_topic: env_or("JUTSU_TOPIC", "shinobi.jutsu.pipeline"),
+            jutsu_consumer_group: env_or("JUTSU_CONSUMER_GROUP", "shinobi-jutsu-runner"),
+            jutsu_worker_count: env_parse("JUTSU_WORKER_COUNT", 2),
+            jutsu_stage_timeout_secs: env_parse("JUTSU_STAGE_TIMEOUT_SECS", 600),
+            jutsu_pipeline_timeout_secs: env_parse("JUTSU_PIPELINE_TIMEOUT_SECS", 1800),
         };
 
         if !errors.is_empty() {
@@ -206,6 +232,7 @@ impl Config {
         eprintln!("│ Sensei          : {}", if self.sensei_enabled { "enabled" } else { "disabled" });
         eprintln!("│ Embedding       : {} ({}d)", if self.embedding_enabled { "enabled" } else { "disabled" }, self.embedding_dimensions);
         eprintln!("│ Chakra          : {} ({}w, max {}/repo)", if self.chakra_enabled { "enabled" } else { "disabled" }, self.chakra_worker_count, self.chakra_max_webhooks_per_repo);
+        eprintln!("│ Jutsu Runner    : {} ({}w, stage:{}s, pipeline:{}s)", if self.jutsu_enabled { "enabled" } else { "disabled" }, self.jutsu_worker_count, self.jutsu_stage_timeout_secs, self.jutsu_pipeline_timeout_secs);
         eprintln!("└───────────────────────────────────────────────────────────────────────────────");
     }
 }

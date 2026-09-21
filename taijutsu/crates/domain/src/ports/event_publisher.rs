@@ -77,4 +77,25 @@ pub trait EventPublisher: Send + Sync {
         &self,
         event: &WebhookEvent,
     ) -> Result<(), DomainError>;
+
+    /// Publie un événement "pipeline requested" pour le Jutsu Runner (Phase 40).
+    ///
+    /// Topic: `shinobi.jutsu.pipeline`
+    /// Déclenché par le hook post-push quand un `jutsu.yml` est détecté
+    /// à la racine du dépôt.
+    ///
+    /// Le message contient les informations nécessaires au JutsuConsumer
+    /// pour lancer l'exécution du pipeline :
+    /// - `repository_id` : UUID du dépôt
+    /// - `commit_id` : SHA du commit à builder
+    /// - `trigger_event` : type de déclencheur (push, mr_created, tag)
+    ///
+    /// Si le système Jutsu est désactivé, cette méthode retourne `Ok(())`
+    /// silencieusement (graceful degradation).
+    async fn publish_pipeline_requested(
+        &self,
+        repository_id: Uuid,
+        commit_id: &str,
+        trigger_event: &str,
+    ) -> Result<(), DomainError>;
 }

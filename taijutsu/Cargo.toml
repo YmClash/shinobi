@@ -41,6 +41,12 @@ chrono = { workspace = true }
 tokio-util = { workspace = true }
 futures = { workspace = true }
 
+# — Phase 40 — Jutsu Consumer (vit dans src/ pour éviter la dépendance circulaire) —
+tempfile = { workspace = true }
+rdkafka = { workspace = true }
+serde_json = { workspace = true }
+uuid = { workspace = true }
+
 # ─────────────────────────────────────────────
 # Dépendances centralisées du workspace
 # Chaque crate membre pioche ici via { workspace = true }
@@ -145,3 +151,7 @@ url = { version = "2" }
 # — Phase 37C — @Mentions (Le Mégaphone) —
 pulldown-cmark = { version = "0.12" }
 regex = { version = "1" }
+
+# — Phase 40 — Jutsu Runner (Docker CI/CD natif) —
+bollard = { version = "0.18" }
+serde_yaml = { version = "0.9" }

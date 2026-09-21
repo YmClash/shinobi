@@ -76,6 +76,10 @@ url = { workspace = true }
 # — Phase 34 — Chakra (Webhooks HMAC-SHA256) —
 hmac = { workspace = true }
 
-[dev-dependencies]
+# — Phase 40 — Jutsu Runner (Docker via bollard) —
+bollard = { workspace = true }
+serde_yaml = { workspace = true }
 tempfile = { workspace = true }
+
+[dev-dependencies]
 tokio = { workspace = true }

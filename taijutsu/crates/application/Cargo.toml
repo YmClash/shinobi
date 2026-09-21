@@ -19,3 +19,6 @@ reqwest     = { workspace = true }
 rand        = { workspace = true }
 url         = { workspace = true }
 urlencoding = "2"
+
+# — Phase 40 — Jutsu Config Parser —
+serde_yaml = { workspace = true }

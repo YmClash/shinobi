@@ -7,6 +7,7 @@
 //! - `shinobi.vcs.operations` : opérations VCS créées
 //! - `shinobi.tensai.analysis-complete` : analyse sémantique terminée
 //! - `shinobi.events.webhooks` : événements webhook (Phase 34-V2 — pont Nen→Chakra)
+//! - `shinobi.jutsu.pipeline` : événements pipeline CI/CD (Phase 40 — Jutsu Runner)
 //!
 //! ## Architecture
 //! - `FutureProducer` : producteur async natif rdkafka (compatible tokio).
@@ -30,6 +31,7 @@ use async_trait::async_trait;
 use rdkafka::config::ClientConfig;
 use rdkafka::producer::{FutureProducer, FutureRecord};
 use tracing::{debug, info, warn};
+use uuid::Uuid;
 
 use domain::entities::operation::Operation;
 use domain::entities::webhook::WebhookEvent;
@@ -54,6 +56,9 @@ pub struct KafkaEventPublisher {
     /// Producteur Chakra optionnel — pont vers le topic webhook (Phase 34-V2).
     /// `None` si le système Chakra est désactivé (`CHAKRA_ENABLED=false`).
     chakra_producer: Option<Arc<ChakraProducer>>,
+    /// Topic Jutsu pour les événements pipeline CI/CD (Phase 40).
+    /// Ex: `"shinobi.jutsu.pipeline"`
+    jutsu_topic: String,
 }
 
 impl KafkaEventPublisher {
@@ -64,6 +69,7 @@ impl KafkaEventPublisher {
     /// - `topic` : topic opérations VCS (ex: `"shinobi.vcs.operations"`)
     /// - `analysis_topic` : topic analyse terminée (ex: `"shinobi.tensai.analysis-complete"`)
     /// - `chakra_producer` : producteur Chakra optionnel (Phase 34-V2)
+    /// - `jutsu_topic` : topic pipeline CI/CD (Phase 40)
     ///
     /// # Errors
     /// Retourne une erreur si la configuration rdkafka est invalide.
@@ -74,6 +80,7 @@ impl KafkaEventPublisher {
         topic: &str,
         analysis_topic: &str,
         chakra_producer: Option<Arc<ChakraProducer>>,
+        jutsu_topic: &str,
     ) -> Result<Self, DomainError> {
         let producer: FutureProducer = ClientConfig::new()
             .set("bootstrap.servers", brokers)
@@ -98,6 +105,7 @@ impl KafkaEventPublisher {
             topic: topic.to_string(),
             analysis_topic: analysis_topic.to_string(),
             chakra_producer,
+            jutsu_topic: jutsu_topic.to_string(),
         })
     }
 }
@@ -220,5 +228,63 @@ impl EventPublisher for KafkaEventPublisher {
             }
         }
     }
-}
 
+    /// Phase 40 — Publication pipeline requested pour le Jutsu Runner.
+    ///
+    /// Publie un message JSON sur le topic `shinobi.jutsu.pipeline`
+    /// avec les informations nécessaires au JutsuConsumer.
+    async fn publish_pipeline_requested(
+        &self,
+        repository_id: Uuid,
+        commit_id: &str,
+        trigger_event: &str,
+    ) -> Result<(), DomainError> {
+        let payload = serde_json::json!({
+            "repository_id": repository_id.to_string(),
+            "commit_id": commit_id,
+            "trigger_event": trigger_event,
+        });
+
+        let payload_str = serde_json::to_string(&payload).map_err(|e| {
+            DomainError::Internal(format!("JSON serialization failed: {e}"))
+        })?;
+
+        let key = repository_id.to_string();
+
+        let delivery_result = self
+            .producer
+            .send(
+                FutureRecord::to(&self.jutsu_topic)
+                    .key(&key)
+                    .payload(&payload_str),
+                Duration::from_secs(5),
+            )
+            .await;
+
+        match delivery_result {
+            Ok(delivery) => {
+                info!(
+                    topic = %self.jutsu_topic,
+                    partition = delivery.partition,
+                    offset = delivery.offset,
+                    repository_id = %repository_id,
+                    commit_id = %commit_id,
+                    trigger = %trigger_event,
+                    "🥷 Événement pipeline_requested publié sur Kafka"
+                );
+                Ok(())
+            }
+            Err((kafka_error, _)) => {
+                warn!(
+                    topic = %self.jutsu_topic,
+                    repository_id = %repository_id,
+                    error = %kafka_error,
+                    "⚠️ Échec publication pipeline_requested — non-fatal"
+                );
+                Err(DomainError::Internal(format!(
+                    "Kafka publish pipeline_requested failed: {kafka_error}"
+                )))
+            }
+        }
+    }
+}

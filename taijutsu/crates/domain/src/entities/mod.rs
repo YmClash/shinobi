@@ -13,3 +13,5 @@ pub mod notification;
 pub mod session;
 pub mod webhook;
 pub mod commit_status;
+pub mod pipeline;
+pub mod jutsu_config;

@@ -25,3 +25,5 @@ pub mod review_repository;
 pub mod vcs_engine;
 pub mod webhook_repository;
 pub mod commit_status_repository;
+pub mod pipeline_repository;
+pub mod container_runner;
