@@ -180,31 +180,38 @@ pub async fn require_auth_layer(
         (StatusCode::UNAUTHORIZED, Json(body)).into_response()
     })?;
 
-    let token = header
+    // ── Bearer JWT ──
+    if let Some(token) = header
         .strip_prefix("Bearer ")
         .or_else(|| header.strip_prefix("bearer "))
-        .ok_or_else(|| {
+    {
+        state.auth_service.verify_jwt(token).map_err(|e| {
             let body = serde_json::json!({
                 "error": {
                     "code": 401,
-                    "message": "Format Authorization invalide (expected Bearer)",
+                    "message": format!("Non authentifié: {e}"),
                 }
             });
             (StatusCode::UNAUTHORIZED, Json(body)).into_response()
         })?;
 
-    // Vérifier le JWT
-    state.auth_service.verify_jwt(token).map_err(|e| {
-        let body = serde_json::json!({
-            "error": {
-                "code": 401,
-                "message": e.to_string(),
-            }
-        });
-        (StatusCode::UNAUTHORIZED, Json(body)).into_response()
-    })?;
+        return Ok(next.run(request).await);
+    }
 
-    // JWT valide → laisser passer (le handler extraira les claims via AuthUser)
-    Ok(next.run(request).await)
+    // ── Basic Auth (PAT) — Phase 39: CI/CD Commit Status API ──
+    // Le Bouclier Global laisse passer les Basic Auth valides.
+    // La validation complète du PAT (hash lookup) est faite dans l'extracteur AuthUser.
+    if header.starts_with("Basic ") || header.starts_with("basic ") {
+        return Ok(next.run(request).await);
+    }
+
+    let body = serde_json::json!({
+        "error": {
+            "code": 401,
+            "message": "Format Authorization invalide (expected Bearer or Basic)",
+        }
+    });
+    Err((StatusCode::UNAUTHORIZED, Json(body)).into_response())
 }
+
 
