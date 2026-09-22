@@ -5,6 +5,7 @@
 // Affiche le statut combiné CI/CD à côté du hash d'un commit.
 // ═══════════════════════════════════════════════════════════════
 
+import { useRouter } from "next/navigation";
 import { useCombinedStatus } from "@/hooks/use-commit-status";
 import type { CommitStatusState } from "@/lib/commit-status-api";
 
@@ -55,6 +56,7 @@ export function CommitStatusBadge({
   showLabel = false,
   size = "sm",
 }: CommitStatusBadgeProps) {
+  const router = useRouter();
   const { data, loading, error } = useCombinedStatus(owner, repo, commitId);
 
   // Pas de statut → ne rien afficher (pas de CI configuré)
@@ -75,9 +77,16 @@ export function CommitStatusBadge({
   const { state, total_count, statuses } = data;
   const config = STATE_CONFIG[state];
 
-  // Ouvrir le target_url du premier statut ayant un lien
+  // Vegapunk Tweak #1 — Unification des badges jutsu/ 🔬
+  // Si un statut a un contexte jutsu/*, naviguer vers la page Jutsus
+  // au lieu d'ouvrir un lien externe. Évite la collision de badges.
   const handleClick = (e: React.MouseEvent) => {
     e.stopPropagation();
+    const jutsuStatus = statuses.find((s) => s.context.startsWith("jutsu/"));
+    if (jutsuStatus) {
+      router.push(`/${owner}/${repo}/jutsus`);
+      return;
+    }
     const firstWithUrl = statuses.find((s) => s.target_url);
     if (firstWithUrl?.target_url) {
       window.open(firstWithUrl.target_url, "_blank", "noopener,noreferrer");

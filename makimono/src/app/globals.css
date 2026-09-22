@@ -5,6 +5,7 @@
 @import "../styles/mr.css";
 @import "../styles/webhooks.css";
 @import "../styles/commit-status.css";
+@import "../styles/pipeline.css";
 
 @custom-variant dark (&:is(.dark *));
 
