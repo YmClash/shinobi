@@ -526,6 +526,23 @@ pub fn create_router(state: SharedState) -> Router {
             "/api/v1/repos/{owner}/{repo}/statuses/{commit_id}/combined",
             get(crate::rest::commit_status_routes::combined_commit_status_handler),
         )
+        // Phase 40 — Jutsu Runner : Pipelines CI/CD natifs 🥷⚡
+        .route(
+            "/api/v1/repos/{owner}/{repo}/pipelines",
+            get(crate::rest::pipeline_routes::list_pipelines_handler),
+        )
+        .route(
+            "/api/v1/repos/{owner}/{repo}/pipelines/trigger",
+            post(crate::rest::pipeline_routes::trigger_pipeline_handler),
+        )
+        .route(
+            "/api/v1/repos/{owner}/{repo}/pipelines/{pipeline_id}",
+            get(crate::rest::pipeline_routes::get_pipeline_handler),
+        )
+        .route(
+            "/api/v1/repos/{owner}/{repo}/pipelines/{pipeline_id}/stages",
+            get(crate::rest::pipeline_routes::list_pipeline_stages_handler),
+        )
         // Phase 34 — Webhooks (Chakra チャクラ) 🔔
         .route(
             "/api/v1/repos/{owner}/{repo}/hooks",

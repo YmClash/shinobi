@@ -1237,11 +1237,50 @@ async fn sync_hook_process_single_ref(
         });
     }
 
+    // 9. Phase 40 — Jutsu Runner : Trigger pipeline si jutsu.yml present 🥷⚡
+    //
+    // Detection de jutsu.yml via read_blob : si le fichier existe dans le commit,
+    // on publie un evenement Kafka "push" pour declencher le JutsuConsumer.
+    // Fire-and-forget (tokio::spawn) — non-fatal : pas tous les repos ont un CI.
+    if let Some(publisher) = &state.event_publisher {
+        let publisher_jutsu = publisher.clone();
+        let vcs_jutsu = state.vcs_engine.clone();
+        let repo_id_jutsu = repo_id;
+        let commit_sha = content_id.as_str().to_string();
+
+        tokio::spawn(async move {
+            match vcs_jutsu.read_blob(&repo_id_jutsu, &commit_sha, "jutsu.yml").await {
+                Ok(_) => {
+                    // jutsu.yml detecte : declencher le pipeline CI/CD
+                    if let Err(e) = publisher_jutsu
+                        .publish_pipeline_requested(repo_id_jutsu, &commit_sha, "push")
+                        .await
+                    {
+                        warn!(
+                            error = %e,
+                            repo_id = %repo_id_jutsu,
+                            "⚠️ Phase 40 — Pipeline event publish failed (non-fatal)"
+                        );
+                    } else {
+                        info!(
+                            repo_id = %repo_id_jutsu,
+                            commit_sha = %commit_sha,
+                            "🥷 Phase 40 — Pipeline CI/CD declenche (jutsu.yml detecte)"
+                        );
+                    }
+                }
+                Err(_) => {
+                    // jutsu.yml absent — aucun CI configure pour ce repo
+                }
+            }
+        });
+    }
+
     info!(
         repo_id = %repo_id,
         branch = %branch_name,
         operation_id = %operation.id,
-        "Sync Hook: ref complete (PG + IPFS + Kafka + Federation + Webhook)"
+        "Sync Hook: ref complete (PG + IPFS + Kafka + Federation + Webhook + Jutsu)"
     );
 
     Ok(())
