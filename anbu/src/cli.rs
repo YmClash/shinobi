@@ -140,4 +140,81 @@ pub enum Commands {
         #[arg(long)]
         pat: Option<String>,
     },
+
+    /// 🥷⚡ Jutsu Runner — CI/CD Pipeline operations
+    ///
+    /// Trigger, monitor, and run CI/CD pipelines from the terminal.
+    /// Supports remote server pipelines and local Docker execution.
+    #[command(alias = "j")]
+    Jutsu {
+        #[command(subcommand)]
+        action: JutsuCommands,
+    },
 }
+
+/// Sub-commands for `anbu jutsu`.
+#[derive(Subcommand, Debug)]
+pub enum JutsuCommands {
+    /// Trigger a remote pipeline execution on the server
+    ///
+    /// Forces pipeline execution on the SHINOBI server without polluting
+    /// the Git history. Resolves owner/repo from git remote and commit
+    /// from HEAD automatically.
+    #[command(alias = "t")]
+    Trigger {
+        /// Git ref to build (branch or tag, default: current HEAD)
+        #[arg(long)]
+        r#ref: Option<String>,
+
+        /// Repository owner (auto-detected from git remote)
+        #[arg(long)]
+        owner: Option<String>,
+
+        /// Repository name (auto-detected from git remote)
+        #[arg(long)]
+        repo: Option<String>,
+    },
+
+    /// Stream pipeline logs from the server
+    ///
+    /// Displays logs for a specific pipeline or the most recent one.
+    /// In follow mode (-f), polls every 2 seconds and shows only new lines.
+    #[command(alias = "l")]
+    Logs {
+        /// Pipeline ID (full UUID or short prefix)
+        id: Option<String>,
+
+        /// Follow mode — poll for new logs every 2s until pipeline finishes
+        #[arg(short, long)]
+        follow: bool,
+
+        /// Show logs for the latest pipeline of this repo
+        #[arg(long)]
+        last: bool,
+    },
+
+    /// Run pipeline locally using Docker
+    ///
+    /// Reads jutsu.yml from the current directory and executes each stage
+    /// in a local Docker container. The current directory is mounted as
+    /// the workspace — no git clone needed.
+    #[command(alias = "r")]
+    Run {
+        /// Execute locally (reads ./jutsu.yml, runs via Docker)
+        #[arg(long)]
+        local: bool,
+
+        /// Run only a specific stage
+        #[arg(long)]
+        stage: Option<String>,
+
+        /// Validate YAML without executing (parse + cycle check only)
+        #[arg(long)]
+        check: bool,
+
+        /// Path to jutsu.yml (default: ./jutsu.yml)
+        #[arg(long)]
+        file: Option<String>,
+    },
+}
+

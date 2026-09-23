@@ -13,6 +13,7 @@
 mod cli;
 mod collectors;
 mod config;
+mod jutsu;
 mod models;
 mod setup;
 mod storage;
@@ -31,7 +32,8 @@ use crate::config::AnbuConfig;
 use crate::storage::artifact_store::ArtifactStore;
 use crate::storage::index::AnbuIndex;
 
-fn main() -> Result<()> {
+#[tokio::main]
+async fn main() -> Result<()> {
     let cli = Cli::parse();
     let config = AnbuConfig::load()?;
 
@@ -49,6 +51,7 @@ fn main() -> Result<()> {
         Some(Commands::Sessions { limit, agent, all_workspaces }) => cmd_sessions(config, limit, agent, all_workspaces),
         Some(Commands::Sync { owner, repo, id }) => cmd_sync(config, owner, repo, id),
         Some(Commands::Setup { server_url, login, pat }) => cmd_setup(server_url, login, pat),
+        Some(Commands::Jutsu { action }) => jutsu::handle_jutsu(config, action).await,
         None => {
             // Friendly welcome banner when no subcommand is given
             println!();
@@ -59,7 +62,7 @@ fn main() -> Result<()> {
             );
             println!(
                 "  {}",
-                "AI Context Capture for SHINOBI".dimmed()
+                "AI Context Capture & CI/CD for SHINOBI".dimmed()
             );
             println!();
             println!("  {}", "Commands:".bold());
@@ -69,10 +72,15 @@ fn main() -> Result<()> {
             println!("    {}    List detected AI sessions", "sessions".cyan());
             println!("    {}        Sync checkpoints to server", "sync".cyan());
             println!("    {}       Configure server connection", "setup".cyan());
+            println!("    {}       ⚡ CI/CD pipeline operations", "jutsu".cyan());
             println!();
             println!(
                 "  Quick start: {}",
                 "anbu sessions".cyan().bold()
+            );
+            println!(
+                "  CI/CD:       {}",
+                "anbu jutsu --help".cyan().bold()
             );
             println!(
                 "  Full help:   {}",

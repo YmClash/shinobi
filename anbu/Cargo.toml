@@ -43,3 +43,9 @@ reqwest = { version = "0.12", features = ["blocking", "json", "multipart"] }
 # Error handling
 anyhow = "1"
 
+# Phase 40-E — Jutsu Runner (CLI CI/CD) 🥷⚡
+serde_yaml = "0.9"                                    # jutsu.yml parsing
+bollard = "0.18"                                      # Docker API (same version as Taijutsu)
+tokio = { version = "1", features = ["full"] }        # async runtime (bollard is async)
+futures = "0.3"                                       # log streaming (StreamExt)
+
