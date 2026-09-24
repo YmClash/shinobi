@@ -141,7 +141,7 @@ pub async fn cmd_trigger(
     );
     println!(
         "  Logs:      {}",
-        format!("anbu jutsu logs {} -f", &pipeline_id[..8.min(pipeline_id.len())])
+        format!("anbu jutsu logs {} -f", pipeline_id)
             .cyan()
     );
     println!(

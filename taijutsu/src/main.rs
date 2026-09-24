@@ -52,26 +52,26 @@ use infrastructure::auth::jwt_auth_service::JwtAuthService;
 use infrastructure::cache::redis_cache::RedisCache;
 use infrastructure::content::ipfs_store::IpfsContentStore;
 use infrastructure::embeddings::nomic_service::NomicEmbedService;
+use infrastructure::events::chakra_consumer::ChakraConsumer;
+use infrastructure::events::chakra_dispatcher::ChakraDispatcher;
+use infrastructure::events::chakra_producer::ChakraProducer;
+use infrastructure::events::chakra_retry::ChakraRetryWorker;
+use infrastructure::events::jutsu_runner::JutsuRunner;
 use infrastructure::events::kafka_consumer::KafkaEventConsumer;
 use infrastructure::events::kafka_producer::KafkaEventPublisher;
 use infrastructure::events::oracle_consumer::OracleKafkaConsumer;
-use infrastructure::events::chakra_producer::ChakraProducer;
-use infrastructure::events::chakra_consumer::ChakraConsumer;
-use infrastructure::events::chakra_dispatcher::ChakraDispatcher;
-use infrastructure::events::chakra_retry::ChakraRetryWorker;
-use infrastructure::events::jutsu_runner::JutsuRunner;
-use jutsu_consumer::JutsuConsumer;
-use infrastructure::persistence::postgres_webhook_repo::PostgresWebhookRepo;
 use infrastructure::github::github_client::GitHubClient;
 use infrastructure::llm::ollama_service::OllamaService;
 use infrastructure::persistence::postgres_actor_repo::PostgresActorRepository;
-use infrastructure::persistence::postgres_federation_repo::PostgresFederationRepository;
 use infrastructure::persistence::postgres_chunk_repo::PostgresChunkRepository;
+use infrastructure::persistence::postgres_federation_repo::PostgresFederationRepository;
 use infrastructure::persistence::postgres_repo::PostgresOperationRepository;
 use infrastructure::persistence::postgres_repo_repo::PostgresRepoRepository;
 use infrastructure::persistence::postgres_review_repo::PostgresReviewRepository;
+use infrastructure::persistence::postgres_webhook_repo::PostgresWebhookRepo;
 use infrastructure::vcs::git_cgi::GitCgiBackend;
 use infrastructure::vcs::jujutsu_engine::JujutsuEngine;
+use jutsu_consumer::JutsuConsumer;
 use presentation::grpc::services::ShinobiServiceImpl;
 use presentation::grpc::services::proto::shinobi_service_server::ShinobiServiceServer;
 use presentation::rest::git_http::create_git_router;
@@ -394,14 +394,13 @@ async fn main() -> anyhow::Result<()> {
         repo_repo.clone(),
     ));
 
-    let purge_trash = Arc::new(
-        application::use_cases::purge_trash::PurgeTrashUseCase::new(
-            repo_repo.clone(),
-            std::path::PathBuf::from(&config.vcs_workspace_root),
-        ),
-    );
+    let purge_trash = Arc::new(application::use_cases::purge_trash::PurgeTrashUseCase::new(
+        repo_repo.clone(),
+        std::path::PathBuf::from(&config.vcs_workspace_root),
+    ));
 
-    info!("🗑️ Corbeille initialisée (Phase 24 — rétention {}s)",
+    info!(
+        "🗑️ Corbeille initialisée (Phase 24 — rétention {}s)",
         application::use_cases::purge_trash::TRASH_RETENTION_SECS
     );
 
@@ -431,9 +430,8 @@ async fn main() -> anyhow::Result<()> {
         );
 
     // ── Phase 34 — Chakra (チャクラ) Webhooks 🔔 ───────────────────
-    let webhook_repo: Arc<dyn domain::ports::webhook_repository::WebhookRepository> = Arc::new(
-        PostgresWebhookRepo::new(pg_pool.clone()),
-    );
+    let webhook_repo: Arc<dyn domain::ports::webhook_repository::WebhookRepository> =
+        Arc::new(PostgresWebhookRepo::new(pg_pool.clone()));
 
     let manage_webhooks = Arc::new(
         application::use_cases::manage_webhooks::ManageWebhooksUseCase::new(
@@ -446,7 +444,9 @@ async fn main() -> anyhow::Result<()> {
     );
 
     // ── Phase 39 — Commit Status API (Le Pont CI/CD) 🌉 ──────────────
-    let commit_status_repo: Arc<dyn domain::ports::commit_status_repository::CommitStatusRepository> = Arc::new(
+    let commit_status_repo: Arc<
+        dyn domain::ports::commit_status_repository::CommitStatusRepository,
+    > = Arc::new(
         infrastructure::persistence::postgres_commit_status_repo::PostgresCommitStatusRepo::new(
             pg_pool.clone(),
         ),
@@ -482,18 +482,19 @@ async fn main() -> anyhow::Result<()> {
             None
         };
 
-    let parse_jutsu = Arc::new(
-        application::use_cases::parse_jutsu_config::ParseJutsuConfigUseCase::new(),
-    );
+    let parse_jutsu =
+        Arc::new(application::use_cases::parse_jutsu_config::ParseJutsuConfigUseCase::new());
 
     let run_pipeline = container_runner.as_ref().map(|runner| {
-        Arc::new(application::use_cases::run_pipeline::RunPipelineUseCase::new(
-            pipeline_repo.clone(),
-            runner.clone(),
-            manage_commit_statuses.clone(),
-            std::time::Duration::from_secs(config.jutsu_stage_timeout_secs),
-            std::time::Duration::from_secs(config.jutsu_pipeline_timeout_secs),
-        ))
+        Arc::new(
+            application::use_cases::run_pipeline::RunPipelineUseCase::new(
+                pipeline_repo.clone(),
+                runner.clone(),
+                manage_commit_statuses.clone(),
+                std::time::Duration::from_secs(config.jutsu_stage_timeout_secs),
+                std::time::Duration::from_secs(config.jutsu_pipeline_timeout_secs),
+            ),
+        )
     });
 
     // Chakra Producer (Kafka) — optionnel (graceful degradation)
@@ -517,12 +518,13 @@ async fn main() -> anyhow::Result<()> {
     };
 
     let emit_webhook = chakra_producer.as_ref().map(|p| {
-        Arc::new(application::use_cases::emit_webhook_event::EmitWebhookEventUseCase::new(
-            p.clone(),
-        ))
+        Arc::new(
+            application::use_cases::emit_webhook_event::EmitWebhookEventUseCase::new(p.clone()),
+        )
     });
 
-    info!("🔔 Chakra Webhooks initialisé (Phase 34 — {} workers, max {}/repo)",
+    info!(
+        "🔔 Chakra Webhooks initialisé (Phase 34 — {} workers, max {}/repo)",
         config.chakra_worker_count, config.chakra_max_webhooks_per_repo
     );
 
@@ -555,46 +557,40 @@ async fn main() -> anyhow::Result<()> {
     let mr_repo: Arc<dyn domain::ports::mr_repository::MrRepository> = Arc::new(
         infrastructure::persistence::postgres_mr_repo::PostgresMrRepository::new(pg_pool.clone()),
     );
-    let create_mr = Arc::new(
-        application::use_cases::create_mr::CreateMrUseCase::new(
-            mr_repo.clone(),
-            repo_repo.clone(),
-            actor_repo.clone(),
-            notification_repo.clone(),
-            event_publisher.clone(), // Phase 34-V2
-        ),
-    );
-    let list_mrs = Arc::new(
-        application::use_cases::list_mrs::ListMrsUseCase::new(mr_repo.clone()),
-    );
-    let get_mr = Arc::new(
-        application::use_cases::get_mr::GetMrUseCase::new(mr_repo.clone(), vcs.clone()),
-    );
-    let review_mr = Arc::new(
-        application::use_cases::review_mr::ReviewMrUseCase::new(
-            mr_repo.clone(),
-            repo_repo.clone(),
-        ),
-    );
-    let merge_mr = Arc::new(
-        application::use_cases::merge_mr::MergeMrUseCase::new(
-            mr_repo.clone(),
-            repo_repo.clone(),
-            vcs.clone(),
-            event_publisher.clone(), // Phase 34-V2
-        ),
-    );
-    let close_mr = Arc::new(
-        application::use_cases::close_mr::CloseMrUseCase::new(
-            mr_repo.clone(),
-            repo_repo.clone(),
-            vcs.clone(),
-            event_publisher.clone(), // Phase 34-V2
-        ),
-    );
-    let mr_diff = Arc::new(
-        application::use_cases::mr_diff::MrDiffUseCase::new(mr_repo.clone(), vcs.clone()),
-    );
+    let create_mr = Arc::new(application::use_cases::create_mr::CreateMrUseCase::new(
+        mr_repo.clone(),
+        repo_repo.clone(),
+        actor_repo.clone(),
+        notification_repo.clone(),
+        event_publisher.clone(), // Phase 34-V2
+    ));
+    let list_mrs = Arc::new(application::use_cases::list_mrs::ListMrsUseCase::new(
+        mr_repo.clone(),
+    ));
+    let get_mr = Arc::new(application::use_cases::get_mr::GetMrUseCase::new(
+        mr_repo.clone(),
+        vcs.clone(),
+    ));
+    let review_mr = Arc::new(application::use_cases::review_mr::ReviewMrUseCase::new(
+        mr_repo.clone(),
+        repo_repo.clone(),
+    ));
+    let merge_mr = Arc::new(application::use_cases::merge_mr::MergeMrUseCase::new(
+        mr_repo.clone(),
+        repo_repo.clone(),
+        vcs.clone(),
+        event_publisher.clone(), // Phase 34-V2
+    ));
+    let close_mr = Arc::new(application::use_cases::close_mr::CloseMrUseCase::new(
+        mr_repo.clone(),
+        repo_repo.clone(),
+        vcs.clone(),
+        event_publisher.clone(), // Phase 34-V2
+    ));
+    let mr_diff = Arc::new(application::use_cases::mr_diff::MrDiffUseCase::new(
+        mr_repo.clone(),
+        vcs.clone(),
+    ));
 
     info!("⚔️ Merge Requests initialisé (Phase 26A — Le Katana Croisé)");
 
@@ -634,25 +630,23 @@ async fn main() -> anyhow::Result<()> {
         ),
     );
     // create_issue construit après le bloc fédération (Phase 37F — besoin de remote_fetcher)
-    let list_issues = Arc::new(
-        application::use_cases::list_issues::ListIssuesUseCase::new(issue_repo.clone()),
-    );
-    let get_issue = Arc::new(
-        application::use_cases::get_issue::GetIssueUseCase::new(issue_repo.clone()),
-    );
+    let list_issues = Arc::new(application::use_cases::list_issues::ListIssuesUseCase::new(
+        issue_repo.clone(),
+    ));
+    let get_issue = Arc::new(application::use_cases::get_issue::GetIssueUseCase::new(
+        issue_repo.clone(),
+    ));
     let update_issue = Arc::new(
         application::use_cases::update_issue::UpdateIssueUseCase::new(
             issue_repo.clone(),
             repo_repo.clone(),
         ),
     );
-    let close_issue = Arc::new(
-        application::use_cases::close_issue::CloseIssueUseCase::new(
-            issue_repo.clone(),
-            repo_repo.clone(),
-            event_publisher.clone(), // Phase 34-V2
-        ),
-    );
+    let close_issue = Arc::new(application::use_cases::close_issue::CloseIssueUseCase::new(
+        issue_repo.clone(),
+        repo_repo.clone(),
+        event_publisher.clone(), // Phase 34-V2
+    ));
     // comment_issue construit après le bloc fédération (Phase 37F — besoin de remote_fetcher)
     let manage_labels = Arc::new(
         application::use_cases::manage_labels::ManageLabelsUseCase::new(
@@ -669,13 +663,22 @@ async fn main() -> anyhow::Result<()> {
 
     // Auto-generate instance keypair (SYSTEM_ACTOR_ID) si absente
     // Phase 37F: le remote_fetcher est extrait séparément pour réutilisation
-    let mut remote_fetcher_for_mentions: Option<Arc<infrastructure::federation::remote_actor::RemoteActorFetcher>> = None;
+    let mut remote_fetcher_for_mentions: Option<
+        Arc<infrastructure::federation::remote_actor::RemoteActorFetcher>,
+    > = None;
     let federation_service: Option<Arc<dyn domain::ports::federation_service::FederationService>> =
         if config.federation_enabled {
-            if federation_repo.get_keypair(&SYSTEM_ACTOR_ID).await?.is_none() {
+            if federation_repo
+                .get_keypair(&SYSTEM_ACTOR_ID)
+                .await?
+                .is_none()
+            {
                 let keypair = infrastructure::federation::crypto::generate_rsa_keypair()
                     .map_err(|e| anyhow::anyhow!("Federation keygen failed: {e}"))?;
-                let key_id = format!("https://{}/actors/system#main-key", config.federation_domain);
+                let key_id = format!(
+                    "https://{}/actors/system#main-key",
+                    config.federation_domain
+                );
                 let fed_kp = domain::entities::federation::FederationKeypair {
                     actor_id: SYSTEM_ACTOR_ID,
                     public_key_pem: keypair.public_key_pem,
@@ -695,7 +698,9 @@ async fn main() -> anyhow::Result<()> {
 
             // Phase 27-ter : Instancier le FanoutService
             // Phase 37F-Fix : Utiliser with_keypair() pour supporter AUTHORIZED_FETCH (Mastodon Secure Mode)
-            let system_kp = federation_repo.get_keypair(&SYSTEM_ACTOR_ID).await?
+            let system_kp = federation_repo
+                .get_keypair(&SYSTEM_ACTOR_ID)
+                .await?
                 .expect("System keypair must exist at this point");
             let remote_fetcher = Arc::new(
                 infrastructure::federation::remote_actor::RemoteActorFetcher::with_keypair(
@@ -731,9 +736,9 @@ async fn main() -> anyhow::Result<()> {
     };
 
     // Phase 37F — RemoteActorFetcher (fallback si fédération désactivée)
-    let remote_fetcher_for_mentions = remote_fetcher_for_mentions.unwrap_or_else(|| Arc::new(
-        infrastructure::federation::remote_actor::RemoteActorFetcher::new(),
-    ));
+    let remote_fetcher_for_mentions = remote_fetcher_for_mentions.unwrap_or_else(|| {
+        Arc::new(infrastructure::federation::remote_actor::RemoteActorFetcher::new())
+    });
 
     // Phase 37F — CommentIssue construit ici (après les dépendances fédération)
     let comment_issue = Arc::new(
@@ -846,6 +851,7 @@ async fn main() -> anyhow::Result<()> {
         // Phase 40 — Jutsu Runner (CI/CD natif) 🥷⚡
         run_pipeline: run_pipeline.clone(),
         pipeline_repo,
+        event_publisher: event_publisher.clone(),
     };
 
     // ── Git Bridge HTTP (Phase 12A) ────────────────────
@@ -911,8 +917,10 @@ async fn main() -> anyhow::Result<()> {
                     break;
                 }
                 match purge.execute().await {
-                    Ok(n) if n > 0 => info!("🗑️ Purge: {n} dépôt(s) expiré(s) supprimé(s) définitivement"),
-                    Ok(_) => {},
+                    Ok(n) if n > 0 => {
+                        info!("🗑️ Purge: {n} dépôt(s) expiré(s) supprimé(s) définitivement")
+                    }
+                    Ok(_) => {}
                     Err(e) => warn!("⚠️ Purge automatique échouée: {e}"),
                 }
             }
@@ -925,10 +933,8 @@ async fn main() -> anyhow::Result<()> {
         let fed_repo = federation_repo.clone();
         let cancel = cancel_token.clone();
         tokio::spawn(async move {
-            let worker = infrastructure::federation::inbox_worker::InboxWorker::new(
-                fed_repo,
-                cancel,
-            );
+            let worker =
+                infrastructure::federation::inbox_worker::InboxWorker::new(fed_repo, cancel);
             worker.run().await;
         });
         info!("📥 Inbox Worker démarré (Phase 32 — poll 30s, batch 20, Poison Pill safe)");
@@ -958,7 +964,10 @@ async fn main() -> anyhow::Result<()> {
                         error!("❌ Chakra Consumer crashé: {e}");
                     }
                 });
-                info!("🔔 Chakra Consumer démarré (Phase 34 — {} workers)", config.chakra_worker_count);
+                info!(
+                    "🔔 Chakra Consumer démarré (Phase 34 — {} workers)",
+                    config.chakra_worker_count
+                );
             }
             Err(e) => {
                 warn!("⚠️ Chakra Consumer non disponible: {e}");
@@ -996,6 +1005,8 @@ async fn main() -> anyhow::Result<()> {
                         run_pipeline_uc,
                         parse_jutsu.clone(),
                         vcs_for_jutsu,
+                        repo_repo.clone()
+                            as Arc<dyn domain::ports::repo_repository::RepoRepository>,
                         workspace_root,
                         worker_count,
                     ));

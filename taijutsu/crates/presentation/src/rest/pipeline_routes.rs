@@ -218,9 +218,15 @@ pub(crate) async fn trigger_pipeline_handler(
     );
     state.pipeline_repo.create(&pipeline).await?;
 
-    // NOTE: Le JutsuConsumer recevra l'evenement via Kafka (publie par le hook git_http)
-    // Pour le trigger manuel, on insere directement en BDD et on retourne l'ID.
-    // Le Makimono peut alors afficher la progression en temps reel via le polling.
+    // Publier sur Kafka pour que le JutsuConsumer lance l'exécution Docker.
+    // Sans cela, le pipeline resterait stuck en "queued" indéfiniment.
+    if let Some(publisher) = &state.event_publisher {
+        publisher.publish_pipeline_requested(
+            repository.id,
+            &body.commit_id,
+            "manual",
+        ).await?;
+    }
 
     Ok(Json(serde_json::json!({
         "status": "queued",

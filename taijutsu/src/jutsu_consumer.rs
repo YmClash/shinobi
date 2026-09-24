@@ -30,6 +30,7 @@ use uuid::Uuid;
 
 use application::use_cases::parse_jutsu_config::ParseJutsuConfigUseCase;
 use application::use_cases::run_pipeline::RunPipelineUseCase;
+use domain::ports::repo_repository::RepoRepository;
 use domain::ports::vcs_engine::VcsEngine;
 
 /// Message reçu depuis Kafka pour déclencher un pipeline.
@@ -106,6 +107,7 @@ impl JutsuConsumer {
         run_pipeline: Arc<RunPipelineUseCase>,
         parse_config: Arc<ParseJutsuConfigUseCase>,
         vcs_engine: Arc<dyn VcsEngine>,
+        repo_repo: Arc<dyn RepoRepository>,
         workspace_root: PathBuf,
         worker_count: usize,
     ) {
@@ -118,6 +120,7 @@ impl JutsuConsumer {
             let run_pipeline = run_pipeline.clone();
             let parse_config = parse_config.clone();
             let vcs_engine = vcs_engine.clone();
+            let repo_repo = repo_repo.clone();
             let workspace_root = workspace_root.clone();
 
             tokio::spawn(async move {
@@ -141,6 +144,7 @@ impl JutsuConsumer {
                         &run_pipeline,
                         &parse_config,
                         &*vcs_engine,
+                        &*repo_repo,
                         &workspace_root,
                     )
                     .await;
@@ -219,6 +223,7 @@ impl JutsuConsumer {
         run_pipeline: &RunPipelineUseCase,
         parse_config: &ParseJutsuConfigUseCase,
         vcs_engine: &dyn VcsEngine,
+        repo_repo: &dyn RepoRepository,
         workspace_root: &PathBuf,
     ) {
         info!(
@@ -228,6 +233,37 @@ impl JutsuConsumer {
             trigger = %request.trigger_event,
             "🥷 Jutsu Worker — traitement pipeline"
         );
+
+        // 0. Résoudre owner_id et initialiser le workspace VCS
+        //    init_workspace est idempotent — si déjà chargé, c'est un no-op.
+        let repository = match repo_repo.find_by_id(&request.repository_id).await {
+            Ok(Some(r)) => r,
+            Ok(None) => {
+                warn!(
+                    repo_id = %request.repository_id,
+                    "⚠️ Repository introuvable en BDD — pipeline ignoré"
+                );
+                return;
+            }
+            Err(e) => {
+                warn!(
+                    repo_id = %request.repository_id,
+                    error = %e,
+                    "⚠️ Erreur BDD lors de la résolution du repository"
+                );
+                return;
+            }
+        };
+
+        if let Err(e) = vcs_engine.init_workspace(&repository.owner_id, &request.repository_id).await {
+            warn!(
+                repo_id = %request.repository_id,
+                owner_id = %repository.owner_id,
+                error = %e,
+                "⚠️ Impossible d'initialiser le workspace VCS — pipeline ignoré"
+            );
+            return;
+        }
 
         // 1. Lire le jutsu.yml depuis le dépôt
         let yaml_content = match vcs_engine
@@ -269,7 +305,9 @@ impl JutsuConsumer {
         };
 
         // 3. Vérifier que le trigger correspond
-        if !config.on.contains(&request.trigger_event) {
+        // Le trigger "manual" bypasse toujours le filtre — c'est l'intérêt
+        // du déclenchement CLI (`anbu jutsu trigger`) ou du bouton UI Makimono.
+        if request.trigger_event != "manual" && !config.on.contains(&request.trigger_event) {
             info!(
                 repo_id = %request.repository_id,
                 trigger = %request.trigger_event,

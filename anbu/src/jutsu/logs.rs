@@ -115,8 +115,21 @@ pub async fn cmd_logs(
         // --last ou pas d'ID : prendre le dernier pipeline
         resolve_last_pipeline_id(&client, &base_url, &server.login, &server.pat)?
     } else {
-        id.unwrap()
+        let raw_id = id.unwrap();
+        // Si ce n'est pas un UUID complet (36 chars), tenter le prefix matching
+        if raw_id.len() < 36 {
+            resolve_pipeline_by_prefix(&client, &base_url, &server.login, &server.pat, &raw_id)?
+        } else {
+            raw_id
+        }
     };
+
+    println!(
+        "  {} Pipeline: {}",
+        "🥷".bold(),
+        &pipeline_id[..8.min(pipeline_id.len())].cyan()
+    );
+    println!();
 
     if follow {
         cmd_logs_follow(&client, &base_url, &pipeline_id, &server.login, &server.pat)
@@ -386,4 +399,56 @@ fn resolve_last_pipeline_id(
         ))?;
 
     Ok(first.id.to_string())
+}
+
+/// Résout un prefix de pipeline_id en UUID complet.
+///
+/// Cherche dans la liste des pipelines du repo celui dont l'UUID
+/// commence par le prefix donné (ex: "ad8ecd28" → UUID complet).
+fn resolve_pipeline_by_prefix(
+    client: &reqwest::blocking::Client,
+    base_url: &str,
+    login: &str,
+    pat: &str,
+    prefix: &str,
+) -> Result<String> {
+    let url = format!("{}/pipelines", base_url);
+
+    let response = client
+        .get(&url)
+        .basic_auth(login, Some(pat))
+        .send()
+        .map_err(|e| anyhow::anyhow!("Failed to list pipelines: {e}"))?;
+
+    let status = response.status();
+    if !status.is_success() {
+        let body = response.text().unwrap_or_default();
+        bail!("Server returned {status}: {body}");
+    }
+
+    let list: ApiPipelineListResponse = response.json()
+        .map_err(|e| anyhow::anyhow!("Failed to parse pipeline list: {e}"))?;
+
+    let prefix_lower = prefix.to_lowercase();
+    let matches: Vec<&ApiPipelineResponse> = list
+        .pipelines
+        .iter()
+        .filter(|p| p.id.to_string().starts_with(&prefix_lower))
+        .collect();
+
+    match matches.len() {
+        0 => bail!(
+            "No pipeline matching prefix '{prefix}'.\n\
+             Use `anbu jutsu logs --last` to see the latest pipeline."
+        ),
+        1 => Ok(matches[0].id.to_string()),
+        n => {
+            let ids: Vec<String> = matches.iter().map(|p| p.id.to_string()).collect();
+            bail!(
+                "Ambiguous prefix '{prefix}' — matches {n} pipelines:\n  {}\n\n\
+                 Use a longer prefix to narrow it down.",
+                ids.join("\n  ")
+            )
+        }
+    }
 }

@@ -214,6 +214,9 @@ pub struct SharedState {
     pub run_pipeline: Option<Arc<application::use_cases::run_pipeline::RunPipelineUseCase>>,
     /// Repository des pipelines CI/CD natifs.
     pub pipeline_repo: Arc<dyn domain::ports::pipeline_repository::PipelineRepository>,
+    /// Publication Kafka pour trigger manuel (Phase 40-E).
+    /// Nécessaire pour que `POST /trigger` publie l'événement vers le JutsuConsumer.
+    pub event_publisher: Option<Arc<dyn domain::ports::event_publisher::EventPublisher>>,
 }
 
 // ── Phase 12A — Git Bridge HTTP ──────────────────────────────────────
