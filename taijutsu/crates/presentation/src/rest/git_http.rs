@@ -1253,7 +1253,7 @@ async fn sync_hook_process_single_ref(
                 Ok(_) => {
                     // jutsu.yml detecte : declencher le pipeline CI/CD
                     if let Err(e) = publisher_jutsu
-                        .publish_pipeline_requested(repo_id_jutsu, &commit_sha, "push")
+                        .publish_pipeline_requested(repo_id_jutsu, &commit_sha, "push", None)
                         .await
                     {
                         warn!(

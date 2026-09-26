@@ -39,6 +39,9 @@ struct PipelineRequest {
     repository_id: Uuid,
     commit_id: String,
     trigger_event: String,
+    /// Phase 40-E-Fix : UUID du pipeline pré-créé par le trigger endpoint.
+    /// Some pour les manual triggers, None pour les git push auto-triggers.
+    pipeline_id: Option<Uuid>,
 }
 
 /// Consumer Kafka pour le Jutsu Runner.
@@ -174,11 +177,17 @@ impl JutsuConsumer {
                                         let commit_id = json["commit_id"].as_str().unwrap_or("").to_string();
                                         let trigger = json["trigger_event"].as_str().unwrap_or("push").to_string();
 
+                                        // Phase 40-E-Fix : extraire le pipeline_id pré-créé (si présent)
+                                        let pipeline_id = json["pipeline_id"]
+                                            .as_str()
+                                            .and_then(|s| Uuid::parse_str(s).ok());
+
                                         if let Ok(repo_id) = Uuid::parse_str(repo_id_str) {
                                             let request = PipelineRequest {
                                                 repository_id: repo_id,
                                                 commit_id,
                                                 trigger_event: trigger,
+                                                pipeline_id,
                                             };
 
                                             if tx.send(request).await.is_err() {
@@ -362,6 +371,7 @@ impl JutsuConsumer {
                 config.clone(),
                 None,
                 &temp_path,
+                request.pipeline_id, // Phase 40-E-Fix : reprendre le pipeline pré-créé
             )
             .await
         {

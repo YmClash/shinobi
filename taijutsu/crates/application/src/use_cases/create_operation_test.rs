@@ -258,6 +258,7 @@ mod tests {
             _repository_id: uuid::Uuid,
             _commit_id: &str,
             _trigger_event: &str,
+            _pipeline_id: Option<uuid::Uuid>,
         ) -> Result<(), DomainError> {
             Ok(()) // Phase 40 — No-op dans les tests
         }

@@ -225,6 +225,7 @@ pub(crate) async fn trigger_pipeline_handler(
             repository.id,
             &body.commit_id,
             "manual",
+            Some(pipeline.id),
         ).await?;
     }
 

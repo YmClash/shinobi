@@ -233,17 +233,26 @@ impl EventPublisher for KafkaEventPublisher {
     ///
     /// Publie un message JSON sur le topic `shinobi.jutsu.pipeline`
     /// avec les informations nécessaires au JutsuConsumer.
+    ///
+    /// Phase 40-E-Fix : inclut `pipeline_id` si le pipeline a été
+    /// pré-créé par le trigger endpoint (manual trigger).
     async fn publish_pipeline_requested(
         &self,
         repository_id: Uuid,
         commit_id: &str,
         trigger_event: &str,
+        pipeline_id: Option<Uuid>,
     ) -> Result<(), DomainError> {
-        let payload = serde_json::json!({
+        let mut payload = serde_json::json!({
             "repository_id": repository_id.to_string(),
             "commit_id": commit_id,
             "trigger_event": trigger_event,
         });
+
+        // Phase 40-E-Fix : injecter pipeline_id si fourni (manual trigger)
+        if let Some(pid) = pipeline_id {
+            payload["pipeline_id"] = serde_json::Value::String(pid.to_string());
+        }
 
         let payload_str = serde_json::to_string(&payload).map_err(|e| {
             DomainError::Internal(format!("JSON serialization failed: {e}"))
@@ -270,6 +279,7 @@ impl EventPublisher for KafkaEventPublisher {
                     repository_id = %repository_id,
                     commit_id = %commit_id,
                     trigger = %trigger_event,
+                    pipeline_id = ?pipeline_id,
                     "🥷 Événement pipeline_requested publié sur Kafka"
                 );
                 Ok(())

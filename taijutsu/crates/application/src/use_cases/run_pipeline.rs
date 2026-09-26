@@ -80,6 +80,9 @@ impl RunPipelineUseCase {
     /// - `config` : configuration `jutsu.yml` déjà parsée et validée
     /// - `creator_id` : acteur ayant déclenché le pipeline (optionnel)
     /// - `workspace_path` : chemin du workspace éphémère (tempdir) contenant le code source
+    /// - `existing_pipeline_id` : si `Some`, reprend le pipeline déjà créé par le
+    ///   trigger endpoint (évite le doublon « pipeline fantôme »). Si `None`,
+    ///   crée un nouveau pipeline (cas du git push auto-trigger).
     pub async fn execute(
         &self,
         owner: &str,
@@ -90,27 +93,51 @@ impl RunPipelineUseCase {
         config: JutsuConfig,
         creator_id: Option<Uuid>,
         workspace_path: &PathBuf,
+        existing_pipeline_id: Option<Uuid>,
     ) -> Result<Pipeline, DomainError> {
         let trigger = TriggerEvent::from_sql(trigger_event).unwrap_or(TriggerEvent::Manual);
         let context = format!("jutsu/{}", config.name);
 
-        // ── 1. Créer le Pipeline en BDD (status: queued) ────────
-        let pipeline = Pipeline::new(
-            repository_id,
-            commit_id.to_string(),
-            trigger,
-            Some(config.name.clone()),
-            creator_id,
-        );
-        let pipeline = self.pipeline_repo.create(&pipeline).await?;
-        let pipeline_id = pipeline.id;
+        // ── 1. Créer OU reprendre le Pipeline en BDD ────────────
+        //
+        // Phase 40-E-Fix : quand le trigger REST crée le pipeline
+        // avant de publier sur Kafka, le JutsuConsumer reçoit l'ID
+        // et le passe ici via `existing_pipeline_id`. On évite ainsi
+        // la création d'un « pipeline fantôme » orphelin en BDD.
+        let pipeline_id = if let Some(pid) = existing_pipeline_id {
+            // Vérifier que le pipeline existe bien
+            let _existing = self.pipeline_repo.find_by_id(&pid).await?.ok_or_else(|| {
+                DomainError::Internal(format!(
+                    "existing_pipeline_id {pid} not found — race condition?"
+                ))
+            })?;
 
-        info!(
-            pipeline_id = %pipeline_id,
-            name = %config.name,
-            stages = config.stages.len(),
-            "🥷 Pipeline créé (status: queued)"
-        );
+            info!(
+                pipeline_id = %pid,
+                name = %config.name,
+                stages = config.stages.len(),
+                "🥷 Pipeline existant repris (created by trigger)"
+            );
+            pid
+        } else {
+            // Nouveau pipeline (ex: git push auto-trigger, pas de pré-création)
+            let pipeline = Pipeline::new(
+                repository_id,
+                commit_id.to_string(),
+                trigger,
+                Some(config.name.clone()),
+                creator_id,
+            );
+            let pipeline = self.pipeline_repo.create(&pipeline).await?;
+
+            info!(
+                pipeline_id = %pipeline.id,
+                name = %config.name,
+                stages = config.stages.len(),
+                "🥷 Pipeline créé (status: queued)"
+            );
+            pipeline.id
+        };
 
         // ── 2. Créer les PipelineStages en BDD (status: pending) ──
         let mut stage_records = Vec::new();

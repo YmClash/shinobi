@@ -163,13 +163,17 @@ fn cmd_logs_follow(
 ) -> Result<()> {
     // Track last log length per stage pour le diff
     let mut last_log_len: HashMap<String, usize> = HashMap::new();
+    // Phase 40-E-Fix : Vegapunk Tweak — curseur relatif ANSI (zéro flicker)
+    let mut lines_printed: usize = 0;
 
     loop {
-        // Effacer l'écran (ANSI escape) pour rafraîchir l'affichage
-        print!("\x1b[2J\x1b[H");
+        // Remonter le curseur pour réécrire par-dessus (sauf premier tour)
+        if lines_printed > 0 {
+            print!("\x1b[{}A", lines_printed);
+        }
 
         let detail = fetch_pipeline_detail(client, base_url, pipeline_id, login, pat)?;
-        render_pipeline(&detail, &last_log_len, true);
+        lines_printed = render_pipeline_counted(&detail, &last_log_len, true);
 
         // Mettre à jour les offsets de logs
         for stage in &detail.stages {
@@ -214,34 +218,64 @@ fn render_pipeline(
     _last_log_len: &HashMap<String, usize>,
     show_logs: bool,
 ) {
+    render_pipeline_inner(detail, _last_log_len, show_logs, false);
+}
+
+/// Phase 40-E-Fix : version comptée pour le mode follow.
+/// Retourne le nombre de lignes imprimées pour le repositionnement ANSI.
+/// Chaque ligne se termine par `\x1b[K` (clear-to-end-of-line) pour
+/// effacer les résidus quand la nouvelle ligne est plus courte.
+fn render_pipeline_counted(
+    detail: &ApiPipelineDetailResponse,
+    _last_log_len: &HashMap<String, usize>,
+    show_logs: bool,
+) -> usize {
+    render_pipeline_inner(detail, _last_log_len, show_logs, true)
+}
+
+/// Moteur de rendu partagé — retourne le nombre de lignes imprimées.
+fn render_pipeline_inner(
+    detail: &ApiPipelineDetailResponse,
+    _last_log_len: &HashMap<String, usize>,
+    show_logs: bool,
+    clear_eol: bool,
+) -> usize {
+    let mut line_count: usize = 0;
+    let eol = if clear_eol { "\x1b[K" } else { "" };
+
     let p = &detail.pipeline;
     let name = p.pipeline_name.as_deref().unwrap_or("Pipeline");
     let short_id = &p.id.to_string()[..8];
 
     let status_display = format_status(&p.status);
 
-    println!();
+    println!("{eol}");
+    line_count += 1;
     println!(
-        "  {}",
+        "  {}{eol}",
         "┌────────────────────────────────────────────────────────────┐".dimmed()
     );
+    line_count += 1;
     println!(
-        "  {}  🥷 {}: {} [{}]",
+        "  {}  🥷 {}: {} [{}]{eol}",
         "│".dimmed(),
         "Pipeline".bold(),
         name.white().bold(),
         short_id.cyan()
     );
+    line_count += 1;
     println!(
-        "  {}  Commit: {}   Status: {}",
+        "  {}  Commit: {}   Status: {}{eol}",
         "│".dimmed(),
         p.commit_id[..12.min(p.commit_id.len())].dimmed(),
         status_display
     );
+    line_count += 1;
     println!(
-        "  {}",
+        "  {}{eol}",
         "├────────────────────────────────────────────────────────────┤".dimmed()
     );
+    line_count += 1;
 
     for stage in &detail.stages {
         let stage_status = format_status(&stage.status);
@@ -256,7 +290,7 @@ fn render_pipeline(
             .unwrap_or_default();
 
         println!(
-            "  {}  {} {} ({}) — {} {}",
+            "  {}  {} {} ({}) — {} {}{eol}",
             "│".dimmed(),
             stage_icon(&stage.status),
             stage.name.white().bold(),
@@ -264,12 +298,13 @@ fn render_pipeline(
             stage_status,
             duration.dimmed()
         );
+        line_count += 1;
 
         // Afficher les logs si disponibles
         if show_logs {
             if let Some(ref logs) = stage.logs {
                 if !logs.is_empty() {
-                    // Afficher les dernières lignes de logs (max 10 pour la lisibilité)
+                    // Afficher les dernières lignes de logs (max 15 pour la lisibilité)
                     let lines: Vec<&str> = logs.lines().collect();
                     let display_lines = if lines.len() > 15 {
                         &lines[lines.len() - 15..]
@@ -279,19 +314,21 @@ fn render_pipeline(
 
                     for line in display_lines {
                         println!(
-                            "  {}    {}",
+                            "  {}    {}{eol}",
                             "│".dimmed(),
                             line
                         );
+                        line_count += 1;
                     }
 
                     if lines.len() > 15 {
                         println!(
-                            "  {}    {} ({} lignes au total)",
+                            "  {}    {} ({} lignes au total){eol}",
                             "│".dimmed(),
                             "...".dimmed(),
                             lines.len()
                         );
+                        line_count += 1;
                     }
                 }
             }
@@ -301,18 +338,22 @@ fn render_pipeline(
         if let Some(code) = stage.exit_code {
             if code != 0 {
                 println!(
-                    "  {}    {}",
+                    "  {}    {}{eol}",
                     "│".dimmed(),
                     format!("Exit code: {code}").red()
                 );
+                line_count += 1;
             }
         }
     }
 
     println!(
-        "  {}",
+        "  {}{eol}",
         "└────────────────────────────────────────────────────────────┘".dimmed()
     );
+    line_count += 1;
+
+    line_count
 }
 
 fn stage_icon(status: &str) -> String {
