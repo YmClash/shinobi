@@ -136,6 +136,29 @@ pub struct Config {
 
     /// Timeout global par pipeline en secondes. Défaut: 1800 (30 min).
     pub jutsu_pipeline_timeout_secs: u64,
+
+    // ── Phase 41 — Kage Bunshin (影分身) Auto-Healing 🥷⚡ ─────────
+    /// Activer/désactiver le Kage Bunshin auto-healing. Défaut: true.
+    pub kage_bunshin_enabled: bool,
+
+    /// Topic Kafka dédié pour les demandes Kage Bunshin.
+    /// Défaut: "shinobi.jutsu.kage-bunshin".
+    /// Vegapunk Tweak #10 : file séparée des workers pipeline.
+    pub kage_bunshin_topic: String,
+
+    /// Consumer group Kafka Kage Bunshin. Défaut: "shinobi-kage-bunshin".
+    pub kage_bunshin_consumer_group: String,
+
+    /// Nombre de workers Kage Bunshin. Défaut: 1.
+    /// Un seul worker suffit (l'inférence LLM est séquentielle).
+    pub kage_bunshin_worker_count: usize,
+
+    /// Timeout du shadow re-run en secondes. Défaut: 120 (2 min).
+    /// Vegapunk Tweak #5 : timeout strict anti-boucle infinie.
+    pub kage_bunshin_shadow_timeout_secs: u64,
+
+    /// Seuil de confiance minimum pour appliquer un patch. Défaut: 0.5.
+    pub kage_bunshin_confidence_threshold: f32,
 }
 
 impl Config {
@@ -198,6 +221,13 @@ impl Config {
             jutsu_worker_count: env_parse("JUTSU_WORKER_COUNT", 2),
             jutsu_stage_timeout_secs: env_parse("JUTSU_STAGE_TIMEOUT_SECS", 600),
             jutsu_pipeline_timeout_secs: env_parse("JUTSU_PIPELINE_TIMEOUT_SECS", 1800),
+            // ── Phase 41 — Kage Bunshin (影分身) 🥷⚡ ───────────────
+            kage_bunshin_enabled: env_bool("KAGE_BUNSHIN_ENABLED", true),
+            kage_bunshin_topic: env_or("KAGE_BUNSHIN_TOPIC", "shinobi.jutsu.kage-bunshin"),
+            kage_bunshin_consumer_group: env_or("KAGE_BUNSHIN_CONSUMER_GROUP", "shinobi-kage-bunshin"),
+            kage_bunshin_worker_count: env_parse("KAGE_BUNSHIN_WORKER_COUNT", 1),
+            kage_bunshin_shadow_timeout_secs: env_parse("KAGE_BUNSHIN_SHADOW_TIMEOUT_SECS", 120),
+            kage_bunshin_confidence_threshold: env_parse("KAGE_BUNSHIN_CONFIDENCE_THRESHOLD", 0.5),
         };
 
         if !errors.is_empty() {

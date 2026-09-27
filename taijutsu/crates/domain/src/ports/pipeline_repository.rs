@@ -14,6 +14,7 @@ use uuid::Uuid;
 use crate::entities::pipeline::{
     Pipeline, PipelineStage, PipelineStageStatus, PipelineStatus,
 };
+use crate::entities::kage_bunshin::{HealAttempt, HealStatus};
 use crate::errors::DomainError;
 
 /// Contrat d'accès aux pipelines CI/CD natifs.
@@ -69,6 +70,9 @@ pub trait PipelineRepository: Send + Sync {
     /// - pending → running (container démarré)
     /// - running → success/failure/error (container terminé)
     /// - pending → skipped (dépendance en échec)
+    /// - running → healing (Kage Bunshin activé, Phase 41)
+    /// - healing → healed (Kage Bunshin réussi, Phase 41)
+    /// - healing → failure (Kage Bunshin échoué, Phase 41)
     async fn update_stage_status(
         &self,
         id: &Uuid,
@@ -94,4 +98,54 @@ pub trait PipelineRepository: Send + Sync {
         &self,
         pipeline_id: &Uuid,
     ) -> Result<Vec<PipelineStage>, DomainError>;
+
+    // ── Phase 41 — Kage Bunshin (影分身) ─────────────────────────
+
+    /// Crée une tentative de guérison en base de données.
+    ///
+    /// Le HealAttempt est créé en status `pending` — il sera mis à jour
+    /// vers `healing` quand le shadow re-run démarre, puis `success`
+    /// ou `failed` selon le résultat.
+    async fn create_heal_attempt(
+        &self,
+        attempt: &HealAttempt,
+    ) -> Result<HealAttempt, DomainError>;
+
+    /// Met à jour le statut et les résultats d'une tentative de guérison.
+    ///
+    /// Appelé pour les transitions :
+    /// - pending → healing (shadow re-run lancé)
+    /// - healing → success (MR créée)
+    /// - healing → failed (re-run échoué)
+    async fn update_heal_attempt(
+        &self,
+        id: &Uuid,
+        status: HealStatus,
+        shadow_branch: Option<&str>,
+        mr_id: Option<Uuid>,
+        retry_logs: Option<&str>,
+        retry_exit_code: Option<i16>,
+    ) -> Result<(), DomainError>;
+
+    /// Liste les tentatives de guérison d'un pipeline.
+    ///
+    /// Utilisé par l'endpoint REST `GET /pipelines/{id}/heals`
+    /// et par l'UI Makimono pour afficher le panneau Kage Bunshin.
+    async fn list_heal_attempts(
+        &self,
+        pipeline_id: &Uuid,
+    ) -> Result<Vec<HealAttempt>, DomainError>;
+
+    /// Met à jour le `mr_id` d'un heal_attempt après la création de la MR.
+    ///
+    /// Phase 41-A4 : lie le heal_attempt à la MR automatique créée
+    /// par le Sensei Service Account.
+    /// Identifié par (pipeline_id, stage_name) → dernière tentative.
+    async fn update_heal_attempt_mr(
+        &self,
+        pipeline_id: &Uuid,
+        stage_name: &str,
+        mr_id: &Uuid,
+    ) -> Result<(), DomainError>;
 }
+

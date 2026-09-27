@@ -34,6 +34,7 @@ use domain::entities::pipeline::{
 };
 use domain::errors::DomainError;
 use domain::ports::container_runner::ContainerRunner;
+use domain::ports::event_publisher::EventPublisher;
 use domain::ports::pipeline_repository::PipelineRepository;
 
 use super::manage_commit_statuses::ManageCommitStatusesUseCase;
@@ -46,6 +47,10 @@ pub struct RunPipelineUseCase {
     pipeline_repo: Arc<dyn PipelineRepository>,
     container_runner: Arc<dyn ContainerRunner>,
     commit_status_uc: Arc<ManageCommitStatusesUseCase>,
+    /// Phase 41 — Publisher pour déléguer le heal à la file Kafka dédiée.
+    event_publisher: Option<Arc<dyn EventPublisher>>,
+    /// Phase 41 — Kage Bunshin activé globalement.
+    kage_bunshin_enabled: bool,
     stage_timeout: Duration,
     #[allow(dead_code)] // Sera utilisé pour le timeout global en V2
     pipeline_timeout: Duration,
@@ -57,6 +62,8 @@ impl RunPipelineUseCase {
         pipeline_repo: Arc<dyn PipelineRepository>,
         container_runner: Arc<dyn ContainerRunner>,
         commit_status_uc: Arc<ManageCommitStatusesUseCase>,
+        event_publisher: Option<Arc<dyn EventPublisher>>,
+        kage_bunshin_enabled: bool,
         stage_timeout: Duration,
         pipeline_timeout: Duration,
     ) -> Self {
@@ -64,6 +71,8 @@ impl RunPipelineUseCase {
             pipeline_repo,
             container_runner,
             commit_status_uc,
+            event_publisher,
+            kage_bunshin_enabled,
             stage_timeout,
             pipeline_timeout,
         }
@@ -279,8 +288,91 @@ impl RunPipelineUseCase {
                             .await?;
                         completed_stages.insert(name.clone());
                         info!(stage = %name, duration_ms = stage_duration, "✅ Stage réussi");
+                    } else if stage_def.kage_bunshin && self.kage_bunshin_enabled {
+                        // ── Phase 41 — Kage Bunshin déclenché ──────────
+                        // Le stage a échoué mais kage_bunshin: true.
+                        // On marque le stage comme Healing et on publie
+                        // sur la file Kafka dédiée (Vegapunk Tweak #10).
+                        // Le KageBunshinConsumer traitera le heal de manière
+                        // asynchrone, sans bloquer les workers pipeline.
+                        self.pipeline_repo
+                            .update_stage_status(
+                                &stage_record.id,
+                                PipelineStageStatus::Healing,
+                                None,
+                                None, // pas encore terminé
+                                None,
+                            )
+                            .await?;
+
+                        // Sauvegarder les logs d'erreur pour le diagnostic
+                        self.pipeline_repo
+                            .update_stage_logs(
+                                &stage_record.id,
+                                &sanitize_stage_logs(&result.logs),
+                                result.exit_code as i16,
+                            )
+                            .await?;
+
+                        // Publier sur la file Kafka dédiée
+                        if let Some(publisher) = &self.event_publisher {
+                            if let Err(e) = publisher
+                                .publish_kage_bunshin_requested(
+                                    pipeline_id,
+                                    stage_record.id,
+                                    name,
+                                    &stage_def.image,
+                                    &stage_def.jutsus,
+                                    &result.logs,
+                                    repository_id,
+                                    commit_id,
+                                )
+                                .await
+                            {
+                                warn!(
+                                    stage = %name,
+                                    error = %e,
+                                    "⚠️ Kage Bunshin: publication Kafka échouée — fallback failure"
+                                );
+                                // Fallback : marquer le stage comme failure
+                                self.pipeline_repo
+                                    .update_stage_status(
+                                        &stage_record.id,
+                                        PipelineStageStatus::Failure,
+                                        None,
+                                        Some(stage_end),
+                                        Some(stage_duration),
+                                    )
+                                    .await?;
+                                failed_stages.insert(name.clone());
+                                pipeline_failed = true;
+                            } else {
+                                info!(
+                                    stage = %name,
+                                    "🥷 Kage Bunshin déclenché — heal en attente sur file dédiée"
+                                );
+                                // Le stage est en Healing — on continue le pipeline
+                                // Le KageBunshinConsumer mettra à jour le status
+                                // en Healed ou Failure de manière asynchrone.
+                                failed_stages.insert(name.clone());
+                                pipeline_failed = true;
+                            }
+                        } else {
+                            // Pas de publisher — fallback failure
+                            self.pipeline_repo
+                                .update_stage_status(
+                                    &stage_record.id,
+                                    PipelineStageStatus::Failure,
+                                    None,
+                                    Some(stage_end),
+                                    Some(stage_duration),
+                                )
+                                .await?;
+                            failed_stages.insert(name.clone());
+                            pipeline_failed = true;
+                        }
                     } else {
-                        // Failure (exit_code ≠ 0)
+                        // Failure (exit_code ≠ 0, pas de kage_bunshin)
                         self.pipeline_repo
                             .update_stage_status(
                                 &stage_record.id,

@@ -10,6 +10,7 @@
 
 mod config;
 mod jutsu_consumer;
+mod kage_bunshin_consumer;
 
 use std::net::SocketAddr;
 use std::sync::Arc;
@@ -303,31 +304,36 @@ async fn main() -> anyhow::Result<()> {
     let list_refs_uc = Arc::new(ListRefsUseCase::new(vcs.clone(), resolve_repo.clone()));
 
     // ── Phase 15 : Agent Sensei (先生) — LLM conversationnel ─────────
-    let sensei_chat: Option<Arc<SenseiChatUseCase>> = if config.sensei_enabled {
-        match OllamaService::new(&config.sensei_ollama_url, &config.sensei_ollama_model) {
-            Ok(sensei_llm) => {
-                let use_case = Arc::new(SenseiChatUseCase::new(
-                    search_chunks.clone(),
-                    review_repo.clone(),
-                    Arc::new(sensei_llm),
-                    repo.clone(),
-                ));
-                info!(
-                    url = %config.sensei_ollama_url,
-                    model = %config.sensei_ollama_model,
-                    "🥷 Sensei Agent — Initialisé (Ollama #2)"
-                );
-                Some(use_case)
+    // Phase 41 : Le LLM Sensei est partagé avec le Kage Bunshin (auto-healing).
+    let sensei_llm_arc: Option<Arc<dyn domain::ports::llm_service::LlmService>> =
+        if config.sensei_enabled {
+            match OllamaService::new(&config.sensei_ollama_url, &config.sensei_ollama_model) {
+                Ok(sensei_llm) => {
+                    info!(
+                        url = %config.sensei_ollama_url,
+                        model = %config.sensei_ollama_model,
+                        "🥷 Sensei LLM — Initialisé (Ollama #2, partagé Chat + KageBunshin)"
+                    );
+                    Some(Arc::new(sensei_llm))
+                }
+                Err(e) => {
+                    warn!("⚠️ Sensei LLM désactivé — Ollama #2 non disponible: {e}");
+                    None
+                }
             }
-            Err(e) => {
-                warn!("⚠️ Sensei Agent désactivé — Ollama #2 non disponible: {e}");
-                None
-            }
-        }
-    } else {
-        info!("ℹ️ Sensei Agent désactivé par configuration (SENSEI_ENABLED=false)");
-        None
-    };
+        } else {
+            info!("ℹ️ Sensei Agent désactivé par configuration (SENSEI_ENABLED=false)");
+            None
+        };
+
+    let sensei_chat: Option<Arc<SenseiChatUseCase>> = sensei_llm_arc.as_ref().map(|llm| {
+        Arc::new(SenseiChatUseCase::new(
+            search_chunks.clone(),
+            review_repo.clone(),
+            llm.clone(),
+            repo.clone(),
+        ))
+    });
 
     // ── Phase 19B : GitHub Import (Le Pont des Mondes) ────────
     let github_service: Arc<dyn domain::ports::github_service::GitHubService> =
@@ -485,17 +491,7 @@ async fn main() -> anyhow::Result<()> {
     let parse_jutsu =
         Arc::new(application::use_cases::parse_jutsu_config::ParseJutsuConfigUseCase::new());
 
-    let run_pipeline = container_runner.as_ref().map(|runner| {
-        Arc::new(
-            application::use_cases::run_pipeline::RunPipelineUseCase::new(
-                pipeline_repo.clone(),
-                runner.clone(),
-                manage_commit_statuses.clone(),
-                std::time::Duration::from_secs(config.jutsu_stage_timeout_secs),
-                std::time::Duration::from_secs(config.jutsu_pipeline_timeout_secs),
-            ),
-        )
-    });
+    // Note: run_pipeline sera construit APRÈS event_publisher (Phase 41 — besoin du publisher)
 
     // Chakra Producer (Kafka) — optionnel (graceful degradation)
     let chakra_producer: Option<Arc<ChakraProducer>> = if config.chakra_enabled {
@@ -536,6 +532,7 @@ async fn main() -> anyhow::Result<()> {
         &config.kafka_analysis_topic,
         chakra_producer.clone(), // Phase 34-V2 : pont Nen→Chakra
         &config.jutsu_topic,     // Phase 40 : topic pipeline CI/CD
+        &config.kage_bunshin_topic, // Phase 41 : topic auto-healing dédié
     ) {
         Ok(publisher) => {
             info!(
@@ -552,6 +549,23 @@ async fn main() -> anyhow::Result<()> {
             None
         }
     };
+
+    // ── Phase 40+41 — RunPipelineUseCase ────────────────────────────────
+    // Construit APRÈS event_publisher car il a besoin du publisher pour
+    // déclencher le Kage Bunshin sur la file Kafka dédiée (Phase 41).
+    let run_pipeline = container_runner.as_ref().map(|runner| {
+        Arc::new(
+            application::use_cases::run_pipeline::RunPipelineUseCase::new(
+                pipeline_repo.clone(),
+                runner.clone(),
+                manage_commit_statuses.clone(),
+                event_publisher.clone().map(|p| p as Arc<dyn domain::ports::event_publisher::EventPublisher>),
+                config.kage_bunshin_enabled,
+                std::time::Duration::from_secs(config.jutsu_stage_timeout_secs),
+                std::time::Duration::from_secs(config.jutsu_pipeline_timeout_secs),
+            ),
+        )
+    });
 
     // ── Phase 26A : Merge Requests (Le Katana Croisé) ──────────────────
     let mr_repo: Arc<dyn domain::ports::mr_repository::MrRepository> = Arc::new(
@@ -815,7 +829,7 @@ async fn main() -> anyhow::Result<()> {
         // Phase 25 — Service Accounts (L'Acte de Naissance)
         create_service_account,
         // Phase 26A — Merge Requests (Le Katana Croisé)
-        mr_repo,
+        mr_repo: mr_repo.clone(),
         create_mr,
         list_mrs,
         get_mr,
@@ -850,7 +864,7 @@ async fn main() -> anyhow::Result<()> {
         manage_commit_statuses,
         // Phase 40 — Jutsu Runner (CI/CD natif) 🥷⚡
         run_pipeline: run_pipeline.clone(),
-        pipeline_repo,
+        pipeline_repo: pipeline_repo.clone(),
         event_publisher: event_publisher.clone(),
     };
 
@@ -1022,6 +1036,57 @@ async fn main() -> anyhow::Result<()> {
         } else {
             warn!("⚠️ Jutsu Consumer non démarré — Docker non disponible");
         }
+    }
+
+    // ── Phase 41 : Kage Bunshin Consumer (Kafka → Auto-Healing) ─────
+    if config.kage_bunshin_enabled {
+        if let (Some(llm), Some(runner)) = (sensei_llm_arc.clone(), container_runner.clone()) {
+            let kage_bunshin_uc = Arc::new(
+                application::use_cases::kage_bunshin::KageBunshinUseCase::new(
+                    llm,
+                    pipeline_repo.clone(),
+                    runner,
+                    std::time::Duration::from_secs(config.kage_bunshin_shadow_timeout_secs),
+                    config.kage_bunshin_confidence_threshold,
+                ),
+            );
+
+            match kage_bunshin_consumer::KageBunshinConsumer::new(
+                &config.kafka_brokers,
+                &config.kage_bunshin_topic,
+                &config.kage_bunshin_consumer_group,
+                cancel_token.clone(),
+            ) {
+                Ok(consumer) => {
+                    let workspace_root = std::path::PathBuf::from(&config.vcs_workspace_root);
+                    let worker_count = config.kage_bunshin_worker_count;
+                    let vcs_for_kb: Arc<dyn domain::ports::vcs_engine::VcsEngine> = vcs.clone();
+
+                    tokio::spawn(consumer.run(
+                        kage_bunshin_uc,
+                        pipeline_repo.clone(),
+                        vcs_for_kb,
+                        repo_repo.clone()
+                            as Arc<dyn domain::ports::repo_repository::RepoRepository>,
+                        mr_repo.clone(),
+                        actor_repo.clone(),
+                        workspace_root,
+                        worker_count,
+                    ));
+                    info!(
+                        "🥷 Kage Bunshin Consumer démarré (Phase 41 — {} workers, topic: {})",
+                        config.kage_bunshin_worker_count, config.kage_bunshin_topic
+                    );
+                }
+                Err(e) => {
+                    warn!("⚠️ Kage Bunshin Consumer non disponible: {e}");
+                }
+            }
+        } else {
+            warn!("⚠️ Kage Bunshin non démarré — Sensei LLM ou Docker non disponible");
+        }
+    } else {
+        info!("ℹ️ Kage Bunshin désactivé par configuration (KAGE_BUNSHIN_ENABLED=false)");
     }
 
     // ── Serveur Tonic (gRPC / Ninpo) ───────────────

@@ -57,6 +57,15 @@ pub fn is_reserved_handle(handle: &str) -> bool {
 /// ⚠️ DOIT correspondre à la valeur dans `migrations/006_actors_repositories.sql`.
 pub const SYSTEM_ACTOR_ID: Uuid = Uuid::from_bytes([0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 1]);
 
+/// Handle déterministe du Service Account Sensei (Phase 41 — Kage Bunshin).
+///
+/// Utilisé comme auteur des MR automatiques d'auto-healing.
+/// Le bot est créé à la demande lors du premier heal réussi
+/// (via `find_by_handle` + `create` si absent).
+///
+/// Vegapunk Tweak #11 : identité du clone.
+pub const SENSEI_ACTOR_HANDLE: &str = "shinobi-sensei-bot";
+
 /// UUID déterministe du dépôt par défaut.
 /// Les opérations MVP existantes y sont rattachées lors de la migration.
 ///

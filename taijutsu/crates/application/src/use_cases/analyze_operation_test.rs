@@ -269,6 +269,20 @@ mod tests {
         ) -> Result<(), DomainError> {
             Ok(()) // Phase 40 — No-op dans les tests
         }
+
+        async fn publish_kage_bunshin_requested(
+            &self,
+            _pipeline_id: uuid::Uuid,
+            _stage_id: uuid::Uuid,
+            _stage_name: &str,
+            _stage_image: &str,
+            _stage_commands: &[String],
+            _error_logs: &str,
+            _repository_id: uuid::Uuid,
+            _commit_id: &str,
+        ) -> Result<(), DomainError> {
+            Ok(()) // Phase 41 — No-op dans les tests
+        }
     }
 
     // ── Mock EmbeddingService (Phase 7A) ─────────────

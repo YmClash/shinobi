@@ -59,6 +59,10 @@ pub struct KafkaEventPublisher {
     /// Topic Jutsu pour les événements pipeline CI/CD (Phase 40).
     /// Ex: `"shinobi.jutsu.pipeline"`
     jutsu_topic: String,
+    /// Topic dédié Kage Bunshin — file d'auto-healing séparée (Phase 41).
+    /// Ex: `"shinobi.jutsu.kage-bunshin"`
+    /// Vegapunk Tweak #10 : ne pas bloquer les workers pipeline.
+    kage_bunshin_topic: String,
 }
 
 impl KafkaEventPublisher {
@@ -81,6 +85,7 @@ impl KafkaEventPublisher {
         analysis_topic: &str,
         chakra_producer: Option<Arc<ChakraProducer>>,
         jutsu_topic: &str,
+        kage_bunshin_topic: &str,
     ) -> Result<Self, DomainError> {
         let producer: FutureProducer = ClientConfig::new()
             .set("bootstrap.servers", brokers)
@@ -106,6 +111,7 @@ impl KafkaEventPublisher {
             analysis_topic: analysis_topic.to_string(),
             chakra_producer,
             jutsu_topic: jutsu_topic.to_string(),
+            kage_bunshin_topic: kage_bunshin_topic.to_string(),
         })
     }
 }
@@ -293,6 +299,74 @@ impl EventPublisher for KafkaEventPublisher {
                 );
                 Err(DomainError::Internal(format!(
                     "Kafka publish pipeline_requested failed: {kafka_error}"
+                )))
+            }
+        }
+    }
+
+    /// Phase 41 — Publie une demande Kage Bunshin sur le topic dédié.
+    ///
+    /// Vegapunk Tweak #10 : file Kafka séparée pour ne pas bloquer
+    /// les workers pipeline pendant l'inférence LLM (30-60s).
+    async fn publish_kage_bunshin_requested(
+        &self,
+        pipeline_id: Uuid,
+        stage_id: Uuid,
+        stage_name: &str,
+        stage_image: &str,
+        stage_commands: &[String],
+        error_logs: &str,
+        repository_id: Uuid,
+        commit_id: &str,
+    ) -> Result<(), DomainError> {
+        let payload = serde_json::json!({
+            "pipeline_id": pipeline_id.to_string(),
+            "stage_id": stage_id.to_string(),
+            "stage_name": stage_name,
+            "stage_image": stage_image,
+            "stage_commands": stage_commands,
+            "error_logs": error_logs,
+            "repository_id": repository_id.to_string(),
+            "commit_id": commit_id,
+        });
+
+        let payload_str = serde_json::to_string(&payload).map_err(|e| {
+            DomainError::Internal(format!("JSON serialization failed: {e}"))
+        })?;
+
+        let key = pipeline_id.to_string();
+
+        let delivery_result = self
+            .producer
+            .send(
+                FutureRecord::to(&self.kage_bunshin_topic)
+                    .key(&key)
+                    .payload(&payload_str),
+                Duration::from_secs(5),
+            )
+            .await;
+
+        match delivery_result {
+            Ok(delivery) => {
+                info!(
+                    topic = %self.kage_bunshin_topic,
+                    partition = delivery.partition,
+                    offset = delivery.offset,
+                    pipeline_id = %pipeline_id,
+                    stage = %stage_name,
+                    "🥷 Kage Bunshin requested — publié sur file dédiée"
+                );
+                Ok(())
+            }
+            Err((kafka_error, _)) => {
+                warn!(
+                    topic = %self.kage_bunshin_topic,
+                    pipeline_id = %pipeline_id,
+                    error = %kafka_error,
+                    "⚠️ Échec publication kage_bunshin — non-fatal"
+                );
+                Err(DomainError::Internal(format!(
+                    "Kafka publish kage_bunshin failed: {kafka_error}"
                 )))
             }
         }

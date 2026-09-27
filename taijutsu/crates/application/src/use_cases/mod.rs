@@ -51,6 +51,7 @@ pub mod webhook_emit;
 pub mod manage_commit_statuses;
 pub mod parse_jutsu_config;
 pub mod run_pipeline;
+pub mod kage_bunshin;
 
 
 #[cfg(test)]

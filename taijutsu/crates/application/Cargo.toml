@@ -22,3 +22,9 @@ urlencoding = "2"
 
 # — Phase 40 — Jutsu Config Parser —
 serde_yaml = { workspace = true }
+
+# — Phase 41 — Kage Bunshin (Auto-Healing) —
+regex = { workspace = true }
+
+[dev-dependencies]
+tempfile = { workspace = true }

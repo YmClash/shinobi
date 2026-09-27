@@ -89,6 +89,14 @@ pub enum PipelineStageStatus {
     Error,
     /// Ignoré car une dépendance a échoué.
     Skipped,
+
+    // ── Phase 41 — Kage Bunshin (影分身) ──────────────────────────
+
+    /// Kage Bunshin en cours : Sensei analyse les logs + shadow re-run 🥷.
+    /// Vegapunk Tweak #4 : statut visible dans l'UI (shuriken animé).
+    Healing,
+    /// Stage réparé par Kage Bunshin — MR auto créée 🥷✅.
+    Healed,
 }
 
 impl PipelineStageStatus {
@@ -101,6 +109,8 @@ impl PipelineStageStatus {
             "failure" => Some(Self::Failure),
             "error" => Some(Self::Error),
             "skipped" => Some(Self::Skipped),
+            "healing" => Some(Self::Healing),
+            "healed" => Some(Self::Healed),
             _ => None,
         }
     }
@@ -114,6 +124,8 @@ impl PipelineStageStatus {
             Self::Failure => "failure",
             Self::Error => "error",
             Self::Skipped => "skipped",
+            Self::Healing => "healing",
+            Self::Healed => "healed",
         }
     }
 }

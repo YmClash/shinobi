@@ -101,4 +101,35 @@ pub trait EventPublisher: Send + Sync {
         trigger_event: &str,
         pipeline_id: Option<Uuid>,
     ) -> Result<(), DomainError>;
+
+    /// Phase 41 — Publie une demande Kage Bunshin sur un topic Kafka dédié.
+    ///
+    /// Topic: `shinobi.jutsu.kage-bunshin`
+    ///
+    /// ## Vegapunk Tweak #10 — File dédiée
+    /// Le Kage Bunshin s'exécute dans son propre consumer (pas dans les
+    /// workers pipeline). L'inférence LLM (30-60s) ne bloque plus
+    /// les 2 workers du `JutsuConsumer` normal.
+    ///
+    /// Le message contient toutes les informations nécessaires au
+    /// `KageBunshinConsumer` pour exécuter le heal :
+    /// - `pipeline_id` : UUID du pipeline parent
+    /// - `stage_id` : UUID du stage en échec
+    /// - `stage_name` : nom du stage
+    /// - `stage_image` : image Docker du stage
+    /// - `stage_commands` : commandes du stage
+    /// - `error_logs` : logs d'erreur du container
+    /// - `repository_id` : UUID du dépôt
+    /// - `commit_id` : SHA du commit
+    async fn publish_kage_bunshin_requested(
+        &self,
+        pipeline_id: Uuid,
+        stage_id: Uuid,
+        stage_name: &str,
+        stage_image: &str,
+        stage_commands: &[String],
+        error_logs: &str,
+        repository_id: Uuid,
+        commit_id: &str,
+    ) -> Result<(), DomainError>;
 }
