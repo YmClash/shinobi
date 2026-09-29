@@ -214,7 +214,7 @@ export default function TokensPage() {
         </p>
         <pre className="pat-code-block">
           <code>
-            {`git remote add shinobi http://localhost:3000/${user.handle}/mon-repo.git
+            {`git remote add shinobi ${process.env.NEXT_PUBLIC_GIT_URL || "https://api.jjshinobi.dev"}/${user.handle}/mon-repo.git
 git push shinobi main
 # Username: ${user.handle}
 # Password: shb_xxxxxxxxxxxxxxxxxxxxxxxx...`}

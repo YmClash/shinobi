@@ -7,6 +7,7 @@
 
 import { useState, useRef, useEffect } from "react";
 import { Download, Copy, Check } from "lucide-react";
+import { getGitCloneUrl } from "@/lib/api";
 
 interface CloneDropdownProps {
   owner: string;
@@ -18,8 +19,8 @@ export default function CloneDropdown({ owner, repo }: CloneDropdownProps) {
   const [copied, setCopied] = useState<string | null>(null);
   const ref = useRef<HTMLDivElement>(null);
 
-  // URL Git HTTP
-  const httpUrl = `http://localhost:3000/${owner}/${repo}.git`;
+  // URL Git HTTP (centralisée via NEXT_PUBLIC_GIT_URL)
+  const httpUrl = getGitCloneUrl(owner, repo);
 
   // Close on outside click
   useEffect(() => {

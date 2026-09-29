@@ -24,7 +24,7 @@ import {
   ExternalLink,
 } from "lucide-react";
 import { exploreTree, listRefs, buildBreadcrumbs, resolveRevisionAndPath } from "@/lib/explorer-api";
-import { getRepository, listOperations, getOperationReviews, buildRepoPrefix } from "@/lib/api";
+import { getRepository, listOperations, getOperationReviews, buildRepoPrefix, getGitCloneUrl } from "@/lib/api";
 import BreadcrumbNav from "@/components/explorer/BreadcrumbNav";
 import BranchSelector from "@/components/explorer/BranchSelector";
 import FileBrowser from "@/components/explorer/FileBrowser";
@@ -185,7 +185,7 @@ export default async function ExplorerPage({ params }: PageProps) {
 
     if (isEmpty) {
       // URL HTTP Git pour les commandes de clone
-      const httpUrl = `http://localhost:3000/${owner}/${repo}.git`;
+      const httpUrl = getGitCloneUrl(owner, repo);
 
       return (
         <div className="ex-page">
@@ -257,7 +257,7 @@ git config --global credential.helper store
 #   Password: shb_votre_token_ici
 
 # Option B : URL avec token intégré
-git remote set-url origin http://${owner}:VOTRE_PAT@localhost:3000/${owner}/${repo}.git`}</pre>
+git remote set-url origin http://${owner}:VOTRE_PAT@${process.env.NEXT_PUBLIC_GIT_URL || "api.jjshinobi.dev"}/${owner}/${repo}.git`}</pre>
                 </div>
                 <p className="ex-step-hint">
                   🔑 Le token n&apos;est affiché qu&apos;une seule fois lors de sa création. Copiez-le avant de quitter la page.

@@ -33,6 +33,23 @@ export function buildRepoPrefix(owner: string, repo: string): string {
   return `/api/v1/repos/${encodeURIComponent(owner)}/${encodeURIComponent(repo)}`;
 }
 
+/**
+ * Retourne l'URL de base pour les opérations Git (clone, push).
+ *
+ * Pointe vers le backend Taijutsu (qui sert le Git Smart HTTP).
+ * Configurable via `NEXT_PUBLIC_GIT_URL` pour les différents environnements :
+ * - Prod (Cloudflare Tunnel) : `https://api.jjshinobi.dev`
+ * - Dev local : `http://localhost:3000`
+ *
+ * @example
+ * getGitCloneUrl("naruto", "kunai-calc")
+ * // → "https://api.jjshinobi.dev/naruto/kunai-calc.git"
+ */
+export function getGitCloneUrl(owner: string, repo: string): string {
+  const base = process.env.NEXT_PUBLIC_GIT_URL || "https://api.jjshinobi.dev";
+  return `${base}/${owner}/${repo}.git`;
+}
+
 // ── Types ────────────────────────────────────────────────────
 
 export interface HealthResponse {
