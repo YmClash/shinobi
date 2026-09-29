@@ -1,7 +1,7 @@
 "use client";
 
 // ═══════════════════════════════════════════════════════════════
-// SHINOBI — Makimono Pipeline Hooks (Phase 40-C)
+// SHINOBI — Makimono Pipeline Hooks (Phase 40-C + 41-B)
 // SWR cache hooks for Pipeline API with conditional polling ⚡
 // ═══════════════════════════════════════════════════════════════
 
@@ -11,9 +11,11 @@ import {
   type PipelineListResponse,
   type PipelineDetailResponse,
   type PipelineStage,
+  type HealAttempt,
   listPipelines,
   getPipeline,
   listPipelineStages,
+  listHealAttempts,
 } from "@/lib/pipeline-api";
 
 // ── Generic SWR hook (same pattern as use-commit-status.ts) ──
@@ -148,7 +150,8 @@ export function usePipelineDetail(owner: string, repo: string, id: string) {
  * Stages d'un pipeline avec **polling live 3s**.
  *
  * - Polling 3s si le pipeline est `running` ou `queued`
- * - Auto-stop quand le pipeline termine (success/failure/error/cancelled)
+ * - VP-13: Continue aussi le polling si un stage est `healing`
+ * - Auto-stop quand tous les stages sont terminaux
  * - Endpoint léger GET .../stages (pas de données pipeline)
  */
 export function usePipelineStages(
@@ -157,6 +160,8 @@ export function usePipelineStages(
   pipelineId: string,
   pipelineStatus: string,
 ) {
+  // VP-13: Le pipeline reste "running" pendant le heal (grâce au fix backend).
+  // Mais en double sécurité, on continue le polling si le status est "healing".
   const isActive = pipelineStatus === "running" || pipelineStatus === "queued";
 
   return usePipelineApi<PipelineStage[]>(
@@ -168,3 +173,42 @@ export function usePipelineStages(
     !!pipelineId,
   );
 }
+
+/**
+ * Phase 41-B — Heal attempts d'un pipeline.
+ *
+ * VP-15 : Un seul fetch au niveau PipelineDetail, données passées en props.
+ * VP-16 — Rythme cardiaque de l'Agent :
+ *   - Poll 2s si un heal attempt est en status "pending" ou "healing"
+ *   - Auto-stop sinon (terminal: success, failed)
+ */
+export function useHealAttempts(
+  owner: string,
+  repo: string,
+  pipelineId: string,
+) {
+  const key = `heal-attempts:${owner}/${repo}:${pipelineId}`;
+  const result = usePipelineApi<HealAttempt[]>(
+    key,
+    () => listHealAttempts(owner, repo, pipelineId),
+    [owner, repo, pipelineId],
+    CacheTTL.SHORT,
+  );
+
+  // VP-16: Polling actif uniquement si un heal est en cours
+  const hasActiveHeal = result.data?.some(
+    (h) => h.status === "pending" || h.status === "healing",
+  );
+
+  const pollingResult = usePipelineApi<HealAttempt[]>(
+    key,
+    () => listHealAttempts(owner, repo, pipelineId),
+    [owner, repo, pipelineId],
+    CacheTTL.NONE,
+    hasActiveHeal ? 2_000 : undefined, // 2s pendant le heal
+    !!hasActiveHeal,
+  );
+
+  return hasActiveHeal ? pollingResult : result;
+}
+

@@ -448,13 +448,273 @@
   background: oklch(0.55 0.12 40);
 }
 
+
+/* ═══════════════════════════════════════════════════════════════ */
+/* PHASE 41-B — KAGE BUNSHIN (影分身) · Auto-Healing UI 🥷⚡       */
+/* ═══════════════════════════════════════════════════════════════ */
+
+/* ── Stage Dot: healing / healed ───────────────────────────── */
+.pl-stage-dot--healing {
+  background: oklch(0.65 0.2 290);
+  box-shadow: 0 0 0 2px oklch(0.65 0.2 290 / 25%);
+  animation: pl-kage-pulse 1.8s ease-in-out infinite;
+}
+.pl-stage-dot--healed {
+  background: oklch(0.7 0.18 180);
+  box-shadow: 0 0 0 2px oklch(0.7 0.18 180 / 20%);
+}
+.pl-status-dot--healing {
+  background: oklch(0.65 0.2 290);
+  box-shadow: 0 0 0 2px oklch(0.65 0.2 290 / 25%);
+  animation: pl-kage-pulse 1.8s ease-in-out infinite;
+}
+.pl-status-dot--healed {
+  background: oklch(0.7 0.18 180);
+  box-shadow: 0 0 0 2px oklch(0.7 0.18 180 / 20%);
+}
+.pl-detail-status--healing { background: oklch(0.65 0.2 290 / 15%); color: oklch(0.65 0.2 290); }
+.pl-detail-status--healed  { background: oklch(0.7 0.18 180 / 15%); color: oklch(0.7 0.18 180); }
+
+@keyframes pl-kage-pulse {
+  0%, 100% { box-shadow: 0 0 0 2px oklch(0.65 0.2 290 / 25%); opacity: 1; }
+  50%      { box-shadow: 0 0 0 6px oklch(0.65 0.2 290 / 20%), 0 0 14px oklch(0.65 0.2 290 / 12%); opacity: 0.85; }
+}
+
+/* ── Heal Badge (inline StageRow) ──────────────────────────── */
+.pl-heal-badge {
+  display: inline-flex; align-items: center; gap: 0.2rem;
+  padding: 0.08rem 0.45rem; border-radius: 4px;
+  font-size: 0.62rem; font-weight: 700;
+  background: oklch(0.45 0.15 290 / 18%); color: oklch(0.75 0.18 290);
+  white-space: nowrap;
+}
+.pl-heal-badge--success {
+  background: oklch(0.45 0.12 180 / 18%); color: oklch(0.75 0.15 180);
+}
+.pl-heal-badge--failed {
+  background: oklch(0.45 0.15 25 / 15%); color: oklch(0.7 0.18 25);
+}
+
+/* ── Heal Button (StageRow actions) ────────────────────────── */
+.pl-heal-btn {
+  display: inline-flex; align-items: center; gap: 0.3rem;
+  padding: 0.3rem 0.65rem; border-radius: 6px;
+  font-size: 0.72rem; font-weight: 600;
+  background: oklch(0.45 0.15 290 / 15%); color: oklch(0.75 0.18 290);
+  border: 1px solid transparent; cursor: pointer;
+  transition: all 0.15s;
+}
+.pl-heal-btn:hover {
+  background: oklch(0.50 0.18 290 / 25%);
+  border-color: oklch(0.65 0.2 290 / 30%);
+}
+
+/* ── HealPanel Drawer ──────────────────────────────────────── */
+.pl-heal-overlay {
+  position: fixed; inset: 0;
+  background: oklch(0 0 0 / 50%);
+  z-index: 999; backdrop-filter: blur(3px);
+  animation: pl-fade-in 0.15s ease;
+}
+.pl-heal-panel {
+  position: fixed; top: 0; right: 0; bottom: 0;
+  width: min(58vw, 760px);
+  background: var(--card);
+  border-left: 2px solid oklch(0.65 0.2 290 / 40%);
+  z-index: 1000; display: flex; flex-direction: column;
+  box-shadow: -8px 0 32px oklch(0 0 0 / 25%),
+              -2px 0 0 oklch(0.65 0.2 290 / 15%);
+  animation: pl-slide-in 0.2s ease;
+  overflow: hidden;
+}
+
+/* Heal panel header */
+.pl-heal-header {
+  display: flex; align-items: center; justify-content: space-between;
+  padding: 1rem 1.2rem;
+  border-bottom: 1px solid oklch(0.65 0.2 290 / 15%);
+  flex-shrink: 0;
+  background: linear-gradient(135deg, oklch(0.2 0.06 290 / 40%), transparent);
+}
+.pl-heal-title-group { display: flex; flex-direction: column; gap: 0.2rem; }
+.pl-heal-title {
+  font-size: 1rem; font-weight: 700; color: var(--foreground); margin: 0;
+  display: flex; align-items: center; gap: 0.5rem;
+}
+.pl-heal-status-badge {
+  display: inline-flex; align-items: center; gap: 0.25rem;
+  padding: 0.15rem 0.55rem; border-radius: 6px;
+  font-size: 0.72rem; font-weight: 700;
+}
+.pl-heal-status-badge--pending { background: oklch(0.55 0.02 0 / 15%); color: oklch(0.65 0.02 0); }
+.pl-heal-status-badge--healing { background: oklch(0.65 0.2 290 / 15%); color: oklch(0.65 0.2 290); }
+.pl-heal-status-badge--success { background: oklch(0.7 0.18 180 / 15%); color: oklch(0.7 0.18 180); }
+.pl-heal-status-badge--failed  { background: oklch(0.65 0.2 25 / 15%);  color: oklch(0.65 0.2 25); }
+
+/* Heal panel content */
+.pl-heal-content {
+  flex: 1; overflow-y: auto; padding: 1.2rem;
+  display: flex; flex-direction: column; gap: 1.2rem;
+}
+.pl-heal-section { display: flex; flex-direction: column; gap: 0.4rem; }
+.pl-heal-section-title {
+  font-size: 0.78rem; font-weight: 700; color: var(--foreground);
+  display: flex; align-items: center; gap: 0.35rem;
+}
+.pl-heal-diagnosis {
+  font-size: 0.78rem; line-height: 1.6; color: var(--muted-foreground);
+  padding: 0.75rem; border-radius: 8px;
+  background: color-mix(in oklch, var(--muted) 40%, transparent);
+  border-left: 3px solid oklch(0.65 0.2 290 / 50%);
+}
+
+/* ── Hunk Diff (VP-12 + Rigidité Monospace) ────────────────── */
+.pl-heal-hunks { display: flex; flex-direction: column; gap: 0.75rem; }
+.pl-hunk-file {
+  font-size: 0.72rem; font-weight: 600; color: var(--foreground);
+  padding: 0.4rem 0.65rem; border-radius: 6px 6px 0 0;
+  background: oklch(0.18 0.02 260);
+  border: 1px solid oklch(0.3 0.02 260);
+  border-bottom: none;
+  font-family: var(--font-mono);
+}
+.pl-hunk-diff {
+  font-family: var(--font-mono);
+  font-size: 0.72rem;
+  line-height: 1.55;
+  white-space: pre-wrap;
+  word-break: break-all;
+  padding: 0; margin: 0;
+  border: 1px solid oklch(0.3 0.02 260);
+  border-radius: 0 0 6px 6px;
+  overflow: hidden;
+}
+.pl-hunk-line {
+  display: flex; padding: 0.1rem 0.65rem; gap: 0.5rem; min-height: 1.4em;
+}
+.pl-hunk-line--remove {
+  background: oklch(0.25 0.08 25 / 30%);
+  color: oklch(0.8 0.12 25);
+}
+.pl-hunk-line--add {
+  background: oklch(0.25 0.08 145 / 30%);
+  color: oklch(0.8 0.12 145);
+}
+.pl-hunk-prefix {
+  flex-shrink: 0; width: 1ch;
+  font-weight: 700; user-select: none; opacity: 0.7;
+}
+
+/* ── Confidence Gauge ──────────────────────────────────────── */
+.pl-heal-confidence-row {
+  display: flex; align-items: center; gap: 0.65rem;
+  font-size: 0.78rem; color: var(--muted-foreground);
+}
+.pl-heal-confidence-bar {
+  flex: 1; max-width: 160px; height: 8px; border-radius: 4px;
+  background: oklch(0.25 0.02 0); overflow: hidden;
+}
+.pl-heal-confidence-fill {
+  height: 100%; border-radius: 4px;
+  transition: width 0.4s ease;
+}
+.pl-heal-confidence-fill[data-level="low"]    { background: oklch(0.65 0.2 25); }
+.pl-heal-confidence-fill[data-level="medium"] { background: oklch(0.7 0.15 80); }
+.pl-heal-confidence-fill[data-level="high"]   { background: oklch(0.7 0.18 145); }
+
+.pl-heal-confidence-pct {
+  font-weight: 700; font-family: var(--font-mono); font-size: 0.78rem;
+}
+
+/* ── LLM Metadata ──────────────────────────────────────────── */
+.pl-heal-meta {
+  display: flex; align-items: center; gap: 0.75rem; flex-wrap: wrap;
+  font-size: 0.72rem; color: var(--muted-foreground);
+}
+.pl-heal-meta-item {
+  display: inline-flex; align-items: center; gap: 0.25rem;
+}
+
+/* ── VP-14 : Failure Messages ──────────────────────────────── */
+.pl-heal-low-confidence {
+  font-size: 0.78rem; color: oklch(0.75 0.15 60);
+  padding: 0.65rem; border-radius: 8px;
+  background: oklch(0.45 0.12 60 / 12%);
+  border-left: 3px solid oklch(0.7 0.15 60);
+  line-height: 1.5;
+}
+.pl-heal-shadow-failed {
+  font-size: 0.78rem; color: oklch(0.7 0.18 25);
+  padding: 0.65rem; border-radius: 8px;
+  background: oklch(0.45 0.15 25 / 10%);
+  border-left: 3px solid oklch(0.65 0.2 25);
+  line-height: 1.5;
+}
+
+/* ── MR Link ───────────────────────────────────────────────── */
+.pl-heal-mr-link {
+  display: inline-flex; align-items: center; gap: 0.3rem;
+  font-size: 0.78rem; font-weight: 600;
+  color: oklch(0.7 0.18 180); text-decoration: none;
+  transition: color 0.15s;
+}
+.pl-heal-mr-link:hover { color: oklch(0.8 0.18 180); text-decoration: underline; }
+
+/* ── Shadow Logs (expandable) ──────────────────────────────── */
+.pl-heal-logs-toggle {
+  display: flex; align-items: center; gap: 0.3rem;
+  padding: 0.35rem 0; font-size: 0.78rem; font-weight: 600;
+  color: var(--muted-foreground); cursor: pointer;
+  background: none; border: none; transition: color 0.15s;
+}
+.pl-heal-logs-toggle:hover { color: var(--foreground); }
+.pl-heal-logs-pre {
+  max-height: 260px; overflow: auto; margin: 0;
+  padding: 0.75rem; border-radius: 8px;
+  background: oklch(0.12 0.01 260);
+  font-family: var(--font-mono); font-size: 0.68rem;
+  line-height: 1.55; color: oklch(0.85 0.02 200);
+  white-space: pre-wrap; word-break: break-all;
+}
+
+/* ── Theme: Cyberpunk ──────────────────────────────────────── */
+[data-theme="cyberpunk"] .pl-stage-dot--healing {
+  background: oklch(0.75 0.22 310);
+  box-shadow: 0 0 8px oklch(0.75 0.22 310 / 50%);
+}
+[data-theme="cyberpunk"] .pl-heal-header {
+  background: linear-gradient(135deg, oklch(0.2 0.08 310 / 40%), transparent);
+}
+[data-theme="cyberpunk"] .pl-heal-panel {
+  border-left-color: oklch(0.75 0.22 310 / 40%);
+}
+[data-theme="cyberpunk"] .pl-heal-badge {
+  background: oklch(0.45 0.18 310 / 18%); color: oklch(0.8 0.2 310);
+}
+
+/* ── Theme: Glass ──────────────────────────────────────────── */
+[data-theme="glass"] .pl-heal-panel {
+  backdrop-filter: blur(20px); background: oklch(0.15 0.02 260 / 85%);
+}
+
+/* ── Theme: Scroll ─────────────────────────────────────────── */
+[data-theme="scroll"] .pl-stage-dot--healing {
+  background: oklch(0.55 0.12 40);
+  box-shadow: 0 0 6px oklch(0.55 0.12 40 / 40%);
+}
+[data-theme="scroll"] .pl-heal-badge {
+  background: oklch(0.45 0.10 40 / 18%); color: oklch(0.7 0.12 40);
+}
+
 /* ── Responsive ────────────────────────────────────────────── */
 @media (max-width: 640px) {
   .pl-page { padding: 1rem; }
   .pl-card { flex-direction: column; align-items: flex-start; }
   .pl-card-right { flex-direction: row; gap: 0.5rem; }
   .pl-drawer { width: 100%; }
+  .pl-heal-panel { width: 100%; }
   .pl-trigger-modal { margin: 1rem; max-width: calc(100vw - 2rem); }
   .pl-detail-grid { grid-template-columns: 1fr; }
   .pl-stage-row { gap: 0.5rem; }
 }
+

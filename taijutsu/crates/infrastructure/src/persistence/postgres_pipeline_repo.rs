@@ -352,7 +352,7 @@ impl PipelineRepository for PostgresPipelineRepo {
                    created_at, updated_at
             FROM heal_attempts
             WHERE pipeline_id = $1
-            ORDER BY created_at ASC
+            ORDER BY created_at DESC
             "#,
         )
         .bind(pipeline_id)

@@ -22,7 +22,9 @@ export type PipelineStageStatus =
   | "success"
   | "failure"
   | "error"
-  | "skipped";
+  | "skipped"
+  | "healing"
+  | "healed";
 
 export type TriggerEvent =
   | "push"
@@ -81,6 +83,35 @@ export interface TriggerPipelineResponse {
   pipeline_id: string;
   commit_id: string;
   message: string;
+}
+
+// ── Phase 41-B : Kage Bunshin Types ──────────────────────────
+
+export type HealStatus = "pending" | "healing" | "success" | "failed";
+
+export interface PatchHunk {
+  path: string;
+  search: string;
+  replace: string;
+}
+
+export interface HealAttempt {
+  id: string;
+  pipeline_id: string;
+  stage_name: string;
+  diagnosis: string;
+  patch_summary: string | null;
+  hunks: PatchHunk[];
+  status: HealStatus;
+  shadow_branch: string | null;
+  mr_id: string | null;
+  retry_logs: string | null;
+  retry_exit_code: number | null;
+  llm_model: string | null;
+  llm_duration_ms: number | null;
+  confidence: number | null;
+  created_at: string;
+  updated_at: string;
 }
 
 // ── Helpers ──────────────────────────────────────────────────
@@ -150,5 +181,18 @@ export async function triggerPipeline(
     headers: authHeaders(),
     body: JSON.stringify(body),
   });
+  return handleResponse(res);
+}
+
+/** GET /api/v1/repos/{o}/{r}/pipelines/{id}/heals — Heal attempts (Phase 41-B). */
+export async function listHealAttempts(
+  owner: string,
+  repo: string,
+  pipelineId: string,
+): Promise<HealAttempt[]> {
+  const res = await fetch(
+    `${pipelinesPrefix(owner, repo)}/${pipelineId}/heals`,
+    { headers: authHeaders() },
+  );
   return handleResponse(res);
 }

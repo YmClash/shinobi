@@ -28,6 +28,7 @@
 use std::path::PathBuf;
 use std::sync::Arc;
 
+use chrono::Utc;
 use rdkafka::config::ClientConfig;
 use rdkafka::consumer::{CommitMode, Consumer, StreamConsumer};
 use rdkafka::message::Message;
@@ -44,6 +45,7 @@ use domain::ports::mr_repository::MrRepository;
 use domain::ports::pipeline_repository::PipelineRepository;
 use domain::ports::vcs_engine::VcsEngine;
 use domain::ports::repo_repository::RepoRepository;
+use domain::entities::pipeline::{PipelineStageStatus, PipelineStatus};
 
 /// Message reçu depuis Kafka pour déclencher un Kage Bunshin.
 #[derive(Debug, Clone)]
@@ -394,6 +396,9 @@ impl KageBunshinConsumer {
                         );
                     }
                 }
+
+                // VP-13: Finaliser le statut du pipeline après le heal
+                Self::finalize_pipeline_after_heal(pipeline_repo, &request.pipeline_id).await;
             }
             Ok(HealResult::Failed { diagnosis, reason }) => {
                 warn!(
@@ -407,6 +412,9 @@ impl KageBunshinConsumer {
 
                 // Remettre le stage → Failure (le heal n'a pas marché)
                 Self::mark_stage_failed(pipeline_repo, &request.stage_id, &reason).await;
+
+                // VP-13: Finaliser le statut du pipeline après le heal
+                Self::finalize_pipeline_after_heal(pipeline_repo, &request.pipeline_id).await;
             }
             Err(e) => {
                 error!(
@@ -416,6 +424,9 @@ impl KageBunshinConsumer {
                     "❌ KageBunshin — erreur inattendue"
                 );
                 Self::mark_stage_failed(pipeline_repo, &request.stage_id, &format!("Internal error: {e}")).await;
+
+                // VP-13: Finaliser le statut du pipeline apr\u{00e8}s le heal
+                Self::finalize_pipeline_after_heal(pipeline_repo, &request.pipeline_id).await;
             }
             Ok(HealResult::Skipped) => {
                 info!(
@@ -425,6 +436,9 @@ impl KageBunshinConsumer {
                     "🥷⏭️ Kage Bunshin SKIPPED — kage_bunshin non actif pour ce stage"
                 );
                 Self::mark_stage_failed(pipeline_repo, &request.stage_id, "Kage Bunshin skipped").await;
+
+                // VP-13: Finaliser le statut du pipeline apr\u{00e8}s le heal
+                Self::finalize_pipeline_after_heal(pipeline_repo, &request.pipeline_id).await;
             }
         }
 
@@ -460,14 +474,91 @@ impl KageBunshinConsumer {
         if let Err(e) = pipeline_repo
             .update_stage_status(
                 stage_id,
-                domain::entities::pipeline::PipelineStageStatus::Failure,
+                PipelineStageStatus::Failure,
                 None,
-                Some(chrono::Utc::now()),
+                Some(Utc::now()),
                 None,
             )
             .await
         {
             warn!(error = %e, "⚠️ Impossible de mettre à jour le stage → Failure après heal échoué");
+        }
+    }
+
+    // ── VP-13 : Finalisation du pipeline après heal ──────────────────────
+
+    /// Recalcule le statut du pipeline après la fin d'un heal.
+    ///
+    /// Le pipeline avait été maintenu en "running" par VP-13 tant que
+    /// des stages étaient en `Healing`. Cette méthode vérifie si
+    /// tous les stages ont atteint un état terminal et calcule le
+    /// statut final du pipeline.
+    ///
+    /// États terminaux : success, failure, error, skipped, healed
+    /// États non-terminaux : pending, running, healing
+    async fn finalize_pipeline_after_heal(
+        pipeline_repo: &dyn PipelineRepository,
+        pipeline_id: &Uuid,
+    ) {
+        // Récupérer tous les stages du pipeline
+        let stages = match pipeline_repo.list_stages(pipeline_id).await {
+            Ok(s) => s,
+            Err(e) => {
+                warn!(error = %e, "VP-13: Impossible de lister les stages pour finaliser le pipeline");
+                return;
+            }
+        };
+
+        // Vérifier s'il reste des stages non-terminaux
+        let has_healing = stages.iter().any(|s| s.status == PipelineStageStatus::Healing);
+        let has_running = stages.iter().any(|s| {
+            s.status == PipelineStageStatus::Running || s.status == PipelineStageStatus::Pending
+        });
+
+        if has_healing || has_running {
+            // Il reste des stages en cours — ne pas finaliser encore
+            info!(
+                pipeline_id = %pipeline_id,
+                healing = has_healing,
+                running = has_running,
+                "🥷 Pipeline pas encore finalisé — stages en cours"
+            );
+            return;
+        }
+
+        // Tous les stages sont terminés — calculer le statut final
+        let has_failure = stages.iter().any(|s| {
+            s.status == PipelineStageStatus::Failure || s.status == PipelineStageStatus::Error
+        });
+        let has_error = stages.iter().any(|s| s.status == PipelineStageStatus::Error);
+
+        let final_status = if has_error {
+            PipelineStatus::Error
+        } else if has_failure {
+            PipelineStatus::Failure
+        } else {
+            // Tous les stages sont success/healed/skipped
+            PipelineStatus::Success
+        };
+
+        info!(
+            pipeline_id = %pipeline_id,
+            final_status = ?final_status,
+            "🥷 VP-13: Pipeline finalisé après heal → {:?}",
+            final_status
+        );
+
+        if let Err(e) = pipeline_repo
+            .update_status(
+                pipeline_id,
+                final_status,
+                None,
+                Some(Utc::now()),
+                None,
+            )
+            .await
+        {
+            warn!(error = %e, "VP-13: Impossible de finaliser le statut du pipeline");
         }
     }
 

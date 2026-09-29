@@ -33,6 +33,8 @@ const STAGE_LABELS: Record<PipelineStageStatus, string> = {
   failure: "Échoué",
   error: "Erreur",
   skipped: "Ignoré",
+  healing: "Healing ⚔️",
+  healed: "Healed ⚔️✅",
 };
 
 // ── Component ────────────────────────────────────────────────

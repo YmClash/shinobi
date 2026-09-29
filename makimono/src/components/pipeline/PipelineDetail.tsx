@@ -1,19 +1,22 @@
 "use client";
 
 // ═══════════════════════════════════════════════════════════════
-// SHINOBI — Pipeline Detail (Phase 40-C)
+// SHINOBI — Pipeline Detail (Phase 40-C + 41-B)
 // Vue détaillée d'un pipeline : header + timeline stages ⚡
+// + 🥷 Kage Bunshin integration (heal panel, VP-15 cascade)
 // ═══════════════════════════════════════════════════════════════
 
-import { useState } from "react";
+import { useMemo, useState } from "react";
 import Link from "next/link";
-import { usePipelineDetail, usePipelineStages } from "@/hooks/use-pipelines";
+import { usePipelineDetail, usePipelineStages, useHealAttempts } from "@/hooks/use-pipelines";
 import { StageRow } from "./StageRow";
 import { LogDrawer } from "./LogDrawer";
+import { HealPanel } from "./HealPanel";
 import type {
   PipelineStage,
   PipelineStatus,
   TriggerEvent,
+  HealAttempt,
 } from "@/lib/pipeline-api";
 
 // ── Status & Trigger Config ─────────────────────────────────
@@ -33,6 +36,10 @@ const TRIGGER_LABELS: Record<TriggerEvent, string> = {
   mr_created: "⚔️ MR créé",
   mr_merged: "🔀 MR mergé",
 };
+
+// ── Drawer state — Isolation Visuelle (mutuellement exclusif) ──
+
+type ActiveDrawer = "logs" | "heal" | null;
 
 // ── Props ────────────────────────────────────────────────────
 
@@ -55,8 +62,43 @@ export function PipelineDetail({ owner, repo, id }: PipelineDetailProps) {
     detail?.status ?? "",
   );
 
-  // State pour le LogDrawer
+  // Phase 41-B — VP-15: Un seul fetch pour tous les heals
+  const { data: healAttempts } = useHealAttempts(owner, repo, id);
+
+  // VP-15: Map stage_name → HealAttempt (le plus récent — grâce au Tri Temporel DESC)
+  const healByStage = useMemo(() => {
+    const map = new Map<string, HealAttempt>();
+    for (const h of healAttempts ?? []) {
+      // Premier rencontré = le plus récent (grâce à ORDER BY created_at DESC)
+      if (!map.has(h.stage_name)) {
+        map.set(h.stage_name, h);
+      }
+    }
+    return map;
+  }, [healAttempts]);
+
+  // Isolation Visuelle : un seul drawer à la fois (logs OU heal, pas les deux)
+  const [activeDrawer, setActiveDrawer] = useState<ActiveDrawer>(null);
   const [selectedStage, setSelectedStage] = useState<PipelineStage | null>(null);
+  const [selectedHeal, setSelectedHeal] = useState<HealAttempt | null>(null);
+
+  const openLogDrawer = (stage: PipelineStage) => {
+    setSelectedStage(stage);
+    setSelectedHeal(null);
+    setActiveDrawer("logs");
+  };
+
+  const openHealDrawer = (heal: HealAttempt) => {
+    setSelectedHeal(heal);
+    setSelectedStage(null);
+    setActiveDrawer("heal");
+  };
+
+  const closeDrawer = () => {
+    setActiveDrawer(null);
+    setSelectedStage(null);
+    setSelectedHeal(null);
+  };
 
   // Stages à afficher : les polled (plus frais) ou ceux du detail
   const displayStages = (liveStages ?? detail?.stages ?? [])
@@ -160,17 +202,31 @@ export function PipelineDetail({ owner, repo, id }: PipelineDetailProps) {
               key={stage.id}
               stage={stage}
               isLast={i === displayStages.length - 1}
-              onViewLogs={() => setSelectedStage(stage)}
+              onViewLogs={() => openLogDrawer(stage)}
+              healAttempt={healByStage.get(stage.name)}
+              onViewHeal={() => {
+                const heal = healByStage.get(stage.name);
+                if (heal) openHealDrawer(heal);
+              }}
             />
           ))}
         </div>
       )}
 
-      {/* Log Drawer */}
+      {/* Log Drawer — Isolation Visuelle : n'affiche que si activeDrawer === 'logs' */}
       <LogDrawer
-        stage={selectedStage}
-        open={!!selectedStage}
-        onClose={() => setSelectedStage(null)}
+        stage={activeDrawer === "logs" ? selectedStage : null}
+        open={activeDrawer === "logs"}
+        onClose={closeDrawer}
+      />
+
+      {/* Heal Panel — Isolation Visuelle : n'affiche que si activeDrawer === 'heal' */}
+      <HealPanel
+        heal={activeDrawer === "heal" ? selectedHeal : null}
+        open={activeDrawer === "heal"}
+        onClose={closeDrawer}
+        owner={owner}
+        repo={repo}
       />
     </div>
   );

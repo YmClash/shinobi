@@ -14,6 +14,7 @@ use serde::{Deserialize, Serialize};
 use uuid::Uuid;
 
 use domain::entities::pipeline::{Pipeline, PipelineStage, TriggerEvent};
+use domain::entities::kage_bunshin::{HealAttempt, PatchHunk};
 use domain::errors::DomainError;
 
 use crate::errors::AppError;
@@ -236,3 +237,86 @@ pub(crate) async fn trigger_pipeline_handler(
         "message": "Pipeline en file d'attente.",
     })))
 }
+
+// -- Phase 41-B : Kage Bunshin REST endpoint --------------------------------
+
+#[derive(Debug, Serialize)]
+pub struct PatchHunkResponse {
+    pub path: String,
+    pub search: String,
+    pub replace: String,
+}
+
+impl PatchHunkResponse {
+    fn from_hunk(h: &PatchHunk) -> Self {
+        Self {
+            path: h.path.clone(),
+            search: h.search.clone(),
+            replace: h.replace.clone(),
+        }
+    }
+}
+
+#[derive(Debug, Serialize)]
+pub struct HealAttemptResponse {
+    pub id: Uuid,
+    pub pipeline_id: Uuid,
+    pub stage_name: String,
+    pub diagnosis: String,
+    pub patch_summary: Option<String>,
+    pub hunks: Vec<PatchHunkResponse>,
+    pub status: String,
+    pub shadow_branch: Option<String>,
+    pub mr_id: Option<Uuid>,
+    pub retry_logs: Option<String>,
+    pub retry_exit_code: Option<i16>,
+    pub llm_model: Option<String>,
+    pub llm_duration_ms: Option<i32>,
+    pub confidence: Option<f32>,
+    pub created_at: String,
+    pub updated_at: String,
+}
+
+impl HealAttemptResponse {
+    pub fn from_attempt(a: &HealAttempt) -> Self {
+        Self {
+            id: a.id,
+            pipeline_id: a.pipeline_id,
+            stage_name: a.stage_name.clone(),
+            diagnosis: a.diagnosis.clone(),
+            patch_summary: a.patch_summary.clone(),
+            hunks: a.hunks.iter().map(PatchHunkResponse::from_hunk).collect(),
+            status: a.status.as_sql_str().to_string(),
+            shadow_branch: a.shadow_branch.clone(),
+            mr_id: a.mr_id,
+            retry_logs: a.retry_logs.clone(),
+            retry_exit_code: a.retry_exit_code,
+            llm_model: a.llm_model.clone(),
+            llm_duration_ms: a.llm_duration_ms,
+            confidence: a.confidence,
+            created_at: a.created_at.to_rfc3339(),
+            updated_at: a.updated_at.to_rfc3339(),
+        }
+    }
+}
+
+/// GET /api/v1/repos/:owner/:repo/pipelines/:pipeline_id/heals
+/// Liste les tentatives de guérison (heal_attempts) d'un pipeline.
+///
+/// Phase 41-B : Endpoint dédié pour le panneau Kage Bunshin dans Makimono.
+/// Les résultats sont ordonnés par `created_at DESC` (Tweak "Tri Temporel")
+/// pour que le frontend prenne toujours la tentative la plus récente par stage.
+pub(crate) async fn list_heals_handler(
+    _auth: AuthUser,
+    State(state): State<SharedState>,
+    Path((_owner, _repo, pipeline_id)): Path<(String, String, Uuid)>,
+) -> Result<Json<Vec<HealAttemptResponse>>, AppError> {
+    let attempts = state
+        .pipeline_repo
+        .list_heal_attempts(&pipeline_id)
+        .await?;
+    Ok(Json(
+        attempts.iter().map(HealAttemptResponse::from_attempt).collect(),
+    ))
+}
+

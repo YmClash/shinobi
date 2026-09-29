@@ -194,6 +194,7 @@ impl RunPipelineUseCase {
         // ── 5. Dynamic Scheduling (séquentiel V1) ───────────────
         let mut completed_stages: HashSet<String> = HashSet::new();
         let mut failed_stages: HashSet<String> = HashSet::new();
+        let mut healing_stages: HashSet<String> = HashSet::new(); // VP-13: stages en cours de guérison
         let mut pipeline_failed = false;
         let mut pipeline_error = false;
 
@@ -351,11 +352,11 @@ impl RunPipelineUseCase {
                                     stage = %name,
                                     "🥷 Kage Bunshin déclenché — heal en attente sur file dédiée"
                                 );
-                                // Le stage est en Healing — on continue le pipeline
-                                // Le KageBunshinConsumer mettra à jour le status
-                                // en Healed ou Failure de manière asynchrone.
-                                failed_stages.insert(name.clone());
-                                pipeline_failed = true;
+                                // VP-13: Le stage est en Healing — le pipeline reste running.
+                                // On NE marque PAS pipeline_failed = true ici.
+                                // Le KageBunshinConsumer finalisera le statut du pipeline
+                                // via finalize_pipeline_after_heal() une fois le heal terminé.
+                                healing_stages.insert(name.clone());
                             }
                         } else {
                             // Pas de publisher — fallback failure
@@ -429,6 +430,17 @@ impl RunPipelineUseCase {
             PipelineStatus::Error
         } else if pipeline_failed {
             PipelineStatus::Failure
+        } else if !healing_stages.is_empty() {
+            // VP-13: Des stages sont en cours de guérison par Kage Bunshin.
+            // Le pipeline reste "running" pour maintenir le polling SWR frontend.
+            // Le KageBunshinConsumer appellera finalize_pipeline_after_heal()
+            // pour calculer le statut final une fois le heal terminé.
+            info!(
+                healing = ?healing_stages,
+                "🥷 Pipeline reste running — {} stage(s) en guérison",
+                healing_stages.len()
+            );
+            PipelineStatus::Running
         } else {
             PipelineStatus::Success
         };

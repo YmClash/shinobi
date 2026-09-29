@@ -1,11 +1,16 @@
 "use client";
 
 // ═══════════════════════════════════════════════════════════════
-// SHINOBI — Stage Row (Phase 40-C)
+// SHINOBI — Stage Row (Phase 40-C + 41-B)
 // Ligne d'un stage dans la timeline verticale des pipelines ⚡
+// + 🥷 Badge Kage Bunshin + bouton Heal (Phase 41-B)
 // ═══════════════════════════════════════════════════════════════
 
-import type { PipelineStage, PipelineStageStatus } from "@/lib/pipeline-api";
+import type {
+  PipelineStage,
+  PipelineStageStatus,
+  HealAttempt,
+} from "@/lib/pipeline-api";
 
 // ── Props ────────────────────────────────────────────────────
 
@@ -16,6 +21,10 @@ interface StageRowProps {
   isLast: boolean;
   /** Callback pour ouvrir le LogDrawer sur ce stage. */
   onViewLogs: () => void;
+  /** Phase 41-B — Heal attempt associé (si existe, VP-15: passé en props). */
+  healAttempt?: HealAttempt;
+  /** Phase 41-B — Callback pour ouvrir le HealPanel. */
+  onViewHeal?: () => void;
 }
 
 // ── Status Config ────────────────────────────────────────────
@@ -27,13 +36,26 @@ const STAGE_STATUS_CONFIG: Record<PipelineStageStatus, { label: string; icon: st
   failure: { label: "Échoué",     icon: "❌" },
   error:   { label: "Erreur",     icon: "⚠️" },
   skipped: { label: "Ignoré",     icon: "⏭️" },
+  healing: { label: "Healing",    icon: "⚔️" },
+  healed:  { label: "Healed",     icon: "⚔️✅" },
 };
 
 // ── Component ────────────────────────────────────────────────
 
-export function StageRow({ stage, isLast, onViewLogs }: StageRowProps) {
+export function StageRow({
+  stage,
+  isLast,
+  onViewLogs,
+  healAttempt,
+  onViewHeal,
+}: StageRowProps) {
   const config = STAGE_STATUS_CONFIG[stage.status] ?? { label: stage.status, icon: "❓" };
   const durationStr = formatDuration(stage.duration_ms);
+
+  // Heal badge class
+  const healBadgeClass = healAttempt
+    ? `pl-heal-badge pl-heal-badge--${healAttempt.status}`
+    : "";
 
   return (
     <div className="pl-stage-row">
@@ -48,6 +70,12 @@ export function StageRow({ stage, isLast, onViewLogs }: StageRowProps) {
         <div className="pl-stage-header">
           <span className="pl-stage-name">{stage.name}</span>
           <span className="pl-stage-image">🐳 {stage.image}</span>
+          {/* Phase 41-B — Heal badge inline */}
+          {healAttempt && (
+            <span className={healBadgeClass}>
+              ⚔️ {healAttempt.status === "success" ? "Healed" : healAttempt.status === "healing" ? "Healing…" : healAttempt.status === "pending" ? "Sensei…" : "Failed"}
+            </span>
+          )}
         </div>
         <div className="pl-stage-meta">
           <span>{config.icon} {config.label}</span>
@@ -67,6 +95,16 @@ export function StageRow({ stage, isLast, onViewLogs }: StageRowProps) {
             title={`Voir les logs de ${stage.name}`}
           >
             📜 Logs
+          </button>
+        )}
+        {/* Phase 41-B — Bouton Heal */}
+        {healAttempt && onViewHeal && (
+          <button
+            className="pl-heal-btn"
+            onClick={onViewHeal}
+            title={`Voir le heal de ${stage.name}`}
+          >
+            ⚔️ Heal
           </button>
         )}
       </div>

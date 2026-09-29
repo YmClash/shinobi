@@ -543,6 +543,11 @@ pub fn create_router(state: SharedState) -> Router {
             "/api/v1/repos/{owner}/{repo}/pipelines/{pipeline_id}/stages",
             get(crate::rest::pipeline_routes::list_pipeline_stages_handler),
         )
+        // Phase 41-B — Kage Bunshin (Auto-Healing) 🥷⚡
+        .route(
+            "/api/v1/repos/{owner}/{repo}/pipelines/{pipeline_id}/heals",
+            get(crate::rest::pipeline_routes::list_heals_handler),
+        )
         // Phase 34 — Webhooks (Chakra チャクラ) 🔔
         .route(
             "/api/v1/repos/{owner}/{repo}/hooks",
