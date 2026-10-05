@@ -86,6 +86,29 @@ pub struct Repository {
 
     /// Date de création du dépôt.
     pub created_at: DateTime<Utc>,
+
+    // ── Phase 19B — GitHub Import ─────────────────────────────────
+
+    /// URL Git source pour les repos importés (ex: "https://github.com/user/repo.git").
+    /// `None` = repo natif SHINOBI.
+    pub mirror_source_url: Option<String>,
+
+    /// Timestamp du dernier import miroir réussi.
+    /// `None` = jamais synchronisé ou repo natif.
+    pub mirror_synced_at: Option<DateTime<Utc>>,
+
+    // ── Phase 24 — Soft Delete ────────────────────────────────────
+
+    /// Timestamp de suppression (soft delete). `None` = dépôt actif.
+    /// Si renseigné, le repo est en corbeille et sera purgé après le délai de rétention.
+    pub deleted_at: Option<DateTime<Utc>>,
+
+    // ── Phase 37B — Fork Local (Le Dédoublement) ─────────────────
+
+    /// UUID du dépôt parent si ce repo est un fork. `None` = repo original.
+    /// FK vers `repositories(id)` avec `ON DELETE SET NULL` — si le parent
+    /// est supprimé, le fork survit en tant que repo autonome.
+    pub forked_from_id: Option<Uuid>,
 }
 
 impl Repository {
@@ -104,6 +127,10 @@ impl Repository {
             visibility: Visibility::Public,
             default_branch: "main".to_string(),
             created_at: Utc::now(),
+            mirror_source_url: None,
+            mirror_synced_at: None,
+            deleted_at: None,
+            forked_from_id: None,
         }
     }
 
@@ -115,6 +142,30 @@ impl Repository {
     /// Vérifie si le dépôt est privé.
     pub fn is_private(&self) -> bool {
         self.visibility == Visibility::Private
+    }
+
+    /// Vérifie si le dépôt est un miroir importé depuis GitHub (Phase 19B).
+    pub fn is_mirror(&self) -> bool {
+        self.mirror_source_url.is_some()
+    }
+
+    /// Vérifie si le dépôt est dans la corbeille (soft-deleted).
+    pub fn is_deleted(&self) -> bool {
+        self.deleted_at.is_some()
+    }
+
+    /// Vérifie si le dépôt est un fork d'un autre dépôt (Phase 37B).
+    pub fn is_fork(&self) -> bool {
+        self.forked_from_id.is_some()
+    }
+
+    /// Nombre de secondes restantes avant purge définitive.
+    /// Retourne `None` si le dépôt n'est pas supprimé.
+    pub fn seconds_until_purge(&self, retention_secs: i64) -> Option<i64> {
+        self.deleted_at.map(|d| {
+            let deadline = d + chrono::Duration::seconds(retention_secs);
+            (deadline - Utc::now()).num_seconds().max(0)
+        })
     }
 }
 

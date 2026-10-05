@@ -44,6 +44,19 @@ impl NomicEmbedService {
     /// # Arguments
     /// - `dimensions` : nombre de dimensions cible (64-768, recommandé: 256)
     pub fn new(dimensions: usize) -> Result<Self, DomainError> {
+        // Phase 21 — Anti-OOM : Limiter ONNX à 2 threads pour protéger
+        // la RAM/CPU sur machines 16GB (Ollama + Kafka + PostgreSQL cohabitent).
+        // ONNX Runtime lit cette variable au moment de la création de session.
+        let onnx_threads: usize = std::env::var("ONNX_THREADS")
+            .ok()
+            .and_then(|v| v.parse().ok())
+            .unwrap_or(2);
+
+        // Injecter la limite dans l'environnement AVANT la création du modèle.
+        // ort (ONNX Runtime Rust binding) respecte ORT_NUM_THREADS.
+        // SAFETY: called once at init, before any ONNX sessions exist.
+        unsafe { std::env::set_var("ORT_NUM_THREADS", onnx_threads.to_string()) };
+
         let model = TextEmbedding::try_new(
             InitOptions::new(EmbeddingModel::NomicEmbedTextV15)
                 .with_show_download_progress(true),
@@ -57,7 +70,8 @@ impl NomicEmbedService {
         info!(
             model = "nomic-embed-text-v1.5",
             dimensions,
-            "🧬 EmbeddingService initialisé (ONNX Runtime local)"
+            onnx_threads,
+            "🧬 EmbeddingService initialisé (ONNX Runtime local — {onnx_threads} threads)"
         );
 
         Ok(Self {
@@ -137,25 +151,46 @@ impl EmbeddingService for NomicEmbedService {
             return Ok(vec![]);
         }
 
-        let texts_owned: Vec<String> = texts.to_vec();
+        // Phase 21 — Anti-OOM : Traiter en micro-batches de 32 pour limiter
+        // l'empreinte mémoire ONNX. Sans cela, 159 chunks × 768d = explosion RAM.
+        let batch_size: usize = std::env::var("ONNX_BATCH_SIZE")
+            .ok()
+            .and_then(|v| v.parse().ok())
+            .unwrap_or(32);
 
-        let model = self.model.lock().map_err(|e| {
-            DomainError::Internal(format!("Mutex lock failed: {e}"))
-        })?;
+        let mut all_results: Vec<Vec<f32>> = Vec::with_capacity(texts.len());
 
-        let results = model.embed(texts_owned, None).map_err(|e| {
-            DomainError::Internal(format!("Batch embedding failed: {e}"))
-        })?;
+        for (batch_idx, batch) in texts.chunks(batch_size).enumerate() {
+            let batch_owned: Vec<String> = batch.to_vec();
 
-        drop(model);
+            let model = self.model.lock().map_err(|e| {
+                DomainError::Internal(format!("Mutex lock failed: {e}"))
+            })?;
 
-        // Tronquer et re-normaliser chaque vecteur.
-        let truncated: Vec<Vec<f32>> = results
-            .into_iter()
-            .map(|v| self.truncate_and_normalize(v))
-            .collect();
+            let results = model.embed(batch_owned, None).map_err(|e| {
+                DomainError::Internal(format!("Batch embedding failed: {e}"))
+            })?;
 
-        Ok(truncated)
+            drop(model);
+
+            // Tronquer et re-normaliser chaque vecteur.
+            let truncated: Vec<Vec<f32>> = results
+                .into_iter()
+                .map(|v| self.truncate_and_normalize(v))
+                .collect();
+
+            info!(
+                batch_idx,
+                batch_len = truncated.len(),
+                total_done = all_results.len() + truncated.len(),
+                total = texts.len(),
+                "🧬 Tensai — Micro-batch embeddings"
+            );
+
+            all_results.extend(truncated);
+        }
+
+        Ok(all_results)
     }
 
     fn dimensions(&self) -> usize {

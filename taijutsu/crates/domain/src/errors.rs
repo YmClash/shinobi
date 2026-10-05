@@ -41,6 +41,10 @@ pub enum DomainError {
     #[error("Commit introuvable: {id}")]
     CommitNotFound { id: String },
 
+    /// Authentification requise ou invalide (Phase 19A — Auth).
+    #[error("Non authentifié: {0}")]
+    Unauthorized(String),
+
     /// Accès refusé (multi-tenant — Phase 10A).
     #[error("Accès refusé: {0}")]
     Forbidden(String),
@@ -53,9 +57,18 @@ pub enum DomainError {
     #[error("Erreur interne: {0}")]
     Internal(String),
 
+    /// Erreur d'un service externe (ex: GitHub API rate limit — Phase 19B).
+    #[error("Service externe: {0}")]
+    External(String),
+
     /// Le chemin pointe vers un fichier, pas un répertoire.
     /// Retourné par `list_tree` quand le path est un fichier —
     /// signal au handler de basculer vers `read_blob`.
     #[error("Le chemin est un fichier, pas un répertoire: {path}")]
     IsFile { path: String },
+
+    /// Conflit de merge — le fast-forward est impossible car les branches ont divergé.
+    /// Phase 26A — Le Katana Croisé.
+    #[error("Merge conflict: {source_branch} cannot be fast-forwarded into {target_branch}")]
+    MergeConflict { source_branch: String, target_branch: String },
 }

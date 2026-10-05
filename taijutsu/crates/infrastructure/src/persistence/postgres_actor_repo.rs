@@ -11,7 +11,7 @@ use uuid::Uuid;
 
 use domain::entities::actor::{Actor, ActorType};
 use domain::errors::DomainError;
-use domain::ports::actor_repository::ActorRepository;
+use domain::ports::actor_repository::{ActorRepository, PatInfo};
 
 /// Adaptateur PostgreSQL pour la persistence des acteurs.
 #[derive(Debug, Clone)]
@@ -50,9 +50,21 @@ fn row_to_actor(row: sqlx::postgres::PgRow) -> Result<Actor, DomainError> {
         avatar_url: row
             .try_get("avatar_url")
             .map_err(|e| DomainError::Persistence(e.to_string()))?,
+        email: row
+            .try_get("email")
+            .map_err(|e| DomainError::Persistence(e.to_string()))?,
         bio: row
             .try_get("bio")
             .map_err(|e| DomainError::Persistence(e.to_string()))?,
+        github_id: row
+            .try_get::<Option<i64>, _>("github_id")
+            .unwrap_or(None),
+        github_token: row
+            .try_get::<Option<String>, _>("github_token")
+            .unwrap_or(None),
+        parent_id: row
+            .try_get::<Option<Uuid>, _>("parent_id")
+            .unwrap_or(None),
         created_at: row
             .try_get::<DateTime<Utc>, _>("created_at")
             .map_err(|e| DomainError::Persistence(e.to_string()))?,
@@ -65,8 +77,8 @@ impl ActorRepository for PostgresActorRepository {
     async fn save(&self, actor: &Actor) -> Result<(), DomainError> {
         sqlx::query(
             r#"
-            INSERT INTO actors (id, handle, display_name, actor_type, avatar_url, bio, created_at)
-            VALUES ($1, $2, $3, $4::actor_type, $5, $6, $7)
+            INSERT INTO actors (id, handle, display_name, actor_type, avatar_url, email, bio, github_id, github_token, parent_id, created_at)
+            VALUES ($1, $2, $3, $4::actor_type, $5, $6, $7, $8, $9, $10, $11)
             "#,
         )
         .bind(actor.id)
@@ -74,7 +86,11 @@ impl ActorRepository for PostgresActorRepository {
         .bind(&actor.display_name)
         .bind(actor.actor_type.as_sql_str())
         .bind(&actor.avatar_url)
+        .bind(&actor.email)
         .bind(&actor.bio)
+        .bind(actor.github_id)
+        .bind(&actor.github_token)
+        .bind(actor.parent_id)
         .bind(actor.created_at)
         .execute(&self.pool)
         .await
@@ -92,7 +108,7 @@ impl ActorRepository for PostgresActorRepository {
     #[instrument(skip(self))]
     async fn find_by_id(&self, id: &Uuid) -> Result<Option<Actor>, DomainError> {
         let row = sqlx::query(
-            "SELECT id, handle, display_name, actor_type::text, avatar_url, bio, created_at \
+            "SELECT id, handle, display_name, actor_type::text, avatar_url, email, bio, github_id, github_token, parent_id, created_at \
              FROM actors WHERE id = $1",
         )
         .bind(id)
@@ -109,7 +125,7 @@ impl ActorRepository for PostgresActorRepository {
     #[instrument(skip(self))]
     async fn find_by_handle(&self, handle: &str) -> Result<Option<Actor>, DomainError> {
         let row = sqlx::query(
-            "SELECT id, handle, display_name, actor_type::text, avatar_url, bio, created_at \
+            "SELECT id, handle, display_name, actor_type::text, avatar_url, email, bio, github_id, github_token, parent_id, created_at \
              FROM actors WHERE handle = $1",
         )
         .bind(handle)
@@ -121,5 +137,242 @@ impl ActorRepository for PostgresActorRepository {
             Some(r) => Ok(Some(row_to_actor(r)?)),
             None => Ok(None),
         }
+    }
+
+    #[instrument(skip(self))]
+    async fn find_by_email(&self, email: &str) -> Result<Option<Actor>, DomainError> {
+        let row = sqlx::query(
+            "SELECT a.id, a.handle, a.display_name, a.actor_type::text, a.avatar_url, a.email, a.bio, a.github_id, a.github_token, a.parent_id, a.created_at \
+             FROM actors a WHERE a.email = $1",
+        )
+        .bind(email)
+        .fetch_optional(&self.pool)
+        .await
+        .map_err(|e| DomainError::Persistence(e.to_string()))?;
+
+        match row {
+            Some(r) => Ok(Some(row_to_actor(r)?)),
+            None => Ok(None),
+        }
+    }
+
+    // ── Credentials (Phase 19A) ─────────────────────────
+
+    #[instrument(skip(self, secret_hash))]
+    async fn save_credential(
+        &self,
+        actor_id: &Uuid,
+        cred_type: &str,
+        secret_hash: &str,
+        email: Option<&str>,
+        label: Option<&str>,
+    ) -> Result<(), DomainError> {
+        sqlx::query(
+            r#"
+            INSERT INTO credentials (actor_id, cred_type, secret_hash, email, label)
+            VALUES ($1, $2::credential_type, $3, $4, $5)
+            "#,
+        )
+        .bind(actor_id)
+        .bind(cred_type)
+        .bind(secret_hash)
+        .bind(email)
+        .bind(label)
+        .execute(&self.pool)
+        .await
+        .map_err(|e| {
+            if e.to_string().contains("duplicate key") {
+                DomainError::Duplicate("Credential already exists".to_string())
+            } else {
+                DomainError::Persistence(e.to_string())
+            }
+        })?;
+
+        Ok(())
+    }
+
+    #[instrument(skip(self))]
+    async fn find_credential_hash(
+        &self,
+        actor_id: &Uuid,
+        cred_type: &str,
+    ) -> Result<Option<String>, DomainError> {
+        let row = sqlx::query(
+            "SELECT secret_hash FROM credentials \
+             WHERE actor_id = $1 AND cred_type = $2::credential_type \
+             ORDER BY created_at DESC LIMIT 1",
+        )
+        .bind(actor_id)
+        .bind(cred_type)
+        .fetch_optional(&self.pool)
+        .await
+        .map_err(|e| DomainError::Persistence(e.to_string()))?;
+
+        Ok(row.map(|r| r.try_get::<String, _>("secret_hash").unwrap_or_default()))
+    }
+
+    #[instrument(skip(self))]
+    async fn find_all_credential_hashes(
+        &self,
+        actor_id: &Uuid,
+        cred_type: &str,
+    ) -> Result<Vec<String>, DomainError> {
+        let rows = sqlx::query(
+            "SELECT secret_hash FROM credentials \
+             WHERE actor_id = $1 AND cred_type = $2::credential_type",
+        )
+        .bind(actor_id)
+        .bind(cred_type)
+        .fetch_all(&self.pool)
+        .await
+        .map_err(|e| DomainError::Persistence(e.to_string()))?;
+
+        Ok(rows
+            .into_iter()
+            .filter_map(|r| r.try_get::<String, _>("secret_hash").ok())
+            .collect())
+    }
+
+    #[instrument(skip(self))]
+    async fn find_actor_by_credential_hash(
+        &self,
+        secret_hash: &str,
+        cred_type: &str,
+    ) -> Result<Option<Actor>, DomainError> {
+        let row = sqlx::query(
+            "SELECT a.id, a.handle, a.display_name, a.actor_type::text, \
+                    a.avatar_url, a.email, a.bio, a.github_id, a.github_token, a.parent_id, a.created_at \
+             FROM actors a \
+             INNER JOIN credentials c ON c.actor_id = a.id \
+             WHERE c.secret_hash = $1 AND c.cred_type = $2::credential_type \
+             LIMIT 1",
+        )
+        .bind(secret_hash)
+        .bind(cred_type)
+        .fetch_optional(&self.pool)
+        .await
+        .map_err(|e| DomainError::Persistence(e.to_string()))?;
+
+        match row {
+            Some(r) => Ok(Some(row_to_actor(r)?)),
+            None => Ok(None),
+        }
+    }
+
+    // ── GitHub OAuth (Phase 20) ──────────────────────────
+
+    #[instrument(skip(self))]
+    async fn find_by_github_id(&self, github_id: i64) -> Result<Option<Actor>, DomainError> {
+        let row = sqlx::query(
+            "SELECT id, handle, display_name, actor_type::text, avatar_url, email, bio, github_id, github_token, parent_id, created_at \
+             FROM actors WHERE github_id = $1",
+        )
+        .bind(github_id)
+        .fetch_optional(&self.pool)
+        .await
+        .map_err(|e| DomainError::Persistence(e.to_string()))?;
+
+        match row {
+            Some(r) => Ok(Some(row_to_actor(r)?)),
+            None => Ok(None),
+        }
+    }
+
+    #[instrument(skip(self))]
+    async fn update_github_id(&self, actor_id: &Uuid, github_id: i64) -> Result<(), DomainError> {
+        sqlx::query("UPDATE actors SET github_id = $1 WHERE id = $2")
+            .bind(github_id)
+            .bind(actor_id)
+            .execute(&self.pool)
+            .await
+            .map_err(|e| DomainError::Persistence(e.to_string()))?;
+
+        Ok(())
+    }
+
+    // ── Phase 20B — Le Clonage Massif ────────────────────
+
+    #[instrument(skip(self, token))]
+    async fn update_github_token(&self, actor_id: &Uuid, token: &str) -> Result<(), DomainError> {
+        sqlx::query("UPDATE actors SET github_token = $1 WHERE id = $2")
+            .bind(token)
+            .bind(actor_id)
+            .execute(&self.pool)
+            .await
+            .map_err(|e| DomainError::Persistence(e.to_string()))?;
+
+        Ok(())
+    }
+
+    #[instrument(skip(self))]
+    async fn get_github_token(&self, actor_id: &Uuid) -> Result<Option<String>, DomainError> {
+        let row = sqlx::query("SELECT github_token FROM actors WHERE id = $1")
+            .bind(actor_id)
+            .fetch_optional(&self.pool)
+            .await
+            .map_err(|e| DomainError::Persistence(e.to_string()))?;
+
+        Ok(row.and_then(|r| r.try_get::<Option<String>, _>("github_token").unwrap_or(None)))
+    }
+
+    #[instrument(skip(self))]
+    async fn list_pats(&self, actor_id: &Uuid) -> Result<Vec<PatInfo>, DomainError> {
+        let rows = sqlx::query(
+            "SELECT id, label, created_at FROM credentials \
+             WHERE actor_id = $1 AND cred_type = 'api_key' \
+             ORDER BY created_at DESC",
+        )
+        .bind(actor_id)
+        .fetch_all(&self.pool)
+        .await
+        .map_err(|e| DomainError::Persistence(e.to_string()))?;
+
+        Ok(rows
+            .into_iter()
+            .filter_map(|r| {
+                Some(PatInfo {
+                    id: r.try_get("id").ok()?,
+                    label: r.try_get("label").ok()?,
+                    created_at: r.try_get("created_at").ok()?,
+                })
+            })
+            .collect())
+    }
+
+    // ── Phase 25 — Service Accounts ─────────────────────────
+
+    #[instrument(skip(self))]
+    async fn list_service_accounts(
+        &self,
+        parent_id: &Uuid,
+    ) -> Result<Vec<Actor>, DomainError> {
+        let rows = sqlx::query(
+            "SELECT id, handle, display_name, actor_type::text, avatar_url, email, bio, github_id, github_token, parent_id, created_at \
+             FROM actors WHERE parent_id = $1 AND actor_type = 'ai_agent' \
+             ORDER BY created_at DESC",
+        )
+        .bind(parent_id)
+        .fetch_all(&self.pool)
+        .await
+        .map_err(|e| DomainError::Persistence(e.to_string()))?;
+
+        rows.into_iter().map(row_to_actor).collect()
+    }
+
+    #[instrument(skip(self))]
+    async fn delete_service_account(
+        &self,
+        bot_id: &Uuid,
+    ) -> Result<bool, DomainError> {
+        // Hard delete : supprime l'acteur bot + cascade sur credentials
+        let result = sqlx::query(
+            "DELETE FROM actors WHERE id = $1 AND actor_type = 'ai_agent'",
+        )
+        .bind(bot_id)
+        .execute(&self.pool)
+        .await
+        .map_err(|e| DomainError::Persistence(e.to_string()))?;
+
+        Ok(result.rows_affected() > 0)
     }
 }

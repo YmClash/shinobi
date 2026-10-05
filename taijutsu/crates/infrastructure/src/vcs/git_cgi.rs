@@ -19,8 +19,10 @@
 //! - Linux   : `/usr/lib/git-core/git-http-backend`
 
 use std::path::{Path, PathBuf};
+use std::pin::Pin;
 use std::process::Stdio;
 
+use futures::StreamExt;
 use tokio::io::AsyncWriteExt;
 use tokio::process::Command;
 use tracing::{info, instrument, warn};
@@ -203,6 +205,148 @@ impl GitCgiBackend {
             headers_count = response.headers.len(),
             body_size = response.body.len(),
             "git-http-backend CGI response parsed"
+        );
+
+        Ok(response)
+    }
+
+    /// Execute le CGI `git http-backend` en **streaming** — N'ALLOUE PAS
+    /// le body complet en RAM.
+    ///
+    /// ## Phase 36 — DEBT-007 (Streaming CGI)
+    ///
+    /// Contrairement a `execute_cgi()` qui prend un `&[u8]` (body entier en RAM),
+    /// cette methode recoit un `prefix` (les quelques centaines d'octets de
+    /// pkt-line deja consommes par le parser de refs) et un `remaining_stream`
+    /// (le flux binaire du PACK file potentiellement volumineux).
+    ///
+    /// Le flux est pipe directement dans le stdin du child process chunk par
+    /// chunk, sans jamais stocker l'integralite du PACK en memoire.
+    ///
+    /// ## Garanties
+    /// - Utilise `tokio::process::ChildStdin` (async) — ne bloque PAS le runtime
+    /// - Pic memoire ~ taille d'un chunk (~64 Ko) au lieu de la taille totale du push
+    /// - Le `content_length` est relaye depuis le header HTTP client (pas calcule)
+    ///
+    /// ## Protocole
+    /// `git http-backend` lit stdin sequentiellement : d'abord les pkt-line refs,
+    /// puis le PACK binaire. Le prefix est ecrit en premier, suivi du flux restant.
+    /// Le drop de stdin signale EOF → le CGI commence le traitement.
+    #[instrument(skip(self, prefix, remaining_stream), fields(path_info = %path_info))]
+    pub async fn execute_cgi_streaming(
+        &self,
+        repo_git_path: &Path,
+        path_info: &str,
+        content_type: &str,
+        content_length: Option<String>,
+        prefix: Vec<u8>,
+        mut remaining_stream: Pin<Box<dyn futures::Stream<Item = Result<Vec<u8>, String>> + Send>>,
+    ) -> Result<CgiResponse, DomainError> {
+        let project_root = repo_git_path.parent().unwrap_or(repo_git_path);
+        let repo_dir_name = repo_git_path
+            .file_name()
+            .and_then(|n| n.to_str())
+            .unwrap_or("git");
+        let full_path_info = format!("/{repo_dir_name}{path_info}");
+
+        let mut cmd = Command::new(&self.http_backend_path);
+
+        cmd.env("GIT_PROJECT_ROOT", project_root)
+            .env("GIT_HTTP_EXPORT_ALL", "1")
+            .env("PATH_INFO", &full_path_info)
+            .env("QUERY_STRING", "")
+            .env("REQUEST_METHOD", "POST")
+            .env("CONTENT_TYPE", content_type);
+
+        cmd.env("GIT_CONFIG_COUNT", "2")
+            .env("GIT_CONFIG_KEY_0", "http.receivepack")
+            .env("GIT_CONFIG_VALUE_0", "true")
+            .env("GIT_CONFIG_KEY_1", "http.uploadpack")
+            .env("GIT_CONFIG_VALUE_1", "true");
+
+        // Relayer CONTENT_LENGTH depuis le header HTTP client.
+        // Si absent (chunked transfer), ne pas le set — git http-backend
+        // sait lire jusqu'a EOF.
+        if let Some(cl) = &content_length {
+            cmd.env("CONTENT_LENGTH", cl);
+        }
+
+        cmd.stdin(Stdio::piped())
+            .stdout(Stdio::piped())
+            .stderr(Stdio::piped());
+
+        let mut child = cmd.spawn().map_err(|e| {
+            DomainError::VcsError(format!("Failed to spawn git-http-backend (streaming): {e}"))
+        })?;
+
+        // ── Piping stdin : prefix + stream (async, zero copie globale) ──
+        if let Some(mut stdin) = child.stdin.take() {
+            // 1. Ecrire le prefix (pkt-line refs deja consommes, ~200 bytes)
+            if !prefix.is_empty() {
+                stdin.write_all(&prefix).await.map_err(|e| {
+                    DomainError::VcsError(format!("Failed to write prefix to git stdin: {e}"))
+                })?;
+            }
+
+            // 2. Pipe le flux restant chunk par chunk
+            //    Utilise tokio::process::ChildStdin (async) — NE BLOQUE PAS le runtime
+            let mut bytes_piped: u64 = prefix.len() as u64;
+            while let Some(chunk_result) = remaining_stream.next().await {
+                match chunk_result {
+                    Ok(chunk) => {
+                        stdin.write_all(&chunk).await.map_err(|e| {
+                            DomainError::VcsError(format!(
+                                "Failed to pipe stream to git stdin: {e}"
+                            ))
+                        })?;
+                        bytes_piped += chunk.len() as u64;
+                    }
+                    Err(e) => {
+                        warn!(
+                            error = %e,
+                            bytes_piped = bytes_piped,
+                            "CGI streaming: erreur lecture body stream — fermeture stdin"
+                        );
+                        break; // Drop stdin → EOF prématuré → le CGI gère l'erreur
+                    }
+                }
+            }
+
+            // 3. Drop stdin → EOF → le CGI commence le traitement du pack
+            drop(stdin);
+
+            info!(
+                bytes_piped = bytes_piped,
+                "CGI streaming: stdin pipe complete"
+            );
+        }
+
+        // Attendre la fin du processus et lire stdout/stderr
+        let output = child.wait_with_output().await.map_err(|e| {
+            DomainError::VcsError(format!("git-http-backend (streaming) wait failed: {e}"))
+        })?;
+
+        if !output.status.success() {
+            let stderr = String::from_utf8_lossy(&output.stderr);
+            warn!(
+                exit_code = ?output.status.code(),
+                stderr = %stderr,
+                "git-http-backend (streaming) returned non-zero exit code"
+            );
+            return Err(DomainError::VcsError(format!(
+                "git-http-backend failed (exit {:?}): {}",
+                output.status.code(),
+                stderr.trim()
+            )));
+        }
+
+        let response = parse_cgi_output(&output.stdout);
+
+        info!(
+            status = response.status,
+            headers_count = response.headers.len(),
+            body_size = response.body.len(),
+            "git-http-backend CGI streaming response parsed"
         );
 
         Ok(response)

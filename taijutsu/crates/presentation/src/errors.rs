@@ -23,11 +23,16 @@ impl IntoResponse for AppError {
                 (StatusCode::UNPROCESSABLE_ENTITY, self.0.to_string())
             }
             DomainError::Conflict(_) => (StatusCode::CONFLICT, self.0.to_string()),
+            DomainError::Unauthorized(_) => (StatusCode::UNAUTHORIZED, self.0.to_string()),
             DomainError::Forbidden(_) => (StatusCode::FORBIDDEN, self.0.to_string()),
             DomainError::Duplicate(_) => (StatusCode::CONFLICT, self.0.to_string()),
+            DomainError::MergeConflict { .. } => (StatusCode::CONFLICT, self.0.to_string()),
             DomainError::IsFile { .. } => {
                 // Ne devrait pas arriver : le handler gère IsFile avant d'appeler From<DomainError>
                 (StatusCode::UNPROCESSABLE_ENTITY, self.0.to_string())
+            }
+            DomainError::External(_) => {
+                (StatusCode::BAD_GATEWAY, self.0.to_string())
             }
             DomainError::Persistence(_)
             | DomainError::VcsError(_)
@@ -67,9 +72,12 @@ pub fn domain_error_to_status(err: DomainError) -> tonic::Status {
         DomainError::CommitNotFound { .. } => tonic::Status::not_found(err.to_string()),
         DomainError::BusinessRule(_) => tonic::Status::invalid_argument(err.to_string()),
         DomainError::Conflict(_) => tonic::Status::already_exists(err.to_string()),
+        DomainError::Unauthorized(_) => tonic::Status::unauthenticated(err.to_string()),
         DomainError::Forbidden(_) => tonic::Status::permission_denied(err.to_string()),
         DomainError::Duplicate(_) => tonic::Status::already_exists(err.to_string()),
+        DomainError::MergeConflict { .. } => tonic::Status::failed_precondition(err.to_string()),
         DomainError::IsFile { .. } => tonic::Status::invalid_argument(err.to_string()),
+        DomainError::External(_) => tonic::Status::unavailable(err.to_string()),
         DomainError::Persistence(_)
         | DomainError::VcsError(_)
         | DomainError::StorageError(_)

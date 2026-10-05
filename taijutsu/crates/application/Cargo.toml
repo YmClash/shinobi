@@ -5,8 +5,9 @@ edition = "2024"
 description = "SHINOBI — Use Cases (orchestration de la logique métier)"
 
 [dependencies]
-domain      = { path = "../domain" }
-tensai      = { path = "../tensai" }
+domain         = { path = "../domain" }
+infrastructure = { path = "../infrastructure" }
+tensai         = { path = "../tensai" }
 uuid        = { workspace = true }
 chrono      = { workspace = true }
 async-trait = { workspace = true }
@@ -14,4 +15,16 @@ tracing     = { workspace = true }
 tokio       = { workspace = true }
 serde       = { workspace = true }
 serde_json  = { workspace = true }
+reqwest     = { workspace = true }
+rand        = { workspace = true }
+url         = { workspace = true }
+urlencoding = "2"
 
+# — Phase 40 — Jutsu Config Parser —
+serde_yaml = { workspace = true }
+
+# — Phase 41 — Kage Bunshin (Auto-Healing) —
+regex = { workspace = true }
+
+[dev-dependencies]
+tempfile = { workspace = true }

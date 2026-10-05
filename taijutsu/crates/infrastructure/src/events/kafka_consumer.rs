@@ -4,6 +4,26 @@
 //! JSON du topic `shinobi.vcs.operations` et les transmettre à l'agent
 //! Tensai pour analyse sémantique en temps réel.
 //!
+//! ## Architecture Découplée (Phase 22)
+//!
+//! Le consumer utilise un pattern **mpsc bounded channel** pour découpler
+//! la boucle de polling Kafka du traitement sémantique (embedding + chunking).
+//!
+//! ```text
+//! ┌─────────────────────┐     ┌──────────────────────────┐
+//! │  Consumer (rapide)   │     │  Worker (séquentiel)      │
+//! │  Kafka recv()        │     │  rx.recv()                │
+//! │  → tx.send(op)      ├────►│  → handler(op).await      │
+//! │  → offset validé ✅  │ mpsc│  → un par un              │
+//! │  → retour écouter    │     │  → pas d'OOM embedding    │
+//! └─────────────────────┘     └──────────────────────────┘
+//! ```
+//!
+//! **Pourquoi ?** Lors d'un bulk import (5+ commits), sans découplage,
+//! le consumer traite chaque message séquentiellement dans la boucle recv(),
+//! ce qui peut dépasser le `max.poll.interval.ms` de Kafka et causer
+//! un PollExceeded. Avec le channel, le consumer reste réactif.
+//!
 //! ## Architecture
 //! - `StreamConsumer` : consumer async natif rdkafka (compatible tokio).
 //! - Consumer group : `shinobi-tensai-analyzer` — isolé du producer.
@@ -18,6 +38,7 @@ use rdkafka::config::ClientConfig;
 use rdkafka::consumer::{Consumer, StreamConsumer};
 use rdkafka::Message;
 use metrics::counter;
+use tokio::sync::mpsc;
 use tokio_util::sync::CancellationToken;
 use tracing::{error, info, warn};
 
@@ -25,10 +46,15 @@ use domain::entities::operation::Operation;
 use domain::errors::DomainError;
 use domain::ports::event_consumer::OperationHandler;
 
+/// Taille du buffer mpsc — salle d'attente interne.
+/// 32 messages max en file d'attente avant que le consumer ralentisse
+/// (backpressure naturelle). Suffisant pour un bulk import sans blocage.
+const CHANNEL_BUFFER_SIZE: usize = 32;
+
 /// Consumer Kafka pour l'agent Tensai.
 ///
 /// Écoute le topic `shinobi.vcs.operations` et transmet chaque
-/// `Operation` désérialisée au handler fourni (use case d'analyse).
+/// `Operation` désérialisée au worker via un canal mpsc borné.
 pub struct KafkaEventConsumer {
     consumer: StreamConsumer,
     topic: String,
@@ -59,6 +85,10 @@ impl KafkaEventConsumer {
             .set("enable.auto.commit", "true")
             .set("auto.commit.interval.ms", "5000")
             .set("session.timeout.ms", "30000")
+            // Phase 22 : Filet de sécurité — 15 min max entre polls.
+            // Le découplage mpsc rend ceci quasi-impossible à atteindre,
+            // mais c'est une défense en profondeur.
+            .set("max.poll.interval.ms", "900000")
             .create()
             .map_err(|e| {
                 DomainError::Internal(format!("Kafka consumer creation failed: {e}"))
@@ -68,7 +98,7 @@ impl KafkaEventConsumer {
             brokers = %brokers,
             topic = %topic,
             group_id = %group_id,
-            "KafkaEventConsumer initialisé"
+            "KafkaEventConsumer initialisé (mpsc découplé)"
         );
 
         Ok(Self {
@@ -78,11 +108,10 @@ impl KafkaEventConsumer {
         })
     }
 
-    /// Démarre la boucle de consommation.
+    /// Démarre la boucle de consommation avec découplage mpsc.
     ///
-    /// Écoute le topic Kafka et transmet chaque message au handler.
-    /// La boucle tourne indéfiniment jusqu'au déclenchement du
-    /// `CancellationToken` (shutdown gracieux).
+    /// Spawne un **worker séquentiel** qui traite les messages un par un,
+    /// pendant que la boucle principale continue de poller Kafka sans blocage.
     ///
     /// # Arguments
     /// - `handler` : callback invoqué pour chaque `Operation` reçue.
@@ -97,12 +126,54 @@ impl KafkaEventConsumer {
                 ))
             })?;
 
+        // ── Canal mpsc borné : la "salle d'attente" ──────────────
+        let (tx, mut rx) = mpsc::channel::<Operation>(CHANNEL_BUFFER_SIZE);
+
+        // ── Worker séquentiel : traite les analyses une par une ──
+        let worker_cancel = self.cancel_token.clone();
+        let topic_clone = self.topic.clone();
+        let worker_handle = tokio::spawn(async move {
+            info!("🧠 Tensai Worker — Démarré (traitement séquentiel)");
+
+            loop {
+                tokio::select! {
+                    _ = worker_cancel.cancelled() => {
+                        info!("🛑 Tensai Worker — Shutdown gracieux");
+                        break;
+                    }
+                    maybe_operation = rx.recv() => {
+                        match maybe_operation {
+                            Some(operation) => {
+                                info!(
+                                    operation_id = %operation.id,
+                                    "🧠 Tensai Worker — Traitement démarré"
+                                );
+                                handler(operation).await;
+                                counter!(
+                                    "tensai_analyses_processed_total",
+                                    "topic" => topic_clone.clone()
+                                ).increment(1);
+                            }
+                            None => {
+                                // Le sender (consumer) a été droppé → fin normale.
+                                info!("🧠 Tensai Worker — Canal fermé, arrêt");
+                                break;
+                            }
+                        }
+                    }
+                }
+            }
+
+            info!("🧠 Tensai Worker — Arrêté proprement");
+        });
+
         info!(
             topic = %self.topic,
-            "🧠 Tensai Consumer — Boucle de consommation démarrée"
+            buffer_size = CHANNEL_BUFFER_SIZE,
+            "🧠 Tensai Consumer — Boucle de consommation démarrée (mpsc découplé)"
         );
 
-        // Boucle de consommation avec shutdown gracieux.
+        // ── Consumer : polling Kafka rapide → dispatch dans le canal ──
         loop {
             tokio::select! {
                 // Shutdown gracieux : le token est annulé.
@@ -145,15 +216,21 @@ impl KafkaEventConsumer {
                                         has_ipfs = operation.has_ipfs_content(),
                                         partition = message.partition(),
                                         offset = message.offset(),
-                                        "📨 Tensai — Opération reçue de Kafka"
+                                        "📨 Tensai — Opération reçue de Kafka → file d'attente"
                                     );
 
                                     // Métriques Prometheus
                                     counter!("kafka_messages_consumed_total", "consumer" => "tensai", "topic" => self.topic.clone())
                                         .increment(1);
 
-                                    // Invoquer le handler (analyse sémantique).
-                                    handler(operation).await;
+                                    // Envoyer dans le canal mpsc (non bloquant si buffer < 32).
+                                    // Si le buffer est plein, on attend — backpressure naturelle.
+                                    if let Err(e) = tx.send(operation).await {
+                                        error!(
+                                            operation_id = %e.0.id,
+                                            "❌ Tensai — Canal mpsc fermé, message perdu"
+                                        );
+                                    }
                                 }
                                 Err(e) => {
                                     warn!(
@@ -179,6 +256,10 @@ impl KafkaEventConsumer {
                 }
             }
         }
+
+        // ── Cleanup : droper le sender et attendre le worker ────
+        drop(tx);
+        let _ = worker_handle.await;
 
         info!("🧠 Tensai Consumer — Boucle arrêtée proprement");
         Ok(())

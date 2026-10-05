@@ -13,6 +13,12 @@ interface DiffStats {
 
 type DiffLayout = "unified" | "split";
 
+/** Phase 30 — AI Provenance metadata for gutter colorization. */
+interface AiContext {
+  /** Agent name (e.g. "antigravity", "copilot"). */
+  agent: string;
+}
+
 interface UnifiedDiffViewerProps {
   /** Liste des fichiers modifiés avec leurs hunks et lignes. */
   files: FileDiff[];
@@ -20,6 +26,8 @@ interface UnifiedDiffViewerProps {
   stats: DiffStats;
   /** Classe CSS additionnelle (optionnel). */
   className?: string;
+  /** Phase 30 — AI Provenance context. If set, enables gutter colorization. */
+  aiContext?: AiContext | null;
 }
 
 // ── Helpers ──────────────────────────────────────────────────────────
@@ -79,18 +87,30 @@ function buildSplitPairs(lines: DiffLine[]): { left: DiffLine | null; right: Dif
 // ── Component ────────────────────────────────────────────────────────
 
 /**
- * UnifiedDiffViewer — Composant réutilisable de diff colorisé GitHub-style.
+ * UnifiedDiffViewer V2 — Diff colorisé GitHub-style + AI Provenance Gutter.
  *
  * Supporte deux layouts :
  * - **Unified** : diff classique (add/remove intercalés)
  * - **Split** : side-by-side (ancien à gauche, nouveau à droite)
  *
+ * ## Phase 30 — AI Provenance
+ * Quand `aiContext` est fourni, un toggle "AI Gutter" apparaît dans la
+ * toolbar. Toutes les lignes `add` reçoivent une barre colorée verticale
+ * dans le gutter pour signaler leur provenance IA.
+ *
  * Utilisé dans :
  * - `/[owner]/[repo]/commits/[id]` (page de détail commit)
  * - `/[owner]/[repo]/operations/[id]` (onglet "Diff Complet")
+ * - `/[owner]/[repo]/mrs/[number]` (onglet "Files Changed")
  */
-export function UnifiedDiffViewer({ files, stats, className = "" }: UnifiedDiffViewerProps) {
+export function UnifiedDiffViewer({ files, stats, className = "", aiContext }: UnifiedDiffViewerProps) {
   const [layout, setLayout] = useState<DiffLayout>("unified");
+  // Phase 30 — AI Gutter toggle (default ON when aiContext is present)
+  const [showAiGutter, setShowAiGutter] = useState(true);
+
+  // Is AI provenance active?
+  const aiActive = !!aiContext && showAiGutter;
+  const agentAttr = aiContext?.agent ?? "";
 
   if (files.length === 0) {
     return (
@@ -108,7 +128,7 @@ export function UnifiedDiffViewer({ files, stats, className = "" }: UnifiedDiffV
 
   return (
     <div className={`diff-files ${className}`}>
-      {/* ── Stats Bar + Layout Toggle ──────────────────── */}
+      {/* ── Stats Bar + Layout Toggle + AI Gutter Toggle ── */}
       <div className="diff-stats-bar">
         <span className="diff-stats-info">
           Showing <strong>{stats.files_changed}</strong> changed file{stats.files_changed !== 1 ? "s" : ""} with{" "}
@@ -116,8 +136,19 @@ export function UnifiedDiffViewer({ files, stats, className = "" }: UnifiedDiffV
           <strong className="diff-stat-del">-{stats.deletions}</strong> deletions
         </span>
 
-        {/* Layout Toggle */}
         <div className="diff-layout-toggle">
+          {/* AI Gutter Toggle — only visible when aiContext is provided */}
+          {aiContext && (
+            <button
+              className={`diff-layout-btn diff-ai-toggle-btn ${showAiGutter ? "diff-ai-toggle-active" : ""}`}
+              onClick={() => setShowAiGutter((v) => !v)}
+              title={showAiGutter ? "Masquer la provenance IA" : "Afficher la provenance IA"}
+            >
+              <span className="diff-ai-toggle-icon">🤖</span>
+              <span className="diff-layout-label">AI</span>
+            </button>
+          )}
+
           <button
             className={`diff-layout-btn ${layout === "unified" ? "diff-layout-btn-active" : ""}`}
             onClick={() => setLayout("unified")}
@@ -142,6 +173,20 @@ export function UnifiedDiffViewer({ files, stats, className = "" }: UnifiedDiffV
           </button>
         </div>
       </div>
+
+      {/* ── AI Context Banner (when active) ───────────── */}
+      {aiActive && (
+        <div className="diff-ai-banner" data-agent={agentAttr}>
+          <span className="diff-ai-banner-icon">🤖</span>
+          <span className="diff-ai-banner-text">
+            AI Provenance active — <strong>{aiContext.agent}</strong> authored additions are highlighted
+          </span>
+          <span className="diff-ai-banner-legend">
+            <span className="diff-ai-legend-bar" data-agent={agentAttr} />
+            AI-authored lines
+          </span>
+        </div>
+      )}
 
       {/* ── File Tree (quick nav) ──────────────────────── */}
       <div className="diff-file-tree">
@@ -176,6 +221,12 @@ export function UnifiedDiffViewer({ files, stats, className = "" }: UnifiedDiffV
                 {statusIcon(file.status)}
               </span>
               <span className="diff-file-name">{file.path}</span>
+              {/* AI badge per file — only for added/modified files */}
+              {aiActive && file.additions > 0 && (
+                <span className="diff-file-ai-badge" data-agent={agentAttr}>
+                  🤖 {file.additions}
+                </span>
+              )}
             </div>
             <div className="diff-file-header-right">
               {file.additions > 0 && (
@@ -202,29 +253,33 @@ export function UnifiedDiffViewer({ files, stats, className = "" }: UnifiedDiffV
               {file.hunks.map((hunk: DiffHunk, hunkIdx: number) => (
                 <div key={hunkIdx} className="diff-hunk">
                   <div className="diff-hunk-header">{hunk.header}</div>
-                  {hunk.lines.map((line: DiffLine, lineIdx: number) => (
-                    <div
-                      key={lineIdx}
-                      className={`diff-line diff-line-${line.kind}`}
-                    >
-                      <span className="diff-line-num diff-line-num-old">
-                        {line.old_line ?? ""}
-                      </span>
-                      <span className="diff-line-num diff-line-num-new">
-                        {line.new_line ?? ""}
-                      </span>
-                      <span className="diff-line-marker">
-                        {line.kind === "add"
-                          ? "+"
-                          : line.kind === "remove"
-                          ? "-"
-                          : " "}
-                      </span>
-                      <span className="diff-line-content">
-                        {line.content || "\u00A0"}
-                      </span>
-                    </div>
-                  ))}
+                  {hunk.lines.map((line: DiffLine, lineIdx: number) => {
+                    const isAiLine = aiActive && line.kind === "add";
+                    return (
+                      <div
+                        key={lineIdx}
+                        className={`diff-line diff-line-${line.kind}${isAiLine ? " diff-line-ai" : ""}`}
+                        data-agent={isAiLine ? agentAttr : undefined}
+                      >
+                        <span className={`diff-line-num diff-line-num-old${isAiLine ? " diff-line-num-ai" : ""}`}>
+                          {line.old_line ?? ""}
+                        </span>
+                        <span className={`diff-line-num diff-line-num-new${isAiLine ? " diff-line-num-ai" : ""}`}>
+                          {line.new_line ?? ""}
+                        </span>
+                        <span className="diff-line-marker">
+                          {line.kind === "add"
+                            ? "+"
+                            : line.kind === "remove"
+                            ? "-"
+                            : " "}
+                        </span>
+                        <span className="diff-line-content">
+                          {line.content || "\u00A0"}
+                        </span>
+                      </div>
+                    );
+                  })}
                 </div>
               ))}
             </div>
@@ -239,55 +294,59 @@ export function UnifiedDiffViewer({ files, stats, className = "" }: UnifiedDiffV
                       <span className="diff-split-hunk-label">{hunk.header}</span>
                       <span className="diff-split-hunk-label">{hunk.header}</span>
                     </div>
-                    {pairs.map((pair, pairIdx) => (
-                      <div key={pairIdx} className="diff-split-row">
-                        {/* Left side (old / removed) */}
-                        <div
-                          className={`diff-split-cell ${
-                            pair.left === null
-                              ? "diff-split-cell-empty"
-                              : pair.left.kind === "remove"
-                              ? "diff-line-remove"
-                              : pair.left.kind === "context"
-                              ? "diff-line-context"
-                              : ""
-                          }`}
-                        >
-                          <span className="diff-line-num">
-                            {pair.left?.old_line ?? ""}
-                          </span>
-                          <span className="diff-line-marker">
-                            {pair.left?.kind === "remove" ? "-" : pair.left?.kind === "context" ? " " : ""}
-                          </span>
-                          <span className="diff-line-content">
-                            {pair.left?.content || "\u00A0"}
-                          </span>
-                        </div>
+                    {pairs.map((pair, pairIdx) => {
+                      const isRightAi = aiActive && pair.right?.kind === "add";
+                      return (
+                        <div key={pairIdx} className="diff-split-row">
+                          {/* Left side (old / removed) */}
+                          <div
+                            className={`diff-split-cell ${
+                              pair.left === null
+                                ? "diff-split-cell-empty"
+                                : pair.left.kind === "remove"
+                                ? "diff-line-remove"
+                                : pair.left.kind === "context"
+                                ? "diff-line-context"
+                                : ""
+                            }`}
+                          >
+                            <span className="diff-line-num">
+                              {pair.left?.old_line ?? ""}
+                            </span>
+                            <span className="diff-line-marker">
+                              {pair.left?.kind === "remove" ? "-" : pair.left?.kind === "context" ? " " : ""}
+                            </span>
+                            <span className="diff-line-content">
+                              {pair.left?.content || "\u00A0"}
+                            </span>
+                          </div>
 
-                        {/* Right side (new / added) */}
-                        <div
-                          className={`diff-split-cell ${
-                            pair.right === null
-                              ? "diff-split-cell-empty"
-                              : pair.right.kind === "add"
-                              ? "diff-line-add"
-                              : pair.right.kind === "context"
-                              ? "diff-line-context"
-                              : ""
-                          }`}
-                        >
-                          <span className="diff-line-num">
-                            {pair.right?.new_line ?? ""}
-                          </span>
-                          <span className="diff-line-marker">
-                            {pair.right?.kind === "add" ? "+" : pair.right?.kind === "context" ? " " : ""}
-                          </span>
-                          <span className="diff-line-content">
-                            {pair.right?.content || "\u00A0"}
-                          </span>
+                          {/* Right side (new / added) */}
+                          <div
+                            className={`diff-split-cell ${
+                              pair.right === null
+                                ? "diff-split-cell-empty"
+                                : pair.right.kind === "add"
+                                ? "diff-line-add"
+                                : pair.right.kind === "context"
+                                ? "diff-line-context"
+                                : ""
+                            }${isRightAi ? " diff-line-ai" : ""}`}
+                            data-agent={isRightAi ? agentAttr : undefined}
+                          >
+                            <span className={`diff-line-num${isRightAi ? " diff-line-num-ai" : ""}`}>
+                              {pair.right?.new_line ?? ""}
+                            </span>
+                            <span className="diff-line-marker">
+                              {pair.right?.kind === "add" ? "+" : pair.right?.kind === "context" ? " " : ""}
+                            </span>
+                            <span className="diff-line-content">
+                              {pair.right?.content || "\u00A0"}
+                            </span>
+                          </div>
                         </div>
-                      </div>
-                    ))}
+                      );
+                    })}
                   </div>
                 );
               })}

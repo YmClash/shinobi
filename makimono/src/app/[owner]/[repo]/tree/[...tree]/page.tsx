@@ -1,8 +1,12 @@
 // ═══════════════════════════════════════════════════════════════
-// SHINOBI — Code Explorer Page v2
-// Route: /[owner]/[repo]/tree/[revision]/[[...path]]
+// SHINOBI — Code Explorer Page v3
+// Route: /[owner]/[repo]/tree/[...tree]
 //
-// Layout 2 colonnes inspiré de la maquette :
+// Catch-all route: les segments après /tree/ sont combinés puis
+// résolus dynamiquement en (revision, path) via les refs connues.
+// Supporte les branches avec "/" (ex: feature/login).
+//
+// Layout 2 colonnes :
 //   - Gauche  : FileBrowser (répertoire) ou CodeViewer (fichier)
 //   - Droite  : Sidebar "À propos" avec métadonnées repo + Oracle
 // ═══════════════════════════════════════════════════════════════
@@ -19,20 +23,22 @@ import {
   FileCode,
   ExternalLink,
 } from "lucide-react";
-import { exploreTree, listRefs, buildBreadcrumbs } from "@/lib/explorer-api";
-import { getRepository, listOperations, getOperationReviews, buildRepoPrefix } from "@/lib/api";
+import { exploreTree, listRefs, buildBreadcrumbs, resolveRevisionAndPath } from "@/lib/explorer-api";
+import { getRepository, listOperations, getOperationReviews, buildRepoPrefix, getGitCloneUrl } from "@/lib/api";
 import BreadcrumbNav from "@/components/explorer/BreadcrumbNav";
 import BranchSelector from "@/components/explorer/BranchSelector";
 import FileBrowser from "@/components/explorer/FileBrowser";
 import ExplorerFileClient from "@/components/explorer/ExplorerFileClient";
+import DeleteRepoButton from "@/components/forge/delete-repo-button";
+import CloneDropdown from "@/components/explorer/CloneDropdown";
+import { ForkButton } from "@/components/repo/fork-button";
 
 // ── Route params ─────────────────────────────────────────────
 
 interface PageParams {
   owner: string;
   repo: string;
-  revision: string;
-  path?: string[];
+  tree: string[];  // catch-all: ["main"] ou ["feature","login","src","main.rs"]
 }
 
 interface PageProps {
@@ -44,11 +50,12 @@ interface PageProps {
 export async function generateMetadata({
   params,
 }: PageProps): Promise<Metadata> {
-  const { owner, repo, revision, path } = await params;
-  const filePath = path?.join("/") ?? "";
+  const { owner, repo, tree } = await params;
+  // Fallback metadata — la résolution exacte se fait dans la page
+  const display = tree.join("/");
   return {
-    title: `${filePath || "/"} · ${repo} @ ${revision} — SHINOBI`,
-    description: `Explorateur de code pour ${owner}/${repo} à la révision ${revision}`,
+    title: `${display || "/"} · ${repo} — SHINOBI`,
+    description: `Explorateur de code pour ${owner}/${repo}`,
   };
 }
 
@@ -91,23 +98,32 @@ function detectPrimaryLanguage(entries: { name: string }[]): string | null {
 // ── Page ─────────────────────────────────────────────────────
 
 export default async function ExplorerPage({ params }: PageProps) {
-  const { owner, repo, revision, path } = await params;
-  const filePath = path?.join("/") ?? "";
+  const { owner, repo, tree } = await params;
+
+  // ── Fetch refs en premier (nécessaire pour résoudre la revision) ──
+  const refsData = await listRefs(owner, repo).catch(() => ({
+    branches: [] as { name: string; target: string }[],
+    tags: [] as { name: string; target: string }[],
+    total: 0,
+  }));
+
+  // ── Résolution revision/path depuis les segments catch-all ──
+  const knownRefs = [
+    ...refsData.branches.map((b) => b.name),
+    ...refsData.tags.map((t) => t.name),
+  ];
+  const { revision, path: filePath } = resolveRevisionAndPath(tree, knownRefs);
 
   // ── Fetch parallèle ──────────────────────────────────────────
-  const [explorerData, refsData, repoData, opsData] =
+  const [explorerData, repoData, opsData] =
     await Promise.allSettled([
       exploreTree(owner, repo, revision, filePath),
-      listRefs(owner, repo),
       getRepository(owner, repo),
       listOperations(buildRepoPrefix(owner, repo), 1), // dernier commit
     ]);
 
   // ── Refs ─────────────────────────────────────────────────────
-  const refs =
-    refsData.status === "fulfilled"
-      ? refsData.value
-      : { branches: [], tags: [], total: 0 };
+  const refs = refsData;
 
   // ── Métadonnées repo ─────────────────────────────────────────
   const repoMeta =
@@ -143,12 +159,12 @@ export default async function ExplorerPage({ params }: PageProps) {
 
   const latestCommit = lastOp
     ? {
-        hash: lastOp.content_id,
-        message: lastOp.description,
-        author: lastOp.author_id.slice(0, 8), // short UUID as author
-        date: formatDate(lastOp.created_at),
-        oracleScore,
-      }
+      hash: lastOp.content_id,
+      message: lastOp.description,
+      author: lastOp.author_id.slice(0, 8), // short UUID as author
+      date: formatDate(lastOp.created_at),
+      oracleScore,
+    }
     : undefined;
 
   // ── Breadcrumb ────────────────────────────────────────────────
@@ -169,7 +185,7 @@ export default async function ExplorerPage({ params }: PageProps) {
 
     if (isEmpty) {
       // URL HTTP Git pour les commandes de clone
-      const httpUrl = `http://localhost:8080/${owner}/${repo}.git`;
+      const httpUrl = getGitCloneUrl(owner, repo);
 
       return (
         <div className="ex-page">
@@ -224,10 +240,34 @@ git checkout -b main`}</pre>
                 </div>
               </div>
 
-              {/* Étape 3 : Premier push */}
+              {/* Étape 3 : Authentification PAT (Phase 19A-Git) */}
               <div className="ex-empty-step">
                 <div className="ex-step-header">
                   <span className="ex-step-num">3</span>
+                  <span className="ex-step-label">Authentification (PAT)</span>
+                </div>
+                <p className="ex-step-desc">
+                  Créez un <a href="/settings/tokens" className="ex-step-link">Personal Access Token</a> puis configurez Git :
+                </p>
+                <div className="ex-code-block">
+                  <pre>{`# Option A : Git credential store (persistant)
+git config --global credential.helper store
+# Lors du premier push, entrez :
+#   Username: ${owner}
+#   Password: shb_votre_token_ici
+
+# Option B : URL avec token intégré
+git remote set-url origin http://${owner}:VOTRE_PAT@${process.env.NEXT_PUBLIC_GIT_URL || "api.jjshinobi.dev"}/${owner}/${repo}.git`}</pre>
+                </div>
+                <p className="ex-step-hint">
+                  🔑 Le token n&apos;est affiché qu&apos;une seule fois lors de sa création. Copiez-le avant de quitter la page.
+                </p>
+              </div>
+
+              {/* Étape 4 : Premier push */}
+              <div className="ex-empty-step">
+                <div className="ex-step-header">
+                  <span className="ex-step-num">4</span>
                   <span className="ex-step-label">Premier commit &amp; push</span>
                 </div>
                 <div className="ex-code-block">
@@ -297,10 +337,23 @@ git push -u origin main`}</pre>
               <Search size={14} />
               <span>Rechercher</span>
             </button>
-            <button className="ex-btn ex-btn-emerald">
-              <Download size={14} />
-              <span>Cloner</span>
-            </button>
+            {repoMeta && (
+              <ForkButton
+                owner={owner}
+                repo={repo}
+                repoOwnerId={repoMeta.owner_id}
+                forkCount={repoMeta.fork_count ?? 0}
+              />
+            )}
+            <CloneDropdown owner={owner} repo={repo} />
+            {repoMeta && (
+              <DeleteRepoButton
+                owner={owner}
+                repo={repo}
+                displayName={repoMeta.display_name}
+                ownerId={repoMeta.owner_id}
+              />
+            )}
           </div>
         </div>
       </header>
@@ -323,9 +376,11 @@ git push -u origin main`}</pre>
         </div>
 
         <div className="ex-controls-right">
-          <div className="ex-stat">
+          <div className="ex-stat" style={{ cursor: 'pointer' }}>
             <GitBranch size={13} />
-            <span>{refs.branches.length} Bookmarks</span>
+            <a href={`/${owner}/${repo}/bookmarks`} style={{ textDecoration: 'none', color: 'inherit' }}>
+              {refs.branches.length} Bookmarks
+            </a>
           </div>
           <div className="ex-stat" style={{ cursor: 'pointer' }}>
             <History size={13} />
@@ -414,10 +469,9 @@ git push -u origin main`}</pre>
               <h3 className="ex-sidebar-title">Oracle Tensai</h3>
               <div className="ex-oracle-score-display">
                 <div className="ex-oracle-gauge">
-                  <span className={`ex-oracle-value ${
-                    oracleScore >= 80 ? "ex-oracle-good" :
+                  <span className={`ex-oracle-value ${oracleScore >= 80 ? "ex-oracle-good" :
                     oracleScore >= 60 ? "ex-oracle-mid" : "ex-oracle-low"
-                  }`}>
+                    }`}>
                     {oracleScore}
                   </span>
                   <span className="ex-oracle-max">/100</span>

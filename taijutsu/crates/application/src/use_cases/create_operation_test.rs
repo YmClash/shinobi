@@ -50,7 +50,7 @@ mod tests {
 
     #[async_trait]
     impl VcsEngine for MockVcsEngine {
-        async fn init_workspace(&self, _repo_id: &Uuid) -> Result<(), DomainError> {
+        async fn init_workspace(&self, _owner_id: &Uuid, _repo_id: &Uuid) -> Result<(), DomainError> {
             Ok(())
         }
 
@@ -89,6 +89,27 @@ mod tests {
         }
         async fn diff_content(&self, _repo_id: &Uuid, _cid: &ContentId) -> Result<Vec<domain::ports::vcs_engine::FileDiff>, DomainError> {
             Ok(vec![])
+        }
+        async fn can_fast_forward(&self, _repo_id: &Uuid, _source: &str, _target: &str) -> Result<bool, DomainError> {
+            Ok(true)
+        }
+        async fn merge_fast_forward(&self, _repo_id: &Uuid, _source: &str, _target: &str) -> Result<ContentId, DomainError> {
+            Ok(ContentId::new("mock-merge-commit"))
+        }
+        async fn squash_merge(&self, _repo_id: &Uuid, _source: &str, _target: &str, _message: &str) -> Result<ContentId, DomainError> {
+            Ok(ContentId::new("mock-squash-commit"))
+        }
+        async fn diff_merge_base(&self, _repo_id: &Uuid, _source: &str, _target: &str) -> Result<Vec<domain::ports::vcs_engine::FileDiff>, DomainError> {
+            Ok(vec![])
+        }
+        async fn clone_workspace(&self, _source_owner_id: &Uuid, _source_repo_id: &Uuid, _target_owner_id: &Uuid, _target_repo_id: &Uuid) -> Result<(), DomainError> {
+            Ok(())
+        }
+        async fn fetch_fork_refs(&self, _repo_id: &Uuid, _fork_repo_id: &Uuid) -> Result<(), DomainError> {
+            Ok(())
+        }
+        async fn cleanup_fork_remote(&self, _repo_id: &Uuid, _fork_repo_id: &Uuid) -> Result<(), DomainError> {
+            Ok(())
         }
     }
 
@@ -223,6 +244,37 @@ mod tests {
             _summary: &AnalysisCompleteSummary,
         ) -> Result<(), DomainError> {
             Ok(())
+        }
+
+        async fn publish_webhook_event(
+            &self,
+            _event: &domain::entities::webhook::WebhookEvent,
+        ) -> Result<(), DomainError> {
+            Ok(()) // Phase 34-V2 — No-op dans les tests
+        }
+
+        async fn publish_pipeline_requested(
+            &self,
+            _repository_id: uuid::Uuid,
+            _commit_id: &str,
+            _trigger_event: &str,
+            _pipeline_id: Option<uuid::Uuid>,
+        ) -> Result<(), DomainError> {
+            Ok(()) // Phase 40 — No-op dans les tests
+        }
+
+        async fn publish_kage_bunshin_requested(
+            &self,
+            _pipeline_id: uuid::Uuid,
+            _stage_id: uuid::Uuid,
+            _stage_name: &str,
+            _stage_image: &str,
+            _stage_commands: &[String],
+            _error_logs: &str,
+            _repository_id: uuid::Uuid,
+            _commit_id: &str,
+        ) -> Result<(), DomainError> {
+            Ok(()) // Phase 41 — No-op dans les tests
         }
     }
 

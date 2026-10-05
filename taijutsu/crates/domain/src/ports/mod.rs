@@ -5,13 +5,25 @@
 //! - Les adaptateurs primaires (presentation/) les **consomment** via les use cases.
 
 pub mod actor_repository;
+pub mod anbu_repository;
+pub mod auth_service;
 pub mod chunk_repository;
 pub mod content_store;
 pub mod embedding_service;
 pub mod event_consumer;
+pub mod federation_repository;
+pub mod federation_service;
 pub mod event_publisher;
+pub mod github_service;
+pub mod issue_repository;
 pub mod llm_service;
+pub mod mr_repository;
+pub mod notification_repository;
 pub mod repo_repository;
 pub mod repository;
 pub mod review_repository;
 pub mod vcs_engine;
+pub mod webhook_repository;
+pub mod commit_status_repository;
+pub mod pipeline_repository;
+pub mod container_runner;

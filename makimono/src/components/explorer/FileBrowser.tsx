@@ -91,11 +91,11 @@ export default function FileBrowser({
       {/* ── Controls Bar ─────────────────────────── */}
       <div className="fb-controls">
         <div className="fb-controls-left">
-          <div className="fb-stat">
+          <div className="fb-stat" style={{ cursor: 'pointer' }}>
             <GitBranch size={14} className="fb-stat-icon" />
-            <span>
+            <a href={`/${owner}/${repo}/bookmarks`} style={{ textDecoration: 'none', color: 'inherit' }}>
               {branchCount} Bookmark{branchCount !== 1 ? "s" : ""}
-            </span>
+            </a>
           </div>
           <div className="fb-stat">
             <History size={14} className="fb-stat-icon" />

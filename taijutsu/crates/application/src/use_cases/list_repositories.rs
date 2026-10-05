@@ -77,6 +77,42 @@ mod tests {
                 .filter(|a| a.handle == handle)
                 .cloned())
         }
+        async fn find_by_email(&self, _email: &str) -> Result<Option<Actor>, DomainError> {
+            Ok(None)
+        }
+        async fn save_credential(&self, _actor_id: &Uuid, _cred_type: &str, _secret_hash: &str, _email: Option<&str>, _label: Option<&str>) -> Result<(), DomainError> {
+            Ok(())
+        }
+        async fn find_credential_hash(&self, _actor_id: &Uuid, _cred_type: &str) -> Result<Option<String>, DomainError> {
+            Ok(None)
+        }
+        async fn find_all_credential_hashes(&self, _actor_id: &Uuid, _cred_type: &str) -> Result<Vec<String>, DomainError> {
+            Ok(vec![])
+        }
+        async fn find_actor_by_credential_hash(&self, _hash: &str, _cred_type: &str) -> Result<Option<Actor>, DomainError> {
+            Ok(None)
+        }
+        async fn find_by_github_id(&self, _github_id: i64) -> Result<Option<Actor>, DomainError> {
+            Ok(None)
+        }
+        async fn update_github_id(&self, _actor_id: &Uuid, _github_id: i64) -> Result<(), DomainError> {
+            Ok(())
+        }
+        async fn update_github_token(&self, _actor_id: &Uuid, _token: &str) -> Result<(), DomainError> {
+            Ok(())
+        }
+        async fn get_github_token(&self, _actor_id: &Uuid) -> Result<Option<String>, DomainError> {
+            Ok(None)
+        }
+        async fn list_pats(&self, _actor_id: &Uuid) -> Result<Vec<domain::ports::actor_repository::PatInfo>, DomainError> {
+            Ok(vec![])
+        }
+        async fn list_service_accounts(&self, _parent_id: &Uuid) -> Result<Vec<Actor>, DomainError> {
+            Ok(vec![])
+        }
+        async fn delete_service_account(&self, _bot_id: &Uuid) -> Result<bool, DomainError> {
+            Ok(false)
+        }
     }
 
     // ── Mock RepoRepository ──────────────────────────
@@ -118,6 +154,36 @@ mod tests {
         ) -> Result<(), DomainError> {
             Ok(())
         }
+        async fn is_collaborator(&self, _actor_id: &Uuid, _repo_id: &Uuid) -> Result<bool, DomainError> {
+            Ok(true)
+        }
+        async fn get_role(&self, _actor_id: &Uuid, _repo_id: &Uuid) -> Result<Option<String>, DomainError> {
+            Ok(Some("owner".to_string()))
+        }
+        async fn update_mirror_synced_at(&self, _repo_id: &Uuid) -> Result<(), DomainError> {
+            Ok(())
+        }
+        async fn soft_delete(&self, _repo_id: &Uuid) -> Result<bool, DomainError> {
+            Ok(true)
+        }
+        async fn restore(&self, _repo_id: &Uuid) -> Result<bool, DomainError> {
+            Ok(true)
+        }
+        async fn hard_delete(&self, _repo_id: &Uuid) -> Result<bool, DomainError> {
+            Ok(true)
+        }
+        async fn list_deleted_by_owner(&self, _owner_id: &Uuid) -> Result<Vec<Repository>, DomainError> {
+            Ok(vec![])
+        }
+        async fn list_expired_trash(&self, _retention_secs: i64) -> Result<Vec<Repository>, DomainError> {
+            Ok(vec![])
+        }
+        async fn count_forks(&self, _repo_id: &Uuid) -> Result<u64, DomainError> {
+            Ok(0)
+        }
+        async fn find_fork_by_owner(&self, _owner_id: &Uuid, _source_repo_id: &Uuid) -> Result<Option<Repository>, DomainError> {
+            Ok(None)
+        }
     }
 
     // ── Helpers ──────────────────────────
@@ -128,7 +194,11 @@ mod tests {
             display_name: handle.to_string(),
             actor_type: ActorType::Human,
             avatar_url: None,
+            email: None,
             bio: None,
+            github_id: None,
+            github_token: None,
+            parent_id: None,
             created_at: chrono::Utc::now(),
         }
     }

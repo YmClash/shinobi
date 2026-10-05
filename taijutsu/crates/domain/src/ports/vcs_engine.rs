@@ -77,8 +77,14 @@ pub struct RefInfo {
 #[async_trait]
 pub trait VcsEngine: Send + Sync {
     /// Initialise un nouveau workspace VCS pour un dépôt donné.
-    /// Le chemin physique est dérivé du `repo_id`.
-    async fn init_workspace(&self, repo_id: &Uuid) -> Result<(), DomainError>;
+    /// Le chemin physique est dérivé de `owner_id` et `repo_id` :
+    /// `{workspace_root}/{owner_id}/{repo_id}/`
+    ///
+    /// ## Multi-Tenant (Phase 21)
+    /// L'`owner_id` est utilisé pour l'isolation physique par propriétaire.
+    /// Les UUIDs sont utilisés (pas les handles) pour éviter les migrations
+    /// physiques lors des renommages de comptes.
+    async fn init_workspace(&self, owner_id: &Uuid, repo_id: &Uuid) -> Result<(), DomainError>;
 
     /// Enregistre une opération dans le graphe de versioning d'un dépôt.
     /// Retourne le CID du contenu associé.
@@ -155,6 +161,109 @@ pub trait VcsEngine: Send + Sync {
         repo_id: &Uuid,
         content_id: &ContentId,
     ) -> Result<Vec<FileDiff>, DomainError>;
+
+    // ── Phase 26A — Merge Requests (Le Katana Croisé) ────────────────────
+
+    /// Vérifie si un fast-forward est possible entre deux branches.
+    ///
+    /// Retourne `true` si `target_ref` est un ancêtre de `source_ref`
+    /// (i.e., la branche cible peut être avancée directement vers la source).
+    async fn can_fast_forward(
+        &self,
+        repo_id: &Uuid,
+        source_ref: &str,
+        target_ref: &str,
+    ) -> Result<bool, DomainError>;
+
+    /// Exécute un fast-forward merge : avance le bookmark de `target_ref`
+    /// vers le commit pointé par `source_ref`.
+    ///
+    /// ## Pré-conditions
+    /// - `can_fast_forward()` doit retourner `true`
+    /// - Le bookmark `target_ref` doit exister
+    async fn merge_fast_forward(
+        &self,
+        repo_id: &Uuid,
+        source_ref: &str,
+        target_ref: &str,
+    ) -> Result<ContentId, DomainError>;
+
+    /// Exécute un squash merge : crée un nouveau commit unique contenant
+    /// tous les changements de `source_ref` par rapport à `target_ref`,
+    /// avec le message fourni, puis avance `target_ref` vers ce nouveau commit.
+    async fn squash_merge(
+        &self,
+        repo_id: &Uuid,
+        source_ref: &str,
+        target_ref: &str,
+        message: &str,
+    ) -> Result<ContentId, DomainError>;
+
+    // ── Phase 37B — Fork Local (Le Dédoublement) ────────────────
+
+    /// Clone un workspace VCS d'un dépôt source vers un dépôt cible.
+    ///
+    /// Effectue une copie physique complète du répertoire du workspace
+    /// (incluant `.jj/` et le bare Git repo) dans un `spawn_blocking`
+    /// pour ne pas bloquer le runtime Tokio.
+    ///
+    /// ## V1 — Dumb Copy
+    /// Copie récursive complète. Future V2 : Git Alternates ou CoW (reflink).
+    async fn clone_workspace(
+        &self,
+        source_owner_id: &Uuid,
+        source_repo_id: &Uuid,
+        target_owner_id: &Uuid,
+        target_repo_id: &Uuid,
+    ) -> Result<(), DomainError>;
+
+    /// Calcule le diff entre le merge-base (ancêtre commun) et la branche source.
+    ///
+    /// C'est la bonne façon de calculer le diff d'une MR :
+    /// **merge-base → source** (pas source → target directement), sinon les
+    /// commits récents de `main` apparaîtraient en négatif.
+    async fn diff_merge_base(
+        &self,
+        repo_id: &Uuid,
+        source_ref: &str,
+        target_ref: &str,
+    ) -> Result<Vec<FileDiff>, DomainError>;
+
+    // ── Phase 37E — Le Trou de Ver Git (Cross-Repo MR) ──────────────
+
+    /// Importe les objets Git d'un fork (source) dans le parent (target)
+    /// en ajoutant le fork comme Git remote temporaire, puis fetch.
+    ///
+    /// Après cette opération, les refs du fork sont accessibles
+    /// dans le parent sous `refs/remotes/fork-{source_repo_id}/{branch}`.
+    ///
+    /// ## Git sous le capot
+    /// 1. `git remote add fork-{id} {fork_git_path}` (si pas déjà ajouté)
+    /// 2. `git fetch fork-{id}`
+    /// 3. Les refs sont maintenant visibles dans le parent
+    ///
+    /// ## Performance
+    /// Le fetch local entre deux dossiers sur le même disque dur utilise
+    /// des hardlinks — instantané et quasi-zero espace disque.
+    async fn fetch_fork_refs(
+        &self,
+        parent_repo_id: &Uuid,
+        source_repo_id: &Uuid,
+    ) -> Result<(), DomainError>;
+
+    /// Nettoyage post-merge/close : supprime le remote temporaire et ses refs.
+    ///
+    /// Exécute `git remote remove fork-{source_repo_id}` sur le bare Git
+    /// du parent, ce qui supprime automatiquement les refs fetchées
+    /// sous `refs/remotes/fork-{id}/*`.
+    ///
+    /// ## Idempotent
+    /// Si le remote n'existe pas (déjà nettoyé), retourne Ok silencieusement.
+    async fn cleanup_fork_remote(
+        &self,
+        parent_repo_id: &Uuid,
+        source_repo_id: &Uuid,
+    ) -> Result<(), DomainError>;
 }
 
 // ── Phase 17 — Types de Diff Colorisé ────────────────────────────────

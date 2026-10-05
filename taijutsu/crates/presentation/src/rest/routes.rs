@@ -3,28 +3,33 @@
 //! Point d'entrée HTTP du système SHINOBI.
 //! Les use cases sont injectés via `SharedState` (Axum State extractor).
 
-use axum::extract::{Path, Query, State};
+use axum::extract::{DefaultBodyLimit, Multipart, Path, Query, State};
+use axum::handler::Handler;
 use axum::response::sse::{Event, KeepAlive, Sse};
-use axum::{Json, Router, routing::get, routing::post};
+use axum::{Json, Router, routing::get, routing::post, routing::patch};
 use chrono::{DateTime, Utc};
 use futures_util::StreamExt;
 use serde::{Deserialize, Serialize};
 use tracing::{info, warn};
 use uuid::Uuid;
+use std::sync::Arc;
 
 use application::use_cases::create_operation::CreateOperationCommand;
 use application::use_cases::create_repository::CreateRepositoryCommand;
+use application::use_cases::import_github_repo::ImportGitHubRepoCommand;
 use application::use_cases::list_operations::ListFilter;
 use application::use_cases::search_chunks::ChunkSearchFilter;
 use application::use_cases::sensei_chat::{ChatMessage, SenseiChatRequest};
 use domain::entities::operation::Operation;
 use domain::entities::repository::Visibility;
+use domain::entities::mention::extract_mentions;
 use domain::errors::DomainError;
 use domain::ports::chunk_repository::{SimilarChunk, StoredChunk};
 use domain::ports::review_repository::OperationReview;
 use domain::ports::vcs_engine::{EntryKind, RefKind};
 
 use crate::errors::AppError;
+use crate::rest::auth_middleware::{AuthUser, MaybeAuth};
 use crate::state::SharedState;
 
 // ─── Types Request / Response ────────────────────
@@ -222,8 +227,16 @@ impl From<OperationReview> for ReviewJson {
 
 /// Construit le routeur Axum principal avec les use cases injectés.
 ///
-/// Intègre automatiquement le middleware Prometheus pour les métriques HTTP.
-/// La route `/metrics` expose les métriques au format Prometheus scrape.
+/// ## Architecture Bouclier Global (Phase 27-pre)
+///
+/// Le routeur est scindé en 3 couches :
+///
+/// 1. **Public** — Aucune authentification (`/health`, `/auth/login`, `/auth/register`, profil)
+/// 2. **Semi-public** — Auth optionnelle (`MaybeAuth`) pour enrichir les réponses
+///    (listing repos, tree, MR en lecture). Les routes mixtes (GET public + POST privé)
+///    utilisent `.route_layer()` pour protéger uniquement les POST.
+/// 3. **Privé** — Auth obligatoire via `require_auth_layer` middleware layer.
+///    Tout handler dans ce routeur est **protégé par défaut**.
 ///
 /// ## Routes Fédérées (Phase 10C)
 /// Les routes `/api/v1/repos/:owner/:repo/operations/...` résolvent le
@@ -233,31 +246,80 @@ pub fn create_router(state: SharedState) -> Router {
     // ── Prometheus Middleware ───────────────────────
     let (prometheus_layer, metric_handle) = axum_prometheus::PrometheusMetricLayer::pair();
 
-    Router::new()
-        // Health & status (sans état)
+    // Closure pour créer le route_layer auth (réutilisé sur routes mixtes)
+    let auth_layer = || {
+        axum::middleware::from_fn_with_state(
+            state.clone(),
+            crate::rest::auth_middleware::require_auth_layer,
+        )
+    };
+
+    // ═══════════════════════════════════════════════════════════
+    // COUCHE 1 : Routes Publiques — Aucune authentification
+    // ═══════════════════════════════════════════════════════════
+    let public = Router::new()
+        // Health & status
         .route("/health", get(health_check))
         .route("/api/v1/status", get(status))
-        // ━━━ Global Routes (cross-repo) ━━━
-        .route("/api/v1/chunks/search", get(search_chunks_handler))
+        // Auth (pré-authentification)
+        .route("/api/v1/auth/register", post(crate::rest::auth_routes::register_handler))
+        .route("/api/v1/auth/login", post(crate::rest::auth_routes::login_handler))
+        // GitHub OAuth (pré-authentification)
+        .route("/api/v1/auth/github", get(crate::rest::auth_routes::github_auth_url_handler))
+        .route("/api/v1/auth/github/callback", post(crate::rest::auth_routes::github_callback_handler))
+        // Profil public acteur (Phase 37A — déplacé en semi-public pour MaybeAuth)
+        // Route supprimée ici — voir semi_public ci-dessous
+        // Métriques Prometheus
         .route(
-            "/api/v1/chunks/semantic-search",
-            post(semantic_search_handler),
+            "/metrics",
+            get(move || async move { metric_handle.render() }),
         )
-        .route("/api/v1/reviews/scores", get(get_score_history_handler))
-        // ━━━ Forge Sociale (Phase 10D — Big Bang) ━━━
-        .route("/api/v1/repos", post(create_repository_handler))
-        // ━━━ Actors → Repos (Préambule Makimono Phase 5) ━━━
+        // ── Phase 27 — ForgeFed Discovery ────────────────────
+        .route("/.well-known/webfinger", get(crate::rest::federation::webfinger_handler))
+        .route("/.well-known/nodeinfo", get(crate::rest::federation::nodeinfo_wellknown_handler))
+        .route("/nodeinfo/2.1", get(crate::rest::federation::nodeinfo_handler))
+        // ActivityPub Actor (content negotiation)
+        .route("/actors/{handle}", get(crate::rest::federation::actor_ap_handler))
+        // ActivityPub Inbox (POST — signature HTTP, pas JWT)
+        .route("/actors/{handle}/inbox", post(crate::rest::federation::inbox_handler))
+        // ActivityPub Outbox, Followers, Following (GET — lecture publique)
+        .route("/actors/{handle}/outbox", get(crate::rest::federation::outbox_handler))
+        .route("/actors/{handle}/followers", get(crate::rest::federation::followers_handler))
+        .route("/actors/{handle}/following", get(crate::rest::federation::following_handler))
+        // ForgeFed Repository Profile (Phase 27-ter)
+        .route("/repos/{owner}/{repo}", get(crate::rest::federation::repo_ap_handler));
+
+    // ═══════════════════════════════════════════════════════════
+    // COUCHE 2 : Routes Semi-publiques — MaybeAuth (auth optionnelle)
+    //
+    // Accessible sans JWT. Le handler utilise MaybeAuth pour enrichir
+    // la réponse si un JWT valide est présent (ex: repos privés visibles
+    // uniquement par le propriétaire).
+    //
+    // Les routes MIXTES (GET semi-public + POST privé) utilisent
+    // .route_layer() pour protéger uniquement les POST — évite le
+    // panic Axum sur .merge() avec chemins dupliqués.
+    // ═══════════════════════════════════════════════════════════
+    let semi_public = Router::new()
+        // Phase 37A — Profil public acteur (MaybeAuth pour Vegapunk Tweak)
+        .route(
+            "/api/v1/actors/{handle}/profile",
+            get(actor_profile_handler),
+        )
+        // Listing repos (filtrage visibilité selon auth)
         .route(
             "/api/v1/actors/{handle}/repos",
             get(list_repositories_handler),
         )
-        // ━━━ Repo Detail (Préambule Makimono Phase 5) ━━━
+        // Détail repo
         .route("/api/v1/repos/{owner}/{repo}", get(get_repository_handler))
-        // ━━━ Federated Routes (Phase 10C — /repos/:owner/:repo) ━━━
+        // ── Routes mixtes : Operations (GET=MaybeAuth, POST=AuthUser) ──
         .route(
             "/api/v1/repos/{owner}/{repo}/operations",
-            post(federated_create_operation).get(federated_list_operations),
+            get(federated_list_operations)
+                .post(federated_create_operation.layer(auth_layer())),
         )
+        // Opérations en lecture (détail, diff, reviews, ipfs, chunks)
         .route(
             "/api/v1/repos/{owner}/{repo}/operations/{id}",
             get(federated_get_operation),
@@ -278,12 +340,11 @@ pub fn create_router(state: SharedState) -> Router {
             "/api/v1/repos/{owner}/{repo}/operations/{id}/chunks",
             get(federated_get_chunks),
         )
-        // ── Phase 17 — Diff Colorisé (line-by-line) ─────────────────
         .route(
             "/api/v1/repos/{owner}/{repo}/operations/{id}/diff-content",
             get(federated_get_diff_content),
         )
-        // ── Phase 6 — Explorateur de Code (lecture seule) ───────────────
+        // Explorateur de Code (lecture seule)
         .route(
             "/api/v1/repos/{owner}/{repo}/tree/{revision}",
             get(explorer_tree_handler),
@@ -292,17 +353,235 @@ pub fn create_router(state: SharedState) -> Router {
             "/api/v1/repos/{owner}/{repo}/refs",
             get(explorer_refs_handler),
         )
-        // ── Phase 15 — Sensei Chat IA (SSE streaming) ───────────────
+        // ── Routes mixtes : Merge Requests (GET=MaybeAuth, POST=AuthUser) ──
+        .route(
+            "/api/v1/repos/{owner}/{repo}/mrs",
+            get(list_mrs_handler)
+                .post(create_mr_handler.layer(auth_layer())),
+        )
+        // MR en lecture
+        .route(
+            "/api/v1/repos/{owner}/{repo}/mrs/{number}",
+            get(get_mr_handler),
+        )
+        .route(
+            "/api/v1/repos/{owner}/{repo}/mrs/{number}/diff",
+            get(mr_diff_handler),
+        )
+        // Pré-diff entre branches (formulaire New MR)
+        .route(
+            "/api/v1/repos/{owner}/{repo}/diff-between",
+            get(diff_between_handler),
+        )
+        // ── Phase 28C — ANBU Checkpoints (GET=MaybeAuth, POST=Multipart+AuthUser) ──
+        .route(
+            "/api/v1/repos/{owner}/{repo}/checkpoints",
+            get(list_checkpoints_handler)
+                .post(create_checkpoint_handler)
+                .layer(DefaultBodyLimit::max(250 * 1024 * 1024)), // 250 MB
+        )
+        .route(
+            "/api/v1/repos/{owner}/{repo}/checkpoints/{checkpoint_id}",
+            get(get_checkpoint_handler),
+        )
+        // ── Phase 33 — Issues/Tickets (GET=MaybeAuth, POST=AuthUser) ──
+        .route(
+            "/api/v1/repos/{owner}/{repo}/issues",
+            get(list_issues_handler)
+                .post(create_issue_handler.layer(auth_layer())),
+        )
+        .route(
+            "/api/v1/repos/{owner}/{repo}/issues/{number}",
+            get(get_issue_handler),
+        )
+        .route(
+            "/api/v1/repos/{owner}/{repo}/labels",
+            get(list_labels_handler),
+        );
+
+    // ═══════════════════════════════════════════════════════════
+    // COUCHE 3 : Routes Privées — require_auth_layer (Bouclier Global)
+    //
+    // TOUTES les routes ici sont protégées par le middleware global.
+    // Même si un handler oublie AuthUser, la requête est déjà rejetée.
+    // ═══════════════════════════════════════════════════════════
+    let private = Router::new()
+        // Profil authentifié
+        .route("/api/v1/auth/me", get(crate::rest::auth_routes::me_handler))
+        // Personal Access Tokens
+        .route("/api/v1/auth/tokens",
+            post(crate::rest::auth_routes::create_pat_handler)
+                .get(crate::rest::auth_routes::list_pats_handler),
+        )
+        // Création de dépôt
+        .route("/api/v1/repos", post(create_repository_handler))
+        // GitHub Import
+        .route("/api/v1/repos/import-github", post(import_github_handler))
+        .route("/api/v1/github/preview", get(github_preview_handler))
+        // GitHub Bulk Import (Le Clonage Massif)
+        .route("/api/v1/github/my-repos", get(list_github_repos_handler))
+        .route("/api/v1/github/bulk-import", post(bulk_import_github_handler))
+        // Soft Delete (Corbeille)
+        .route(
+            "/api/v1/repos/{owner}/{repo}/archive",
+            post(archive_repository_handler),
+        )
+        .route(
+            "/api/v1/repos/{owner}/{repo}/restore",
+            post(restore_repository_handler),
+        )
+        .route(
+            "/api/v1/actors/{handle}/trash",
+            get(list_trash_handler),
+        )
+        // Phase 37B — Fork Local (Le Dédoublement)
+        .route(
+            "/api/v1/repos/{owner}/{repo}/fork",
+            post(fork_repository_handler),
+        )
+        // Phase 27-quater — Inbox Activities (Private: JWT required)
+        .route(
+            "/api/v1/actors/{handle}/inbox/activities",
+            get(crate::rest::federation::inbox_list_handler),
+        )
+        // Service Accounts
+        .route(
+            "/api/v1/auth/service-accounts",
+            post(crate::rest::auth_routes::create_service_account_handler)
+                .get(crate::rest::auth_routes::list_service_accounts_handler),
+        )
+        .route(
+            "/api/v1/auth/service-accounts/{id}",
+            axum::routing::delete(crate::rest::auth_routes::delete_service_account_handler),
+        )
+        // MR mutations (review, merge, close)
+        .route(
+            "/api/v1/repos/{owner}/{repo}/mrs/{number}/reviews",
+            post(review_mr_handler),
+        )
+        .route(
+            "/api/v1/repos/{owner}/{repo}/mrs/{number}/merge",
+            post(merge_mr_handler),
+        )
+        .route(
+            "/api/v1/repos/{owner}/{repo}/mrs/{number}/close",
+            post(close_mr_handler),
+        )
+        // Phase 33 — Issue mutations (auth obligatoire)
+        .route(
+            "/api/v1/repos/{owner}/{repo}/issues/{number}/close",
+            post(close_issue_handler),
+        )
+        .route(
+            "/api/v1/repos/{owner}/{repo}/issues/{number}/reopen",
+            post(reopen_issue_handler),
+        )
+        .route(
+            "/api/v1/repos/{owner}/{repo}/issues/{number}/comments",
+            post(comment_issue_handler),
+        )
+        .route(
+            "/api/v1/repos/{owner}/{repo}/issues/{number}/labels",
+            post(add_issue_label_handler),
+        )
+        .route(
+            "/api/v1/repos/{owner}/{repo}/issues/{number}/labels/{label_id}",
+            axum::routing::delete(remove_issue_label_handler),
+        )
+        .route(
+            "/api/v1/repos/{owner}/{repo}/labels",
+            post(create_label_handler),
+        )
+        .route(
+            "/api/v1/repos/{owner}/{repo}/labels/{label_id}",
+            axum::routing::delete(delete_label_handler),
+        )
+        .route(
+            "/api/v1/repos/{owner}/{repo}/issues/{number}/update",
+            post(update_issue_handler),
+        )
+        // Sensei Chat IA (🔒 verrouillé — coût GPU)
         .route("/api/v1/sensei/chat", post(sensei_chat_handler))
         .route("/api/v1/sensei/models", get(sensei_models_handler))
         .route("/api/v1/sensei/warmup", post(sensei_warmup_handler))
-        // ── Métriques Prometheus ────────────────────
+        // Chunks & Semantic Search (🔒 verrouillé — pgvector + ONNX)
+        .route("/api/v1/chunks/search", get(search_chunks_handler))
         .route(
-            "/metrics",
-            get(move || async move { metric_handle.render() }),
+            "/api/v1/chunks/semantic-search",
+            post(semantic_search_handler),
         )
+        .route("/api/v1/reviews/scores", get(get_score_history_handler))
+        // Phase 38 — Notifications (Le Carillon) 🔔
+        .route("/api/v1/notifications", get(list_notifications_handler))
+        .route("/api/v1/notifications/unread-count", get(unread_count_handler))
+        .route("/api/v1/notifications/{id}/read", patch(mark_read_handler))
+        .route("/api/v1/notifications/read-all", patch(mark_all_read_handler))
+        // Phase 39 — Commit Status API (Le Pont CI/CD) 🌉
+        .route(
+            "/api/v1/repos/{owner}/{repo}/statuses/{commit_id}",
+            post(crate::rest::commit_status_routes::create_commit_status_handler)
+                .get(crate::rest::commit_status_routes::list_commit_statuses_handler),
+        )
+        .route(
+            "/api/v1/repos/{owner}/{repo}/statuses/{commit_id}/combined",
+            get(crate::rest::commit_status_routes::combined_commit_status_handler),
+        )
+        // Phase 40 — Jutsu Runner : Pipelines CI/CD natifs 🥷⚡
+        .route(
+            "/api/v1/repos/{owner}/{repo}/pipelines",
+            get(crate::rest::pipeline_routes::list_pipelines_handler),
+        )
+        .route(
+            "/api/v1/repos/{owner}/{repo}/pipelines/trigger",
+            post(crate::rest::pipeline_routes::trigger_pipeline_handler),
+        )
+        .route(
+            "/api/v1/repos/{owner}/{repo}/pipelines/{pipeline_id}",
+            get(crate::rest::pipeline_routes::get_pipeline_handler),
+        )
+        .route(
+            "/api/v1/repos/{owner}/{repo}/pipelines/{pipeline_id}/stages",
+            get(crate::rest::pipeline_routes::list_pipeline_stages_handler),
+        )
+        // Phase 41-B — Kage Bunshin (Auto-Healing) 🥷⚡
+        .route(
+            "/api/v1/repos/{owner}/{repo}/pipelines/{pipeline_id}/heals",
+            get(crate::rest::pipeline_routes::list_heals_handler),
+        )
+        // Phase 34 — Webhooks (Chakra チャクラ) 🔔
+        .route(
+            "/api/v1/repos/{owner}/{repo}/hooks",
+            post(crate::rest::webhook_routes::create_webhook_handler)
+                .get(crate::rest::webhook_routes::list_webhooks_handler),
+        )
+        .route(
+            "/api/v1/repos/{owner}/{repo}/hooks/{id}",
+            get(crate::rest::webhook_routes::get_webhook_handler)
+                .patch(crate::rest::webhook_routes::update_webhook_handler)
+                .delete(crate::rest::webhook_routes::delete_webhook_handler),
+        )
+        .route(
+            "/api/v1/repos/{owner}/{repo}/hooks/{id}/deliveries",
+            get(crate::rest::webhook_routes::list_deliveries_handler),
+        )
+        .route(
+            "/api/v1/repos/{owner}/{repo}/hooks/{id}/ping",
+            post(crate::rest::webhook_routes::ping_webhook_handler),
+        )
+        .route(
+            "/api/v1/repos/{owner}/{repo}/hooks/{id}/regenerate-secret",
+            post(crate::rest::webhook_routes::regenerate_secret_handler),
+        )
+        // ── Bouclier Global : middleware auth sur TOUTES les routes privées ──
+        .layer(auth_layer());
+
+    // ═══════════════════════════════════════════════════════════
+    // ASSEMBLAGE — Les 3 couches fusionnées
+    // ═══════════════════════════════════════════════════════════
+    public
+        .merge(semi_public)
+        .merge(private)
         .with_state(state)
-        // Le layer doit être appliqué APRÈS .with_state() pour couvrir toutes les routes
         .layer(prometheus_layer)
 }
 
@@ -482,9 +761,10 @@ fn decode_base64(input: &str) -> Result<Vec<u8>, String> {
 // ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 
 /// Corps de la requête POST /api/v1/repos.
+///
+/// 🔒 `owner_id` n'est plus dans le body — il est extrait du JWT.
 #[derive(Debug, Deserialize)]
 pub struct CreateRepoBody {
-    pub owner_id: Uuid,
     pub name: String,
     pub display_name: String,
     #[serde(default)]
@@ -509,6 +789,24 @@ pub struct RepositoryJson {
     pub visibility: String,
     pub default_branch: String,
     pub created_at: DateTime<Utc>,
+    /// URL Git source (non-null = importé depuis GitHub). Phase 19B.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub mirror_source_url: Option<String>,
+    /// Timestamp du dernier import miroir. Phase 19B.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub mirror_synced_at: Option<DateTime<Utc>>,
+    /// UUID du dépôt parent si c'est un fork (Phase 37B).
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub forked_from_id: Option<Uuid>,
+    /// Nombre de forks de ce repo (Phase 37B). Peuplé on-the-fly.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub fork_count: Option<u64>,
+    /// Handle du propriétaire du repo parent (Phase 37B). Peuplé on-the-fly.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub forked_from_owner: Option<String>,
+    /// Nom (slug) du repo parent (Phase 37B). Peuplé on-the-fly.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub forked_from_name: Option<String>,
 }
 
 impl From<domain::entities::repository::Repository> for RepositoryJson {
@@ -522,25 +820,37 @@ impl From<domain::entities::repository::Repository> for RepositoryJson {
             visibility: repo.visibility.as_sql_str().to_string(),
             default_branch: repo.default_branch,
             created_at: repo.created_at,
+            mirror_source_url: repo.mirror_source_url,
+            mirror_synced_at: repo.mirror_synced_at,
+            forked_from_id: repo.forked_from_id,
+            fork_count: None,
+            forked_from_owner: None,
+            forked_from_name: None,
         }
     }
 }
 
 /// Créer un dépôt — `POST /api/v1/repos`
+///
+/// 🔒 **Authentification obligatoire** — le `owner_id` est extrait du JWT,
+/// jamais du body client (prévient l'usurpation d'identité).
 async fn create_repository_handler(
     State(state): State<SharedState>,
+    auth: AuthUser,
     Json(body): Json<CreateRepoBody>,
 ) -> Result<(axum::http::StatusCode, Json<RepositoryJson>), AppError> {
+    let owner_id = auth.0.actor_id();
+
     info!(
-        owner_id = %body.owner_id,
+        owner_id = %owner_id,
         name = %body.name,
-        "REST: CreateRepository reçu (Forge Sociale)"
+        "REST: CreateRepository reçu (Forge Sociale — Auth)"
     );
 
     let visibility = Visibility::from_sql_str(&body.visibility).unwrap_or(Visibility::Public);
 
     let cmd = CreateRepositoryCommand {
-        owner_id: body.owner_id,
+        owner_id,
         name: body.name,
         display_name: body.display_name,
         description: body.description,
@@ -556,14 +866,72 @@ async fn create_repository_handler(
 }
 
 /// Lister les dépôts d'un acteur — `GET /api/v1/actors/{handle}/repos`
+///
+/// ## Visibilité (Phase 23)
+/// - Si le visiteur est le propriétaire (JWT match) → tous les repos
+/// - Sinon (anonyme ou autre utilisateur) → repos publics uniquement
 async fn list_repositories_handler(
     State(state): State<SharedState>,
     Path(handle): Path<String>,
+    auth: MaybeAuth,
 ) -> Result<Json<serde_json::Value>, AppError> {
     info!(handle = %handle, "REST: ListRepositories reçu");
 
     let repos = state.list_repositories.execute(&handle).await?;
-    let repos_json: Vec<RepositoryJson> = repos.into_iter().map(RepositoryJson::from).collect();
+
+    // Phase 23 : filtrer par visibilité selon l'identité du visiteur
+    let filtered_repos: Vec<domain::entities::repository::Repository> = match &auth.0 {
+        Some(claims) => {
+            // Vérifier si le visiteur est le propriétaire
+            let is_owner = repos.first().map_or(false, |r| r.owner_id == claims.actor_id());
+            if is_owner {
+                repos // Propriétaire voit tout
+            } else {
+                // Phase 25 : si le visiteur est un AI agent, vérifier aussi via parent_id
+                let mut visible = Vec::new();
+                let actor_id = claims.actor_id();
+
+                // Récupérer l'acteur pour vérifier l'héritage AI
+                let parent_id_opt = if let Ok(Some(actor)) = state.actor_repo.find_by_id(&actor_id).await {
+                    if actor.is_ai() { actor.parent_id } else { None }
+                } else {
+                    None
+                };
+
+                // Vérifier si le visiteur (ou son parent) est le propriétaire
+                let is_parent_owner = parent_id_opt.map_or(false, |pid| {
+                    repos.first().map_or(false, |r| r.owner_id == pid)
+                });
+                if is_parent_owner {
+                    return Ok(Json(serde_json::json!({
+                        "owner": handle,
+                        "repositories": repos.into_iter().map(RepositoryJson::from).collect::<Vec<_>>(),
+                        "count": 0, // will be overridden
+                    })));
+                }
+
+                for repo in repos {
+                    if repo.is_public() {
+                        visible.push(repo);
+                    } else if state.repo_repo.is_collaborator(&actor_id, &repo.id).await.unwrap_or(false) {
+                        visible.push(repo);
+                    } else if let Some(pid) = parent_id_opt {
+                        // Phase 25 : héritage RBAC du parent
+                        if state.repo_repo.is_collaborator(&pid, &repo.id).await.unwrap_or(false) {
+                            visible.push(repo);
+                        }
+                    }
+                }
+                visible
+            }
+        }
+        None => {
+            // Anonyme : publics uniquement (Option A)
+            repos.into_iter().filter(|r| r.is_public()).collect()
+        }
+    };
+
+    let repos_json: Vec<RepositoryJson> = filtered_repos.into_iter().map(RepositoryJson::from).collect();
 
     Ok(Json(serde_json::json!({
         "owner": handle,
@@ -573,15 +941,69 @@ async fn list_repositories_handler(
 }
 
 /// Détail d'un dépôt — `GET /api/v1/repos/{owner}/{repo}`
+///
+/// ## Visibilité (Phase 23)
+/// Retourne 404 si le repo est privé et que le visiteur n'est pas autorisé.
 async fn get_repository_handler(
     State(state): State<SharedState>,
     Path((owner, repo)): Path<(String, String)>,
+    auth: MaybeAuth,
 ) -> Result<Json<RepositoryJson>, AppError> {
     info!(owner = %owner, repo = %repo, "REST: GetRepository reçu");
 
-    let repository = state.resolve_repo.execute(&owner, &repo).await?;
+    let repository = resolve_repo_with_access_check(&state, &owner, &repo, &auth).await?;
 
-    Ok(Json(RepositoryJson::from(repository)))
+    // Phase 37B + 37D : compter les forks (local + distant agrégé)
+    let local_forks = state.repo_repo.count_forks(&repository.id).await.unwrap_or(0);
+    let remote_forks = state.federation_repo.count_remote_forks(&repository.id).await.unwrap_or(0);
+    let fork_count = local_forks + remote_forks as u64;
+    let mut json = RepositoryJson::from(repository);
+    json.fork_count = Some(fork_count);
+
+    // Phase 37B : résoudre le parent owner/name si c'est un fork
+    if let Some(parent_id) = json.forked_from_id {
+        if let Ok(Some(parent)) = state.repo_repo.find_by_id(&parent_id).await {
+            json.forked_from_name = Some(parent.name.clone());
+            if let Ok(Some(parent_actor)) = state.actor_repo.find_by_id(&parent.owner_id).await {
+                json.forked_from_owner = Some(parent_actor.handle.clone());
+            }
+        }
+    }
+
+    Ok(Json(json))
+}
+
+/// Forker un dépôt — `POST /api/v1/repos/{owner}/{repo}/fork`
+///
+/// 🔒 **Authentification obligatoire** — le forker_id est extrait du JWT.
+/// Crée un clone complet du dépôt source dans le namespace de l'acteur.
+///
+/// ## Phase 37B — Fork Local (Le Dédoublement)
+/// - GitHub-style : même slug que le parent
+/// - Garde anti-doublon : un owner ne peut forker qu'une fois le même repo
+/// - Rollback PG automatique si le clone VCS échoue
+async fn fork_repository_handler(
+    State(state): State<SharedState>,
+    Path((owner, repo)): Path<(String, String)>,
+    auth: AuthUser,
+) -> Result<(axum::http::StatusCode, Json<RepositoryJson>), AppError> {
+    let forker_id = auth.0.actor_id();
+
+    info!(
+        source = %format!("{}/{}", owner, repo),
+        forker_id = %forker_id,
+        "REST: ForkRepository reçu (Phase 37B)"
+    );
+
+    let fork = state
+        .fork_repository
+        .execute(&owner, &repo, &forker_id)
+        .await?;
+
+    Ok((
+        axum::http::StatusCode::CREATED,
+        Json(RepositoryJson::from(fork)),
+    ))
 }
 
 // ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
@@ -601,10 +1023,73 @@ struct RepoOperationPath {
     id: Uuid,
 }
 
+// ── Phase 23 : Garde de visibilité centralisé ─────────────────────────
+
+/// Résout un repo et vérifie l'accès en lecture.
+///
+/// - Repo public → OK pour tous (même anonyme)
+/// - Repo privé → nécessite JWT valide + owner/collaborateur
+/// - Non autorisé → 404 (pas 403, pour ne pas révéler l'existence)
+async fn resolve_repo_with_access_check(
+    state: &SharedState,
+    owner: &str,
+    repo: &str,
+    auth: &MaybeAuth,
+) -> Result<domain::entities::repository::Repository, AppError> {
+    let repository = state.resolve_repo.execute(owner, repo).await?;
+
+    // Repo public : accès libre
+    if repository.is_public() {
+        return Ok(repository);
+    }
+
+    // Repo privé : vérifier l'identité
+    match &auth.0 {
+        Some(claims) => {
+            let actor_id = claims.actor_id();
+            if actor_id == repository.owner_id {
+                return Ok(repository); // Propriétaire
+            }
+            if state.repo_repo.is_collaborator(&actor_id, &repository.id).await.unwrap_or(false) {
+                return Ok(repository); // Collaborateur
+            }
+
+            // Phase 25 : Héritage RBAC — si l'acteur est un AI agent,
+            // vérifier les droits de son parent humain.
+            if let Ok(Some(actor)) = state.actor_repo.find_by_id(&actor_id).await {
+                if actor.is_ai() {
+                    if let Some(parent_id) = actor.parent_id {
+                        if parent_id == repository.owner_id {
+                            return Ok(repository); // Parent est owner
+                        }
+                        if state.repo_repo.is_collaborator(&parent_id, &repository.id).await.unwrap_or(false) {
+                            return Ok(repository); // Parent est collaborateur
+                        }
+                    }
+                }
+            }
+
+            // Auth OK mais pas autorisé → 404 (ne pas révéler l'existence)
+            Err(AppError::from(DomainError::NotFound {
+                entity_type: "Repository",
+                id: uuid::Uuid::nil(),
+            }))
+        }
+        None => {
+            // Anonyme sur repo privé → 404
+            Err(AppError::from(DomainError::NotFound {
+                entity_type: "Repository",
+                id: uuid::Uuid::nil(),
+            }))
+        }
+    }
+}
+
 /// Créer une opération — `POST /api/v1/repos/:owner/:repo/operations`
 async fn federated_create_operation(
     State(state): State<SharedState>,
     Path(path): Path<RepoPath>,
+    auth: MaybeAuth,
     Json(body): Json<CreateOperationBody>,
 ) -> Result<(axum::http::StatusCode, Json<OperationJson>), AppError> {
     info!(
@@ -614,7 +1099,7 @@ async fn federated_create_operation(
         "REST Fédéré: CreateOperation"
     );
 
-    let repository = state.resolve_repo.execute(&path.owner, &path.repo).await?;
+    let repository = resolve_repo_with_access_check(&state, &path.owner, &path.repo, &auth).await?;
 
     let files: Vec<(String, Vec<u8>)> = body
         .files
@@ -648,6 +1133,7 @@ async fn federated_list_operations(
     State(state): State<SharedState>,
     Path(path): Path<RepoPath>,
     Query(params): Query<ListOperationsQuery>,
+    auth: MaybeAuth,
 ) -> Result<Json<serde_json::Value>, AppError> {
     info!(
         owner = %path.owner,
@@ -655,7 +1141,7 @@ async fn federated_list_operations(
         "REST Fédéré: ListOperations"
     );
 
-    let repository = state.resolve_repo.execute(&path.owner, &path.repo).await?;
+    let repository = resolve_repo_with_access_check(&state, &path.owner, &path.repo, &auth).await?;
 
     let filter = if let Some(author_id) = params.author_id {
         ListFilter::ByAuthor { author_id }
@@ -685,6 +1171,7 @@ async fn federated_list_operations(
 async fn federated_get_operation(
     State(state): State<SharedState>,
     Path(path): Path<RepoOperationPath>,
+    auth: MaybeAuth,
 ) -> Result<Json<OperationJson>, AppError> {
     info!(
         owner = %path.owner,
@@ -693,8 +1180,7 @@ async fn federated_get_operation(
         "REST Fédéré: GetOperation"
     );
 
-    // Valider que le repo existe (autorisation implicite)
-    let _repository = state.resolve_repo.execute(&path.owner, &path.repo).await?;
+    let _repository = resolve_repo_with_access_check(&state, &path.owner, &path.repo, &auth).await?;
 
     let operation = state.get_operation.execute(path.id).await?;
     Ok(Json(OperationJson::from(operation)))
@@ -704,8 +1190,9 @@ async fn federated_get_operation(
 async fn federated_get_diff(
     State(state): State<SharedState>,
     Path(path): Path<RepoOperationPath>,
+    auth: MaybeAuth,
 ) -> Result<Json<serde_json::Value>, AppError> {
-    let _repository = state.resolve_repo.execute(&path.owner, &path.repo).await?;
+    let _repository = resolve_repo_with_access_check(&state, &path.owner, &path.repo, &auth).await?;
 
     let result = state.get_operation_diff.execute(path.id).await?;
 
@@ -721,8 +1208,9 @@ async fn federated_get_diff(
 async fn federated_get_reviews(
     State(state): State<SharedState>,
     Path(path): Path<RepoOperationPath>,
+    auth: MaybeAuth,
 ) -> Result<Json<serde_json::Value>, AppError> {
-    let _repository = state.resolve_repo.execute(&path.owner, &path.repo).await?;
+    let _repository = resolve_repo_with_access_check(&state, &path.owner, &path.repo, &auth).await?;
 
     let result = state.get_reviews.execute(path.id).await?;
     let reviews_json: Vec<ReviewJson> = result.reviews.into_iter().map(ReviewJson::from).collect();
@@ -738,8 +1226,9 @@ async fn federated_get_reviews(
 async fn federated_get_ipfs(
     State(state): State<SharedState>,
     Path(path): Path<RepoOperationPath>,
+    auth: MaybeAuth,
 ) -> Result<Json<serde_json::Value>, AppError> {
-    let _repository = state.resolve_repo.execute(&path.owner, &path.repo).await?;
+    let _repository = resolve_repo_with_access_check(&state, &path.owner, &path.repo, &auth).await?;
 
     let result = state.get_ipfs_content.execute(path.id).await?;
 
@@ -757,8 +1246,9 @@ async fn federated_get_chunks(
     State(state): State<SharedState>,
     Path(path): Path<RepoOperationPath>,
     Query(params): Query<ChunksQuery>,
+    auth: MaybeAuth,
 ) -> Result<Json<serde_json::Value>, AppError> {
-    let _repository = state.resolve_repo.execute(&path.owner, &path.repo).await?;
+    let _repository = resolve_repo_with_access_check(&state, &path.owner, &path.repo, &auth).await?;
 
     let filter = match params.file {
         Some(file_path) => ChunkSearchFilter::ByFile {
@@ -791,6 +1281,7 @@ async fn federated_get_chunks(
 async fn federated_get_diff_content(
     State(state): State<SharedState>,
     Path(path): Path<RepoOperationPath>,
+    auth: MaybeAuth,
 ) -> Result<Json<serde_json::Value>, AppError> {
     info!(
         owner = %path.owner,
@@ -799,7 +1290,7 @@ async fn federated_get_diff_content(
         "REST Fédéré: GetDiffContent (Phase 17)"
     );
 
-    let repository = state.resolve_repo.execute(&path.owner, &path.repo).await?;
+    let repository = resolve_repo_with_access_check(&state, &path.owner, &path.repo, &auth).await?;
 
     // Retrouver l'opération pour obtenir le content_id
     let operation = state.get_operation.execute(path.id).await?;
@@ -885,6 +1376,7 @@ async fn explorer_tree_handler(
     State(state): State<SharedState>,
     Path(path): Path<RepoRevPath>,
     Query(params): Query<ExplorerPathQuery>,
+    auth: MaybeAuth,
 ) -> Result<Json<serde_json::Value>, AppError> {
     info!(
         owner = %path.owner,
@@ -893,6 +1385,9 @@ async fn explorer_tree_handler(
         query_path = %params.path,
         "Phase 6: explorer_tree"
     );
+
+    // Phase 23 : check visibilité
+    let _repository = resolve_repo_with_access_check(&state, &path.owner, &path.repo, &auth).await?;
 
     let file_path = params.path.trim_matches('/').to_string();
 
@@ -958,8 +1453,18 @@ async fn explorer_tree_handler(
 async fn explorer_refs_handler(
     State(state): State<SharedState>,
     Path((owner, repo)): Path<(String, String)>,
+    auth: MaybeAuth,
 ) -> Result<Json<serde_json::Value>, AppError> {
     info!(owner = %owner, repo = %repo, "Phase 6: explorer_refs");
+
+    // Phase 23 : check visibilité
+    let _repository = resolve_repo_with_access_check(&state, &owner, &repo, &auth).await?;
+
+    // Lazy-init : s'assurer que le workspace VCS est chargé en mémoire.
+    // init_workspace() est idempotent (re-open si déjà initialisé).
+    // Sans ceci, list_refs crashe après un restart serveur si le repo
+    // n'a pas encore été accédé via git push/pull/clone.
+    state.vcs_engine.init_workspace(&_repository.owner_id, &_repository.id).await?;
 
     let refs = state.list_refs.execute(&owner, &repo).await?;
 
@@ -1216,4 +1721,1557 @@ async fn sensei_warmup_handler(
             format!("Warmup error (HTTP {status}): {text}")
         )))
     }
+}
+
+// ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+// ── Phase 19B — GitHub Import (Le Pont des Mondes)
+// ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+/// Corps de la requête POST /api/v1/repos/import-github.
+#[derive(Debug, Deserialize)]
+pub struct ImportGitHubBody {
+    /// URL du dépôt GitHub (ex: "https://github.com/tokio-rs/tokio").
+    pub github_url: String,
+    /// Override du nom de repo dans SHINOBI (défaut: nom GitHub).
+    #[serde(default)]
+    pub name_override: Option<String>,
+}
+
+/// Paramètres de query pour GET /api/v1/github/preview.
+#[derive(Debug, Deserialize)]
+pub struct GitHubPreviewQuery {
+    /// URL du dépôt GitHub à prévisualiser.
+    pub url: String,
+}
+
+/// Importer un dépôt GitHub — `POST /api/v1/repos/import-github`
+///
+/// Authentifié : nécessite un JWT valide (AuthUser).
+/// Le owner_id est extrait automatiquement du token.
+async fn import_github_handler(
+    auth: crate::rest::auth_middleware::AuthUser,
+    State(state): State<SharedState>,
+    Json(body): Json<ImportGitHubBody>,
+) -> Result<(axum::http::StatusCode, Json<RepositoryJson>), AppError> {
+    info!(
+        actor_id = %auth.0.actor_id(),
+        github_url = %body.github_url,
+        "REST: ImportGitHub reçu (Phase 19B — Le Pont des Mondes)"
+    );
+
+    let cmd = ImportGitHubRepoCommand {
+        owner_id: auth.0.actor_id(),
+        github_url: body.github_url,
+        name_override: body.name_override,
+    };
+
+    let repo = state.import_github_repo.execute(cmd).await?;
+
+    info!(
+        repo_id = %repo.id,
+        repo_name = %repo.name,
+        "REST: Import GitHub terminé avec succès 🌉"
+    );
+
+    Ok((
+        axum::http::StatusCode::CREATED,
+        Json(RepositoryJson::from(repo)),
+    ))
+}
+
+/// Prévisualiser un dépôt GitHub — `GET /api/v1/github/preview?url=...`
+///
+/// Authentifié : protège le rate limit GitHub (60 req/h par IP).
+async fn github_preview_handler(
+    _auth: crate::rest::auth_middleware::AuthUser,
+    State(state): State<SharedState>,
+    Query(params): Query<GitHubPreviewQuery>,
+) -> Result<Json<serde_json::Value>, AppError> {
+    info!(
+        url = %params.url,
+        "REST: GitHubPreview reçu (Phase 19B)"
+    );
+
+    // Parser l'URL pour extraire owner/repo
+    let cleaned = params.url.trim().trim_end_matches('/').trim_end_matches(".git");
+    let path = if cleaned.contains("github.com") {
+        cleaned.split("github.com").last().unwrap_or("").trim_start_matches('/')
+    } else {
+        cleaned
+    };
+    let parts: Vec<&str> = path.split('/').filter(|s| !s.is_empty()).collect();
+
+    if parts.len() < 2 {
+        return Err(AppError::from(DomainError::BusinessRule(format!(
+            "URL GitHub invalide: '{}'. Format attendu: https://github.com/owner/repo",
+            params.url
+        ))));
+    }
+
+    let (owner, repo) = (parts[0], parts[1]);
+
+    let info = state
+        .github_service
+        .fetch_repo_info(owner, repo)
+        .await?;
+
+    Ok(Json(serde_json::json!({
+        "full_name": info.full_name,
+        "name": info.name,
+        "description": info.description,
+        "clone_url": info.clone_url,
+        "default_branch": info.default_branch,
+        "stars": info.stars,
+        "forks": info.forks,
+        "language": info.language,
+        "license": info.license,
+        "is_private": info.is_private,
+    })))
+}
+
+// ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+// ── Phase 20B — Le Clonage Massif (GitHub Bulk Import)
+// ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+/// Lister les repos GitHub de l'utilisateur — `GET /api/v1/github/my-repos`
+///
+/// Authentifié : utilise le github_token stocké de l'acteur connecté.
+/// Retourne la liste de repos avec un flag `already_imported`.
+async fn list_github_repos_handler(
+    auth: crate::rest::auth_middleware::AuthUser,
+    State(state): State<SharedState>,
+) -> Result<Json<serde_json::Value>, AppError> {
+    let actor_id = auth.0.actor_id();
+    info!(
+        actor_id = %actor_id,
+        "REST: ListGitHubRepos (Phase 20B — Le Clonage Massif)"
+    );
+
+    let repos = state.list_github_repos.execute(&actor_id).await?;
+
+    Ok(Json(serde_json::json!({
+        "repos": repos,
+        "count": repos.len(),
+    })))
+}
+
+/// Corps de la requête POST /api/v1/github/bulk-import.
+#[derive(Debug, Deserialize)]
+struct BulkImportGitHubBody {
+    /// Liste d'URLs GitHub à importer.
+    repo_urls: Vec<String>,
+}
+
+/// Import massif de repos GitHub — `POST /api/v1/github/bulk-import`
+///
+/// Authentifié : le owner_id est extrait du JWT.
+/// Importe les repos séquentiellement avec status par repo.
+async fn bulk_import_github_handler(
+    auth: crate::rest::auth_middleware::AuthUser,
+    State(state): State<SharedState>,
+    Json(body): Json<BulkImportGitHubBody>,
+) -> Result<Json<serde_json::Value>, AppError> {
+    let actor_id = auth.0.actor_id();
+    info!(
+        actor_id = %actor_id,
+        count = body.repo_urls.len(),
+        "REST: BulkImportGitHub (Phase 20B — Le Clonage Massif)"
+    );
+
+    let cmd = application::use_cases::bulk_import_github::BulkImportCommand {
+        owner_id: actor_id,
+        repo_urls: body.repo_urls,
+    };
+
+    let result = state.bulk_import_github.execute(cmd).await?;
+
+    Ok(Json(serde_json::json!({
+        "results": result.results,
+        "imported": result.imported,
+        "skipped": result.skipped,
+        "failed": result.failed,
+        "total": result.results.len(),
+    })))
+}
+
+// ── Phase 24 — Soft Delete (Corbeille) ────────────────────────────
+
+/// Corps de la requête POST /api/v1/repos/{owner}/{repo}/archive.
+#[derive(Debug, Deserialize)]
+struct ArchiveRepoBody {
+    /// Mot de confirmation tapé par l'utilisateur.
+    confirmation_word: String,
+    /// Mot de confirmation attendu (généré côté frontend).
+    expected_word: String,
+}
+
+/// Mettre un dépôt en corbeille — `POST /api/v1/repos/{owner}/{repo}/archive`
+///
+/// Auth obligatoire (JWT). Seul le propriétaire peut supprimer.
+async fn archive_repository_handler(
+    auth: crate::rest::auth_middleware::AuthUser,
+    State(state): State<SharedState>,
+    Path((owner, repo)): Path<(String, String)>,
+    Json(body): Json<ArchiveRepoBody>,
+) -> Result<axum::http::StatusCode, AppError> {
+    info!(
+        owner = %owner,
+        repo = %repo,
+        actor_id = %auth.0.actor_id(),
+        "REST: ArchiveRepository (Phase 24 — Soft Delete)"
+    );
+
+    let cmd = application::use_cases::delete_repository::SoftDeleteCommand {
+        actor_id: auth.0.actor_id(),
+        owner,
+        repo,
+        confirmation_word: body.confirmation_word,
+        expected_word: body.expected_word,
+    };
+
+    state.delete_repository.execute_soft_delete(cmd).await?;
+
+    Ok(axum::http::StatusCode::NO_CONTENT)
+}
+
+/// Restaurer un dépôt depuis la corbeille — `POST /api/v1/repos/{owner}/{repo}/restore`
+///
+/// Auth obligatoire (JWT). Seul le propriétaire peut restaurer.
+async fn restore_repository_handler(
+    auth: crate::rest::auth_middleware::AuthUser,
+    State(state): State<SharedState>,
+    Path((owner, repo)): Path<(String, String)>,
+) -> Result<Json<RepositoryJson>, AppError> {
+    info!(
+        owner = %owner,
+        repo = %repo,
+        actor_id = %auth.0.actor_id(),
+        "REST: RestoreRepository (Phase 24 — Corbeille)"
+    );
+
+    let cmd = application::use_cases::delete_repository::RestoreCommand {
+        actor_id: auth.0.actor_id(),
+        owner,
+        repo,
+    };
+
+    let repository = state.delete_repository.execute_restore(cmd).await?;
+    Ok(Json(RepositoryJson::from(repository)))
+}
+
+/// Lister les dépôts en corbeille — `GET /api/v1/actors/{handle}/trash`
+///
+/// Auth obligatoire (JWT). Retourne les repos soft-deleted du propriétaire
+/// avec le temps restant avant purge définitive.
+async fn list_trash_handler(
+    auth: crate::rest::auth_middleware::AuthUser,
+    State(state): State<SharedState>,
+    Path(handle): Path<String>,
+) -> Result<Json<serde_json::Value>, AppError> {
+    info!(
+        handle = %handle,
+        actor_id = %auth.0.actor_id(),
+        "REST: ListTrash (Phase 24 — Corbeille)"
+    );
+
+    let repos = state.delete_repository.list_trash(&handle).await?;
+
+    let retention_secs = application::use_cases::purge_trash::TRASH_RETENTION_SECS;
+
+    let trash_json: Vec<serde_json::Value> = repos
+        .iter()
+        .map(|r| {
+            let seconds_left = r.seconds_until_purge(retention_secs).unwrap_or(0);
+            serde_json::json!({
+                "id": r.id,
+                "name": r.name,
+                "display_name": r.display_name,
+                "description": r.description,
+                "visibility": r.visibility.as_sql_str(),
+                "deleted_at": r.deleted_at,
+                "seconds_until_purge": seconds_left,
+            })
+        })
+        .collect();
+
+    Ok(Json(serde_json::json!({
+        "owner": handle,
+        "trash": trash_json,
+        "count": trash_json.len(),
+        "retention_seconds": retention_secs,
+    })))
+}
+
+// ── Phase 25B — Profil Public Acteur ─────────────────────────────────
+
+/// Profil public d'un acteur — `GET /api/v1/actors/{handle}/profile`
+///
+/// Retourne les informations publiques d'un acteur (humain ou bot).
+/// Pour les bots, inclut le parent_handle.
+///
+/// ## Phase 37A — Le Visage Public
+/// - `MaybeAuth` pour le Vegapunk Tweak (`is_followed_by_current_user`)
+/// - `follower_count` : followers fédérés (ActivityPub)
+/// - `fediverse_address` : `@handle@domain` pour la découverte Mastodon
+/// - `recent_activities` : les 10 dernières activités de l'outbox
+///   (filtrées : Create(Repository), Push, Issue uniquement)
+async fn actor_profile_handler(
+    State(state): State<SharedState>,
+    Path(handle): Path<String>,
+    auth: MaybeAuth,
+) -> Result<Json<serde_json::Value>, AppError> {
+    info!(handle = %handle, "REST: GetActorProfile (Phase 37A)");
+
+    // Phase 27-pre : profil spécial pour l'acteur système
+    if handle.to_lowercase() == "system" {
+        return Ok(Json(serde_json::json!({
+            "actor": {
+                "id": domain::SYSTEM_ACTOR_ID,
+                "handle": "system",
+                "display_name": "SHINOBI System",
+                "actor_type": "system",
+                "bio": "Acteur système interne de la Forge Sociale SHINOBI. Responsable des opérations automatiques, migrations, rattachement des données orphelines et actions fédérées.",
+                "avatar_url": null,
+                "created_at": null,
+            },
+            "stats": { "public_repos": 0, "total_repos": 0, "bots_count": 0, "follower_count": 0 },
+            "fediverse_address": format!("@system@{}", state.federation_domain),
+            "is_followed_by_current_user": false,
+            "recent_activities": [],
+            "parent": null,
+            "is_system": true,
+        })));
+    }
+
+    // Phase 27-pre : bloquer les autres handles réservés qui n'existent pas
+    if domain::entities::actor::is_reserved_handle(&handle) {
+        return Err(AppError(DomainError::BusinessRule(
+            format!("Le handle '{}' est réservé par le système", handle),
+        )));
+    }
+
+    let actor = state
+        .actor_repo
+        .find_by_handle(&handle)
+        .await?
+        .ok_or_else(|| AppError(DomainError::BusinessRule(
+            format!("Acteur '{}' introuvable", handle),
+        )))?;
+
+    // Compter les repos publics de cet acteur
+    let repos = state.list_repositories.execute(&handle).await.unwrap_or_default();
+    let public_repos = repos.iter().filter(|r| r.is_public()).count();
+
+    // Si c'est un bot, récupérer le parent
+    let parent_info = if actor.is_ai() {
+        if let Some(pid) = actor.parent_id {
+            if let Ok(Some(parent)) = state.actor_repo.find_by_id(&pid).await {
+                Some(serde_json::json!({
+                    "id": parent.id,
+                    "handle": parent.handle,
+                    "display_name": parent.display_name,
+                    "avatar_url": parent.avatar_url,
+                }))
+            } else {
+                None
+            }
+        } else {
+            None
+        }
+    } else {
+        None
+    };
+
+    // Compter les bots si c'est un humain
+    let bots_count = if actor.is_human() {
+        state.actor_repo.list_service_accounts(&actor.id).await.map(|b| b.len()).unwrap_or(0)
+    } else {
+        0
+    };
+
+    // ── Phase 37A — Enrichissements fédérés ──────────────────────
+
+    // Compteur de followers fédérés
+    let follower_count = state
+        .federation_repo
+        .count_followers(&actor.id)
+        .await
+        .unwrap_or(0);
+
+    // Adresse Fediverse pour la découverte Mastodon
+    let fediverse_address = format!("@{}@{}", actor.handle, state.federation_domain);
+
+    // Vegapunk Tweak : is_followed_by_current_user
+    // V1 : toujours false (Follow intra-instance pas implémenté)
+    // Future : vérifier si le JWT user suit cet acteur
+    let is_followed_by_current_user = false;
+    let _ = &auth; // Acknowledge MaybeAuth pour usage futur
+
+    // Timeline d'activités récentes (outbox, filtré)
+    // On ne montre que les types intéressants : Push, Create, Update
+    let raw_activities = state
+        .federation_repo
+        .list_activities(&actor.id, 20)
+        .await
+        .unwrap_or_default();
+
+    let recent_activities: Vec<serde_json::Value> = raw_activities
+        .into_iter()
+        .filter(|a| {
+            matches!(
+                a.activity_type.as_str(),
+                "Push" | "Create" | "Update" | "Accept"
+            )
+        })
+        .take(10)
+        .map(|a| {
+            serde_json::json!({
+                "type": a.activity_type,
+                "object_type": a.object_type,
+                "published": a.published_at,
+                "object_id": a.object_id,
+            })
+        })
+        .collect();
+
+    // Déterminer si le visiteur est le propriétaire (pour total_repos)
+    let is_owner = match &auth.0 {
+        Some(claims) => claims.actor_id() == actor.id,
+        None => false,
+    };
+
+    Ok(Json(serde_json::json!({
+        "actor": {
+            "id": actor.id,
+            "handle": actor.handle,
+            "display_name": actor.display_name,
+            "actor_type": actor.actor_type,
+            "avatar_url": actor.avatar_url,
+            "bio": actor.bio,
+            "created_at": actor.created_at,
+        },
+        "stats": {
+            "public_repos": public_repos,
+            "total_repos": if is_owner { repos.len() } else { public_repos },
+            "bots_count": bots_count,
+            "follower_count": follower_count,
+        },
+        "fediverse_address": fediverse_address,
+        "is_followed_by_current_user": is_followed_by_current_user,
+        "recent_activities": recent_activities,
+        "parent": parent_info,
+    })))
+}
+
+// ── Phase 26A — Merge Requests (Le Katana Croisé) ────────────────────────
+
+/// Référence vers un dépôt source (fork) pour les MR cross-repo (Phase 37E).
+#[derive(Debug, Deserialize)]
+struct SourceRepoRef {
+    pub owner: String,
+    pub name: String,
+}
+
+/// Requête JSON pour créer une MR.
+#[derive(Debug, Deserialize)]
+struct CreateMrBody {
+    pub title: String,
+    pub description: Option<String>,
+    pub source_branch: String,
+    #[serde(default = "default_target_branch")]
+    pub target_branch: String,
+    /// Phase 37E — Référence au dépôt source (fork) pour une MR cross-repo.
+    /// Si absent, c'est une MR intra-repo classique.
+    pub source_repo: Option<SourceRepoRef>,
+}
+
+fn default_target_branch() -> String {
+    "main".to_string()
+}
+
+/// Query params pour filtrer les MR.
+#[derive(Debug, Deserialize)]
+struct ListMrsQuery {
+    pub status: Option<String>,
+    #[serde(default = "default_mr_limit")]
+    pub limit: usize,
+    #[serde(default)]
+    pub offset: usize,
+}
+
+fn default_mr_limit() -> usize {
+    30
+}
+
+/// Requête JSON pour reviewer une MR.
+#[derive(Debug, Deserialize)]
+struct ReviewMrBody {
+    pub verdict: String,
+    pub body: Option<String>,
+}
+
+/// Requête JSON pour merger une MR.
+#[derive(Debug, Deserialize)]
+struct MergeMrBody {
+    #[serde(default = "default_merge_strategy")]
+    pub strategy: String,
+}
+
+fn default_merge_strategy() -> String {
+    "fast_forward".to_string()
+}
+
+/// `POST /api/v1/repos/{owner}/{repo}/mrs` — Créer une MR (intra-repo ou cross-repo).
+async fn create_mr_handler(
+    auth: crate::rest::auth_middleware::AuthUser,
+    State(state): State<SharedState>,
+    Path((owner, repo)): Path<(String, String)>,
+    Json(body): Json<CreateMrBody>,
+) -> Result<Json<serde_json::Value>, AppError> {
+    let repo_entity = state.resolve_repo.execute(&owner, &repo).await?;
+
+    // Phase 37E — Dispatcher selon le type de MR
+    let mr = if let Some(source) = body.source_repo {
+        // Cross-repo MR (fork → parent)
+        let cmd = application::use_cases::create_cross_repo_mr::CreateCrossRepoMrCommand {
+            author_id: auth.0.actor_id(),
+            source_owner: source.owner,
+            source_repo: source.name,
+            target_repository_id: repo_entity.id,
+            title: body.title,
+            description: body.description,
+            source_branch: body.source_branch,
+            target_branch: body.target_branch,
+        };
+        state.create_cross_repo_mr.execute(cmd).await?
+    } else {
+        // Intra-repo MR (comportement classique Phase 26A)
+        let cmd = application::use_cases::create_mr::CreateMrCommand {
+            author_id: auth.0.actor_id(),
+            repository_id: repo_entity.id,
+            title: body.title,
+            description: body.description,
+            source_branch: body.source_branch,
+            target_branch: body.target_branch,
+        };
+        state.create_mr.execute(cmd).await?
+    };
+
+    Ok(Json(serde_json::json!({
+        "id": mr.id,
+        "number": mr.number,
+        "title": mr.title,
+        "description": mr.description,
+        "source_branch": mr.source_branch,
+        "target_branch": mr.target_branch,
+        "status": mr.status,
+        "author_id": mr.author_id,
+        "created_at": mr.created_at,
+        "source_repository_id": mr.source_repository_id,
+        "cross_repo": mr.is_cross_repo(),
+    })))
+}
+
+/// `GET /api/v1/repos/{owner}/{repo}/mrs` — Lister les MR.
+async fn list_mrs_handler(
+    State(state): State<SharedState>,
+    Path((owner, repo)): Path<(String, String)>,
+    _auth: MaybeAuth,
+    Query(query): Query<ListMrsQuery>,
+) -> Result<Json<serde_json::Value>, AppError> {
+    let repo_entity = state.resolve_repo.execute(&owner, &repo).await?;
+
+    let status = query.status.as_deref().and_then(domain::MrStatus::from_sql_str);
+
+    let (mrs, total) = state
+        .list_mrs
+        .execute(&repo_entity.id, status, query.limit, query.offset)
+        .await?;
+
+    let items: Vec<serde_json::Value> = mrs
+        .into_iter()
+        .map(|mr| {
+            serde_json::json!({
+                "id": mr.id,
+                "number": mr.number,
+                "title": mr.title,
+                "source_branch": mr.source_branch,
+                "target_branch": mr.target_branch,
+                "status": mr.status,
+                "author_id": mr.author_id,
+                "created_at": mr.created_at,
+                "updated_at": mr.updated_at,
+                "source_repository_id": mr.source_repository_id,
+                "cross_repo": mr.is_cross_repo(),
+            })
+        })
+        .collect();
+
+    Ok(Json(serde_json::json!({
+        "items": items,
+        "total": total,
+    })))
+}
+
+/// `GET /api/v1/repos/{owner}/{repo}/mrs/{number}` — Détail d'une MR.
+async fn get_mr_handler(
+    State(state): State<SharedState>,
+    Path((owner, repo, number)): Path<(String, String, i32)>,
+    _auth: MaybeAuth,
+) -> Result<Json<serde_json::Value>, AppError> {
+    let repo_entity = state.resolve_repo.execute(&owner, &repo).await?;
+
+    let detail = state.get_mr.execute(&repo_entity.id, number).await?;
+    let mr = &detail.mr;
+
+    // Résoudre les actor UUIDs en handles lisibles (cohérence avec get_issue_handler)
+    let mut actor_ids = std::collections::HashSet::new();
+    actor_ids.insert(mr.author_id);
+    if let Some(aid) = mr.merged_by { actor_ids.insert(aid); }
+    for r in &detail.reviews { actor_ids.insert(r.reviewer_id); }
+    for e in &detail.events { actor_ids.insert(e.actor_id); }
+
+    let mut handle_map = std::collections::HashMap::<uuid::Uuid, String>::new();
+    for aid in &actor_ids {
+        if let Ok(Some(actor)) = state.actor_repo.find_by_id(aid).await {
+            handle_map.insert(*aid, actor.handle);
+        }
+    }
+
+    let reviews: Vec<serde_json::Value> = detail
+        .reviews
+        .into_iter()
+        .map(|r| {
+            let handle = handle_map.get(&r.reviewer_id).cloned().unwrap_or_else(|| r.reviewer_id.to_string()[..8].to_string());
+            serde_json::json!({
+                "id": r.id,
+                "reviewer_id": r.reviewer_id,
+                "reviewer_handle": handle,
+                "verdict": r.verdict,
+                "body": r.body,
+                "created_at": r.created_at,
+            })
+        })
+        .collect();
+
+    let events: Vec<serde_json::Value> = detail
+        .events
+        .into_iter()
+        .map(|e| {
+            let handle = handle_map.get(&e.actor_id).cloned().unwrap_or_else(|| e.actor_id.to_string()[..8].to_string());
+            serde_json::json!({
+                "id": e.id,
+                "actor_id": e.actor_id,
+                "actor_handle": handle,
+                "event_type": e.event_type.as_sql_str(),
+                "payload": e.payload,
+                "created_at": e.created_at,
+            })
+        })
+        .collect();
+
+    let author_handle = handle_map.get(&mr.author_id).cloned().unwrap_or_else(|| mr.author_id.to_string()[..8].to_string());
+
+    // P1 fix — Extraire les mentions validées (AST-aware) pour le frontend.
+    let mut all_text = String::new();
+    if let Some(desc) = &mr.description {
+        all_text.push_str(desc);
+        all_text.push('\n');
+    }
+    let raw_mentions = extract_mentions(&all_text);
+    let handle_values: std::collections::HashSet<&str> = handle_map.values().map(|s| s.as_str()).collect();
+    let validated_mentions: Vec<String> = raw_mentions
+        .into_iter()
+        .filter_map(|m| {
+            if m.is_remote() {
+                Some(m.raw)
+            } else if handle_values.contains(m.local_handle.as_str()) {
+                Some(m.local_handle)
+            } else {
+                None
+            }
+        })
+        .collect();
+
+    Ok(Json(serde_json::json!({
+        "id": mr.id,
+        "number": mr.number,
+        "title": mr.title,
+        "description": mr.description,
+        "source_branch": mr.source_branch,
+        "target_branch": mr.target_branch,
+        "status": mr.status,
+        "author_id": mr.author_id,
+        "author_handle": author_handle,
+        "merged_by": mr.merged_by,
+        "merged_at": mr.merged_at,
+        "closed_at": mr.closed_at,
+        "created_at": mr.created_at,
+        "updated_at": mr.updated_at,
+        "has_conflicts": detail.has_conflicts,
+        "reviews": reviews,
+        "events": events,
+        "mentions": validated_mentions,
+    })))
+}
+
+/// `POST /api/v1/repos/{owner}/{repo}/mrs/{number}/reviews` — Reviewer une MR.
+async fn review_mr_handler(
+    auth: crate::rest::auth_middleware::AuthUser,
+    State(state): State<SharedState>,
+    Path((owner, repo, number)): Path<(String, String, i32)>,
+    Json(body): Json<ReviewMrBody>,
+) -> Result<Json<serde_json::Value>, AppError> {
+    let repo_entity = state.resolve_repo.execute(&owner, &repo).await?;
+
+    let verdict = domain::MrVerdict::from_sql_str(&body.verdict).ok_or_else(|| {
+        DomainError::BusinessRule(format!(
+            "Verdict invalide: '{}'. Attendu: 'approve' ou 'changes_requested'",
+            body.verdict
+        ))
+    })?;
+
+    let cmd = application::use_cases::review_mr::ReviewMrCommand {
+        reviewer_id: auth.0.actor_id(),
+        repository_id: repo_entity.id,
+        mr_number: number,
+        verdict,
+        body: body.body,
+    };
+
+    let review = state.review_mr.execute(cmd).await?;
+
+    // ── Phase 37E-UI : Notification à l'auteur de la MR ──────────
+    // Fire-and-forget — on notifie l'auteur qu'une review a été soumise.
+    {
+        let mr_repo = Arc::clone(&state.mr_repo);
+        let actor_repo = Arc::clone(&state.actor_repo);
+        let notification_repo = Arc::clone(&state.notification_repo);
+        let reviewer_id = auth.0.actor_id();
+        let repo_id = repo_entity.id;
+        let repo_name = repo_entity.name.clone();
+        let repo_owner_id = repo_entity.owner_id;
+        let mr_number = number;
+        let verdict_str = body.verdict.clone();
+
+        tokio::spawn(async move {
+            // Retrouver la MR pour avoir l'auteur
+            let mr = match mr_repo.find_by_repo_and_number(&repo_id, mr_number).await {
+                Ok(Some(mr)) => mr,
+                _ => return,
+            };
+
+            // Ne pas notifier si le reviewer est l'auteur
+            if mr.author_id == reviewer_id {
+                return;
+            }
+
+            let reviewer_handle = match actor_repo.find_by_id(&reviewer_id).await {
+                Ok(Some(a)) => a.handle,
+                _ => "someone".to_string(),
+            };
+            let owner_handle = match actor_repo.find_by_id(&repo_owner_id).await {
+                Ok(Some(a)) => a.handle,
+                _ => "unknown".to_string(),
+            };
+
+            let notif = domain::entities::notification::Notification::new(
+                mr.author_id,
+                reviewer_id,
+                domain::entities::notification::NotificationType::ReviewReceived,
+                domain::entities::notification::TargetType::MergeRequest,
+                mr.id,
+                Some(mr_number),
+                repo_id,
+                owner_handle,
+                repo_name,
+                format!(
+                    "{} {} your MR #{}",
+                    reviewer_handle,
+                    if verdict_str == "approve" { "approved" } else { "requested changes on" },
+                    mr_number
+                ),
+            );
+            if let Err(e) = notification_repo.save(&notif).await {
+                tracing::warn!("⚠️ Notification ReviewReceived error: {e}");
+            }
+        });
+    }
+
+    Ok(Json(serde_json::json!({
+        "id": review.id,
+        "mr_id": review.mr_id,
+        "reviewer_id": review.reviewer_id,
+        "verdict": review.verdict,
+        "body": review.body,
+        "created_at": review.created_at,
+    })))
+}
+
+/// `POST /api/v1/repos/{owner}/{repo}/mrs/{number}/merge` — Merger une MR.
+async fn merge_mr_handler(
+    auth: crate::rest::auth_middleware::AuthUser,
+    State(state): State<SharedState>,
+    Path((owner, repo, number)): Path<(String, String, i32)>,
+    Json(body): Json<MergeMrBody>,
+) -> Result<Json<serde_json::Value>, AppError> {
+    let repo_entity = state.resolve_repo.execute(&owner, &repo).await?;
+
+    let strategy = match body.strategy.as_str() {
+        "fast_forward" => domain::MergeStrategy::FastForward,
+        "squash" => domain::MergeStrategy::Squash,
+        other => {
+            return Err(AppError(DomainError::BusinessRule(format!(
+                "Stratégie de merge invalide: '{}'. Attendu: 'fast_forward' ou 'squash'",
+                other
+            ))));
+        }
+    };
+
+    let cmd = application::use_cases::merge_mr::MergeMrCommand {
+        actor_id: auth.0.actor_id(),
+        repository_id: repo_entity.id,
+        mr_number: number,
+        strategy,
+    };
+
+    let result = state.merge_mr.execute(cmd).await?;
+
+    // ── Phase 37E-UI : Notification à l'auteur de la MR mergée ───
+    {
+        let mr_repo = Arc::clone(&state.mr_repo);
+        let actor_repo = Arc::clone(&state.actor_repo);
+        let notification_repo = Arc::clone(&state.notification_repo);
+        let merger_id = auth.0.actor_id();
+        let repo_id = repo_entity.id;
+        let repo_name = repo_entity.name.clone();
+        let repo_owner_id = repo_entity.owner_id;
+        let mr_number = number;
+
+        tokio::spawn(async move {
+            let mr = match mr_repo.find_by_repo_and_number(&repo_id, mr_number).await {
+                Ok(Some(mr)) => mr,
+                _ => return,
+            };
+
+            // Ne pas notifier si le merger est l'auteur
+            if mr.author_id == merger_id {
+                return;
+            }
+
+            let merger_handle = match actor_repo.find_by_id(&merger_id).await {
+                Ok(Some(a)) => a.handle,
+                _ => "someone".to_string(),
+            };
+            let owner_handle = match actor_repo.find_by_id(&repo_owner_id).await {
+                Ok(Some(a)) => a.handle,
+                _ => "unknown".to_string(),
+            };
+
+            let notif = domain::entities::notification::Notification::new(
+                mr.author_id,
+                merger_id,
+                domain::entities::notification::NotificationType::MrMerged,
+                domain::entities::notification::TargetType::MergeRequest,
+                mr.id,
+                Some(mr_number),
+                repo_id,
+                owner_handle,
+                repo_name,
+                format!("{} merged your MR #{}", merger_handle, mr_number),
+            );
+            if let Err(e) = notification_repo.save(&notif).await {
+                tracing::warn!("⚠️ Notification MrMerged error: {e}");
+            }
+        });
+    }
+
+    Ok(Json(serde_json::json!({
+        "merge_commit_id": result.merge_commit_id,
+        "status": "merged",
+    })))
+}
+
+/// `POST /api/v1/repos/{owner}/{repo}/mrs/{number}/close` — Fermer une MR.
+async fn close_mr_handler(
+    auth: crate::rest::auth_middleware::AuthUser,
+    State(state): State<SharedState>,
+    Path((owner, repo, number)): Path<(String, String, i32)>,
+) -> Result<Json<serde_json::Value>, AppError> {
+    let repo_entity = state.resolve_repo.execute(&owner, &repo).await?;
+    let actor_id = auth.0.actor_id();
+
+    state
+        .close_mr
+        .execute(&actor_id, &repo_entity.id, number)
+        .await?;
+
+    Ok(Json(serde_json::json!({
+        "status": "closed",
+    })))
+}
+
+/// `GET /api/v1/repos/{owner}/{repo}/mrs/{number}/diff` — Diff d'une MR.
+async fn mr_diff_handler(
+    State(state): State<SharedState>,
+    Path((owner, repo, number)): Path<(String, String, i32)>,
+    _auth: MaybeAuth,
+) -> Result<Json<serde_json::Value>, AppError> {
+    let repo_entity = state.resolve_repo.execute(&owner, &repo).await?;
+
+    let files = state.mr_diff.execute(&repo_entity.id, number).await?;
+
+    let files_json: Vec<serde_json::Value> = files
+        .into_iter()
+        .map(|f| {
+            serde_json::json!({
+                "path": f.path,
+                "status": f.status,
+                "hunks": f.hunks,
+                "additions": f.additions,
+                "deletions": f.deletions,
+                "too_large": f.too_large,
+            })
+        })
+        .collect();
+
+    Ok(Json(serde_json::json!({
+        "files": files_json,
+        "total_files": files_json.len(),
+    })))
+}
+
+/// Query params pour le pré-diff entre branches.
+#[derive(Debug, Deserialize)]
+struct DiffBetweenQuery {
+    pub source: String,
+    pub target: String,
+}
+
+/// `GET /api/v1/repos/{owner}/{repo}/diff-between?source=X&target=Y`
+///
+/// Calcule le diff merge-base entre deux branches AVANT création d'une MR.
+/// Utilisé par le formulaire "New MR" pour prévisualiser les changements.
+async fn diff_between_handler(
+    State(state): State<SharedState>,
+    Path((owner, repo)): Path<(String, String)>,
+    _auth: MaybeAuth,
+    Query(query): Query<DiffBetweenQuery>,
+) -> Result<Json<serde_json::Value>, AppError> {
+    let repo_entity = state.resolve_repo.execute(&owner, &repo).await?;
+
+    let files = state
+        .vcs_engine
+        .diff_merge_base(&repo_entity.id, &query.source, &query.target)
+        .await?;
+
+    let files_json: Vec<serde_json::Value> = files
+        .into_iter()
+        .map(|f| {
+            serde_json::json!({
+                "path": f.path,
+                "status": f.status,
+                "hunks": f.hunks,
+                "additions": f.additions,
+                "deletions": f.deletions,
+                "too_large": f.too_large,
+            })
+        })
+        .collect();
+
+    Ok(Json(serde_json::json!({
+        "files": files_json,
+        "total_files": files_json.len(),
+    })))
+}
+
+// ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+// ─── Phase 28C — ANBU Checkpoint Handlers (Multipart)
+// ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+/// Métadonnées JSON envoyées dans le champ `metadata` du multipart.
+/// Parsé en premier avant les fichiers artifacts.
+#[derive(Debug, Deserialize)]
+struct CheckpointMetadata {
+    /// UUID du checkpoint (provient du CLI local).
+    id: Uuid,
+    /// Agent IA source (ex: "antigravity").
+    agent: String,
+    /// Session ID de l'agent.
+    session_id: String,
+    /// Message utilisateur.
+    #[serde(default)]
+    message: Option<String>,
+    /// Référence jj/git.
+    #[serde(default)]
+    commit_id: Option<String>,
+}
+
+/// Créer un checkpoint ANBU — `POST /api/v1/repos/{owner}/{repo}/checkpoints`
+///
+/// 🔒 Authentification obligatoire (PAT ou JWT).
+///
+/// ## Protocole Multipart (Phase 28C)
+///
+/// Le payload `multipart/form-data` est structuré ainsi :
+/// 1. **Champ `metadata`** — JSON contenant id, agent, session_id, message, commit_id
+/// 2. **Champs `artifact_N`** — Fichiers binaires avec filename dans Content-Disposition
+///
+/// Le serveur parse d'abord les métadonnées, puis itère sur les fichiers
+/// pour les stocker sur IPFS via le use case CreateCheckpoint.
+async fn create_checkpoint_handler(
+    State(state): State<SharedState>,
+    Path((owner, repo)): Path<(String, String)>,
+    auth: AuthUser,
+    mut multipart: Multipart,
+) -> Result<(axum::http::StatusCode, Json<serde_json::Value>), AppError> {
+    let actor_id = auth.0.actor_id();
+
+    // Résoudre le repo en premier (fail fast)
+    let repo_entity = state.resolve_repo.execute(&owner, &repo).await?;
+
+    // 1. Parser le multipart : métadonnées d'abord, puis artifacts
+    let mut metadata: Option<CheckpointMetadata> = None;
+    let mut artifacts: Vec<(String, Vec<u8>)> = Vec::new();
+
+    while let Some(field) = multipart.next_field().await.map_err(|e| {
+        AppError::from(DomainError::BusinessRule(format!("Multipart read error: {e}")))
+    })? {
+        let field_name = field.name().unwrap_or("").to_string();
+
+        if field_name == "metadata" {
+            // Champ métadonnées : parse JSON
+            let text = field.text().await.map_err(|e| {
+                AppError::from(DomainError::BusinessRule(format!(
+                    "Failed to read metadata field: {e}"
+                )))
+            })?;
+            let meta: CheckpointMetadata = serde_json::from_str(&text).map_err(|e| {
+                AppError::from(DomainError::BusinessRule(format!(
+                    "Invalid metadata JSON: {e}"
+                )))
+            })?;
+            metadata = Some(meta);
+        } else if field_name.starts_with("artifact_") {
+            // Champ artifact : lire le contenu binaire
+            let filename = field
+                .file_name()
+                .unwrap_or("unknown")
+                .to_string();
+            let data = field.bytes().await.map_err(|e| {
+                AppError::from(DomainError::BusinessRule(format!(
+                    "Failed to read artifact {filename}: {e}"
+                )))
+            })?;
+            artifacts.push((filename, data.to_vec()));
+        } else {
+            warn!(field = %field_name, "ANBU: Unknown multipart field — ignored");
+        }
+    }
+
+    // 2. Valider que les métadonnées ont été reçues
+    let meta = metadata.ok_or_else(|| {
+        AppError::from(DomainError::BusinessRule(
+            "Missing 'metadata' field in multipart body".to_string(),
+        ))
+    })?;
+
+    info!(
+        owner = %owner,
+        repo = %repo,
+        checkpoint_id = %meta.id,
+        agent = %meta.agent,
+        artifact_count = artifacts.len(),
+        "REST: ANBU CreateCheckpoint reçu (Multipart)"
+    );
+
+    // 3. Créer le checkpoint via le use case
+    let cmd = application::use_cases::create_checkpoint::CreateCheckpointCommand {
+        id: meta.id,
+        repository_id: repo_entity.id,
+        actor_id,
+        agent: meta.agent,
+        session_id: meta.session_id,
+        message: meta.message,
+        commit_id: meta.commit_id,
+        artifacts,
+    };
+
+    let checkpoint = state.create_checkpoint.execute(cmd).await?;
+
+    Ok((
+        axum::http::StatusCode::CREATED,
+        Json(serde_json::json!({
+            "id": checkpoint.id,
+            "ipfs_cid": checkpoint.ipfs_cid,
+            "artifact_count": checkpoint.artifact_count,
+            "total_size": checkpoint.total_size,
+            "created_at": checkpoint.created_at,
+        })),
+    ))
+}
+
+/// Lister les checkpoints ANBU — `GET /api/v1/repos/{owner}/{repo}/checkpoints`
+async fn list_checkpoints_handler(
+    State(state): State<SharedState>,
+    Path((owner, repo)): Path<(String, String)>,
+    auth: MaybeAuth,
+) -> Result<Json<serde_json::Value>, AppError> {
+    info!(owner = %owner, repo = %repo, "REST: ANBU ListCheckpoints reçu");
+
+    let repo_entity = resolve_repo_with_access_check(&state, &owner, &repo, &auth).await?;
+
+    let checkpoints = state
+        .list_checkpoints
+        .execute(&repo_entity.id, 50)
+        .await?;
+
+    let checkpoints_json: Vec<serde_json::Value> = checkpoints
+        .into_iter()
+        .map(|cp| {
+            serde_json::json!({
+                "id": cp.id,
+                "agent": cp.agent,
+                "session_id": cp.session_id,
+                "message": cp.message,
+                "commit_id": cp.commit_id,
+                "ipfs_cid": cp.ipfs_cid,
+                "artifact_count": cp.artifact_count,
+                "total_size": cp.total_size,
+                "created_at": cp.created_at,
+            })
+        })
+        .collect();
+
+    Ok(Json(serde_json::json!({
+        "owner": owner,
+        "repo": repo,
+        "checkpoints": checkpoints_json,
+        "count": checkpoints_json.len(),
+    })))
+}
+
+/// Détail d'un checkpoint ANBU — `GET /api/v1/repos/{owner}/{repo}/checkpoints/{id}`
+async fn get_checkpoint_handler(
+    State(state): State<SharedState>,
+    Path((owner, repo, checkpoint_id)): Path<(String, String, Uuid)>,
+    auth: MaybeAuth,
+) -> Result<Json<serde_json::Value>, AppError> {
+    info!(
+        owner = %owner,
+        repo = %repo,
+        checkpoint_id = %checkpoint_id,
+        "REST: ANBU GetCheckpoint reçu"
+    );
+
+    // Vérifier l'accès au repo
+    let _repo_entity = resolve_repo_with_access_check(&state, &owner, &repo, &auth).await?;
+
+    let checkpoint = state
+        .list_checkpoints
+        .find(&checkpoint_id)
+        .await?
+        .ok_or_else(|| {
+            AppError::from(DomainError::BusinessRule(format!(
+                "Checkpoint {checkpoint_id} not found"
+            )))
+        })?;
+
+    Ok(Json(serde_json::json!({
+        "id": checkpoint.id,
+        "agent": checkpoint.agent,
+        "session_id": checkpoint.session_id,
+        "message": checkpoint.message,
+        "commit_id": checkpoint.commit_id,
+        "ipfs_cid": checkpoint.ipfs_cid,
+        "artifact_count": checkpoint.artifact_count,
+        "total_size": checkpoint.total_size,
+        "created_at": checkpoint.created_at,
+    })))
+}
+
+// ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+// ── Phase 33 — Issues/Tickets (Le Parchemin des Doléances)
+// ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+#[derive(Debug, Deserialize)]
+struct ListIssuesQuery {
+    status: Option<String>,
+    #[serde(default = "default_issues_limit")]
+    limit: usize,
+    #[serde(default)]
+    offset: usize,
+}
+fn default_issues_limit() -> usize { 30 }
+
+/// `GET /api/v1/repos/{owner}/{repo}/issues` — Liste des issues.
+async fn list_issues_handler(
+    State(state): State<SharedState>,
+    Path((owner, repo)): Path<(String, String)>,
+    Query(query): Query<ListIssuesQuery>,
+    _auth: MaybeAuth,
+) -> Result<Json<serde_json::Value>, AppError> {
+    let repo_entity = state.resolve_repo.execute(&owner, &repo).await?;
+    let status = query.status.as_deref().and_then(domain::IssueStatus::from_sql_str);
+    let (issues, total) = state.list_issues.execute(&repo_entity.id, status, query.limit, query.offset).await?;
+    let items: Vec<serde_json::Value> = issues.into_iter().map(|i| {
+        serde_json::json!({
+            "id": i.id, "number": i.number, "title": i.title,
+            "status": i.status, "author_id": i.author_id,
+            "assignee_id": i.assignee_id,
+            "created_at": i.created_at, "updated_at": i.updated_at,
+        })
+    }).collect();
+    Ok(Json(serde_json::json!({ "items": items, "total": total })))
+}
+
+#[derive(Debug, Deserialize)]
+struct CreateIssueBody {
+    title: String,
+    body: Option<String>,
+    #[serde(default)]
+    label_ids: Vec<Uuid>,
+}
+
+/// `POST /api/v1/repos/{owner}/{repo}/issues` — Créer une issue.
+async fn create_issue_handler(
+    auth: AuthUser,
+    State(state): State<SharedState>,
+    Path((owner, repo)): Path<(String, String)>,
+    Json(body): Json<CreateIssueBody>,
+) -> Result<(axum::http::StatusCode, Json<serde_json::Value>), AppError> {
+    let repo_entity = state.resolve_repo.execute(&owner, &repo).await?;
+    let cmd = application::use_cases::create_issue::CreateIssueCommand {
+        author_id: auth.0.actor_id(),
+        repository_id: repo_entity.id,
+        title: body.title,
+        body: body.body,
+        label_ids: body.label_ids,
+    };
+    let issue = state.create_issue.execute(cmd).await?;
+    Ok((axum::http::StatusCode::CREATED, Json(serde_json::json!({
+        "id": issue.id, "number": issue.number, "title": issue.title,
+        "status": issue.status, "created_at": issue.created_at,
+    }))))
+}
+
+/// `GET /api/v1/repos/{owner}/{repo}/issues/{number}` — Détail d'une issue.
+async fn get_issue_handler(
+    State(state): State<SharedState>,
+    Path((owner, repo, number)): Path<(String, String, i32)>,
+    _auth: MaybeAuth,
+) -> Result<Json<serde_json::Value>, AppError> {
+    let repo_entity = state.resolve_repo.execute(&owner, &repo).await?;
+    let detail = state.get_issue.execute(&repo_entity.id, number).await?;
+    let i = &detail.issue;
+
+    // Phase 37C — Résoudre les actor UUIDs en handles lisibles
+    let mut actor_ids = std::collections::HashSet::new();
+    actor_ids.insert(i.author_id);
+    if let Some(aid) = i.assignee_id { actor_ids.insert(aid); }
+    if let Some(aid) = i.closed_by { actor_ids.insert(aid); }
+    for c in &detail.comments { actor_ids.insert(c.author_id); }
+    for e in &detail.events { actor_ids.insert(e.actor_id); }
+
+    let mut handle_map = std::collections::HashMap::<uuid::Uuid, String>::new();
+    for aid in &actor_ids {
+        if let Ok(Some(actor)) = state.actor_repo.find_by_id(aid).await {
+            handle_map.insert(*aid, actor.handle);
+        }
+    }
+
+    let comments: Vec<serde_json::Value> = detail.comments.into_iter().map(|c| {
+        let handle = handle_map.get(&c.author_id).cloned().unwrap_or_else(|| c.author_id.to_string()[..8].to_string());
+        serde_json::json!({
+            "id": c.id, "author_id": c.author_id, "author_handle": handle,
+            "body": c.body,
+            "created_at": c.created_at, "updated_at": c.updated_at,
+        })
+    }).collect();
+    let events: Vec<serde_json::Value> = detail.events.into_iter().map(|e| {
+        let handle = handle_map.get(&e.actor_id).cloned().unwrap_or_else(|| e.actor_id.to_string()[..8].to_string());
+        serde_json::json!({
+            "id": e.id, "actor_id": e.actor_id, "actor_handle": handle,
+            "event_type": e.event_type.as_sql_str(),
+            "payload": e.payload, "created_at": e.created_at,
+        })
+    }).collect();
+    let labels: Vec<serde_json::Value> = detail.labels.into_iter().map(|l| {
+        serde_json::json!({
+            "id": l.id, "name": l.name, "color": l.color, "description": l.description,
+        })
+    }).collect();
+
+    let author_handle = handle_map.get(&i.author_id).cloned().unwrap_or_else(|| i.author_id.to_string()[..8].to_string());
+
+    // P1 fix — Extraire les mentions validées (AST-aware) pour le frontend.
+    // Le frontend ne linkifiera QUE les handles présents dans cette liste.
+    // Combine : handles locaux confirmés par handle_map + handles fédérés bruts.
+    let mut all_text = String::new();
+    if let Some(body) = &i.body {
+        all_text.push_str(body);
+        all_text.push('\n');
+    }
+    for c in &comments {
+        if let Some(body) = c.get("body").and_then(|v| v.as_str()) {
+            all_text.push_str(body);
+            all_text.push('\n');
+        }
+    }
+    let raw_mentions = extract_mentions(&all_text);
+    let handle_values: std::collections::HashSet<&str> = handle_map.values().map(|s| s.as_str()).collect();
+    let validated_mentions: Vec<String> = raw_mentions
+        .into_iter()
+        .filter_map(|m| {
+            if m.is_remote() {
+                // Mention fédérée — inclure le raw complet (ex: "alice@mastodon.social")
+                Some(m.raw)
+            } else if handle_values.contains(m.local_handle.as_str()) {
+                // Mention locale — confirmée par la BDD
+                Some(m.local_handle)
+            } else {
+                // Handle local inconnu — on ne le linkifie pas
+                None
+            }
+        })
+        .collect();
+
+    Ok(Json(serde_json::json!({
+        "id": i.id, "number": i.number, "title": i.title, "body": i.body,
+        "status": i.status, "author_id": i.author_id, "author_handle": author_handle,
+        "assignee_id": i.assignee_id,
+        "closed_by": i.closed_by, "closed_at": i.closed_at,
+        "created_at": i.created_at, "updated_at": i.updated_at,
+        "comments": comments, "events": events, "labels": labels,
+        "mentions": validated_mentions,
+    })))
+}
+
+/// `POST /api/v1/repos/{owner}/{repo}/issues/{number}/close`
+async fn close_issue_handler(
+    auth: AuthUser, State(state): State<SharedState>,
+    Path((owner, repo, number)): Path<(String, String, i32)>,
+) -> Result<Json<serde_json::Value>, AppError> {
+    let repo_entity = state.resolve_repo.execute(&owner, &repo).await?;
+    state.close_issue.close(&auth.0.actor_id(), &repo_entity.id, number).await?;
+    Ok(Json(serde_json::json!({ "status": "closed" })))
+}
+
+/// `POST /api/v1/repos/{owner}/{repo}/issues/{number}/reopen`
+async fn reopen_issue_handler(
+    auth: AuthUser, State(state): State<SharedState>,
+    Path((owner, repo, number)): Path<(String, String, i32)>,
+) -> Result<Json<serde_json::Value>, AppError> {
+    let repo_entity = state.resolve_repo.execute(&owner, &repo).await?;
+    state.close_issue.reopen(&auth.0.actor_id(), &repo_entity.id, number).await?;
+    Ok(Json(serde_json::json!({ "status": "open" })))
+}
+
+#[derive(Debug, Deserialize)]
+struct CommentIssueBody { body: String }
+
+/// `POST /api/v1/repos/{owner}/{repo}/issues/{number}/comments`
+async fn comment_issue_handler(
+    auth: AuthUser, State(state): State<SharedState>,
+    Path((owner, repo, number)): Path<(String, String, i32)>,
+    Json(body): Json<CommentIssueBody>,
+) -> Result<(axum::http::StatusCode, Json<serde_json::Value>), AppError> {
+    let repo_entity = state.resolve_repo.execute(&owner, &repo).await?;
+    let cmd = application::use_cases::comment_issue::CommentIssueCommand {
+        author_id: auth.0.actor_id(),
+        repository_id: repo_entity.id,
+        issue_number: number,
+        body: body.body,
+    };
+    let comment = state.comment_issue.execute(cmd).await?;
+    Ok((axum::http::StatusCode::CREATED, Json(serde_json::json!({
+        "id": comment.id, "author_id": comment.author_id, "body": comment.body,
+        "created_at": comment.created_at,
+    }))))
+}
+
+#[derive(Debug, Deserialize)]
+struct UpdateIssueBody {
+    title: Option<String>,
+    body: Option<Option<String>>,
+}
+
+/// `POST /api/v1/repos/{owner}/{repo}/issues/{number}/update`
+async fn update_issue_handler(
+    auth: AuthUser, State(state): State<SharedState>,
+    Path((owner, repo, number)): Path<(String, String, i32)>,
+    Json(body): Json<UpdateIssueBody>,
+) -> Result<Json<serde_json::Value>, AppError> {
+    let repo_entity = state.resolve_repo.execute(&owner, &repo).await?;
+    let cmd = application::use_cases::update_issue::UpdateIssueCommand {
+        actor_id: auth.0.actor_id(),
+        repository_id: repo_entity.id,
+        issue_number: number,
+        title: body.title,
+        body: body.body,
+    };
+    state.update_issue.execute(cmd).await?;
+    Ok(Json(serde_json::json!({ "status": "updated" })))
+}
+
+/// `GET /api/v1/repos/{owner}/{repo}/labels`
+async fn list_labels_handler(
+    State(state): State<SharedState>,
+    Path((owner, repo)): Path<(String, String)>,
+    _auth: MaybeAuth,
+) -> Result<Json<serde_json::Value>, AppError> {
+    let repo_entity = state.resolve_repo.execute(&owner, &repo).await?;
+    let labels = state.manage_labels.list_labels(&repo_entity.id).await?;
+    let items: Vec<serde_json::Value> = labels.into_iter().map(|l| {
+        serde_json::json!({ "id": l.id, "name": l.name, "color": l.color, "description": l.description })
+    }).collect();
+    Ok(Json(serde_json::json!({ "labels": items })))
+}
+
+#[derive(Debug, Deserialize)]
+struct CreateLabelBody { name: String, color: String, description: Option<String> }
+
+/// `POST /api/v1/repos/{owner}/{repo}/labels`
+async fn create_label_handler(
+    auth: AuthUser, State(state): State<SharedState>,
+    Path((owner, repo)): Path<(String, String)>,
+    Json(body): Json<CreateLabelBody>,
+) -> Result<(axum::http::StatusCode, Json<serde_json::Value>), AppError> {
+    let repo_entity = state.resolve_repo.execute(&owner, &repo).await?;
+    let label = state.manage_labels.create_label(&auth.0.actor_id(), &repo_entity.id, body.name, body.color, body.description).await?;
+    Ok((axum::http::StatusCode::CREATED, Json(serde_json::json!({
+        "id": label.id, "name": label.name, "color": label.color,
+    }))))
+}
+
+/// `DELETE /api/v1/repos/{owner}/{repo}/labels/{label_id}`
+async fn delete_label_handler(
+    auth: AuthUser, State(state): State<SharedState>,
+    Path((owner, repo, label_id)): Path<(String, String, Uuid)>,
+) -> Result<Json<serde_json::Value>, AppError> {
+    let repo_entity = state.resolve_repo.execute(&owner, &repo).await?;
+    state.manage_labels.delete_label(&auth.0.actor_id(), &repo_entity.id, &label_id).await?;
+    Ok(Json(serde_json::json!({ "status": "deleted" })))
+}
+
+#[derive(Debug, Deserialize)]
+struct AddLabelBody { label_id: Uuid }
+
+/// `POST /api/v1/repos/{owner}/{repo}/issues/{number}/labels`
+async fn add_issue_label_handler(
+    auth: AuthUser, State(state): State<SharedState>,
+    Path((owner, repo, number)): Path<(String, String, i32)>,
+    Json(body): Json<AddLabelBody>,
+) -> Result<Json<serde_json::Value>, AppError> {
+    let repo_entity = state.resolve_repo.execute(&owner, &repo).await?;
+    state.manage_labels.add_label(&auth.0.actor_id(), &repo_entity.id, number, &body.label_id).await?;
+    Ok(Json(serde_json::json!({ "status": "label_added" })))
+}
+
+/// `DELETE /api/v1/repos/{owner}/{repo}/issues/{number}/labels/{label_id}`
+async fn remove_issue_label_handler(
+    auth: AuthUser, State(state): State<SharedState>,
+    Path((owner, repo, number, label_id)): Path<(String, String, i32, Uuid)>,
+) -> Result<Json<serde_json::Value>, AppError> {
+    let repo_entity = state.resolve_repo.execute(&owner, &repo).await?;
+    state.manage_labels.remove_label(&auth.0.actor_id(), &repo_entity.id, number, &label_id).await?;
+    Ok(Json(serde_json::json!({ "status": "label_removed" })))
+}
+
+// ══════════════════════════════════════════════════════════════════════
+// Phase 38 — Notifications (Le Carillon) 🔔
+// ══════════════════════════════════════════════════════════════════════
+
+#[derive(Debug, Deserialize)]
+struct NotificationsQuery {
+    limit: Option<i64>,
+    offset: Option<i64>,
+}
+
+/// `GET /api/v1/notifications` — Liste paginée des notifications.
+async fn list_notifications_handler(
+    auth: AuthUser,
+    State(state): State<SharedState>,
+    Query(q): Query<NotificationsQuery>,
+) -> Result<Json<serde_json::Value>, AppError> {
+    let actor_id = auth.0.actor_id();
+    let limit = q.limit.unwrap_or(20).min(100);
+    let offset = q.offset.unwrap_or(0);
+
+    let (notifications, total) = state
+        .notification_repo
+        .list_for_recipient(&actor_id, limit, offset)
+        .await?;
+
+    let unread = state.notification_repo.count_unread(&actor_id).await?;
+
+    // Resolve actor handles for each notification
+    let mut items = Vec::with_capacity(notifications.len());
+    for n in &notifications {
+        let actor_handle = match state.actor_repo.find_by_id(&n.actor_id).await {
+            Ok(Some(actor)) => Some(actor.handle),
+            _ => None,
+        };
+        items.push(serde_json::json!({
+            "id": n.id,
+            "actor_id": n.actor_id,
+            "actor_handle": actor_handle,
+            "notification_type": n.notification_type,
+            "target_type": n.target_type,
+            "target_id": n.target_id,
+            "target_number": n.target_number,
+            "repository_owner": n.repository_owner,
+            "repository_name": n.repository_name,
+            "message": n.message,
+            "read": n.read,
+            "read_at": n.read_at,
+            "created_at": n.created_at,
+        }));
+    }
+
+    Ok(Json(serde_json::json!({
+        "notifications": items,
+        "total": total,
+        "unread_count": unread,
+    })))
+}
+
+/// `GET /api/v1/notifications/unread-count` — Compteur non-lu (léger, pour badge).
+async fn unread_count_handler(
+    auth: AuthUser,
+    State(state): State<SharedState>,
+) -> Result<Json<serde_json::Value>, AppError> {
+    let count = state
+        .notification_repo
+        .count_unread(&auth.0.actor_id())
+        .await?;
+
+    Ok(Json(serde_json::json!({ "unread_count": count })))
+}
+
+/// `PATCH /api/v1/notifications/{id}/read` — Marquer une notification comme lue.
+async fn mark_read_handler(
+    auth: AuthUser,
+    State(state): State<SharedState>,
+    Path(id): Path<Uuid>,
+) -> Result<Json<serde_json::Value>, AppError> {
+    state
+        .notification_repo
+        .mark_read(&id, &auth.0.actor_id())
+        .await?;
+
+    Ok(Json(serde_json::json!({ "status": "read" })))
+}
+
+/// `PATCH /api/v1/notifications/read-all` — Marquer toutes comme lues.
+async fn mark_all_read_handler(
+    auth: AuthUser,
+    State(state): State<SharedState>,
+) -> Result<Json<serde_json::Value>, AppError> {
+    let updated = state
+        .notification_repo
+        .mark_all_read(&auth.0.actor_id())
+        .await?;
+
+    Ok(Json(serde_json::json!({ "status": "all_read", "updated": updated })))
 }

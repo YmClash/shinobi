@@ -15,6 +15,7 @@ use async_trait::async_trait;
 use uuid::Uuid;
 
 use crate::entities::operation::Operation;
+use crate::entities::webhook::WebhookEvent;
 use crate::errors::DomainError;
 
 /// Résumé d'analyse sémantique publié sur le bus après traitement Tensai.
@@ -43,7 +44,7 @@ pub struct AnalysisCompleteSummary {
 ///
 /// Conçu pour le pattern événementiel : chaque mutation métier
 /// significative est propagée sur le bus pour les consommateurs
-/// downstream (CI/CD, monitoring, IA).
+/// downstream (CI/CD, monitoring, IA, webhooks).
 #[async_trait]
 pub trait EventPublisher: Send + Sync {
     /// Publie un événement "opération créée" sur le bus.
@@ -62,5 +63,73 @@ pub trait EventPublisher: Send + Sync {
     async fn publish_analysis_complete(
         &self,
         summary: &AnalysisCompleteSummary,
+    ) -> Result<(), DomainError>;
+
+    /// Publie un événement webhook sur le bus Chakra (Phase 34-V2).
+    ///
+    /// Topic: `shinobi.events.webhooks`
+    /// Le ChakraConsumer en background dispatche vers les endpoints HTTP abonnés.
+    /// Fire-and-forget : le Use Case ne bloque pas sur la livraison HTTP.
+    ///
+    /// Si le système Chakra est désactivé, cette méthode retourne `Ok(())`
+    /// silencieusement (graceful degradation).
+    async fn publish_webhook_event(
+        &self,
+        event: &WebhookEvent,
+    ) -> Result<(), DomainError>;
+
+    /// Publie un événement "pipeline requested" pour le Jutsu Runner (Phase 40).
+    ///
+    /// Topic: `shinobi.jutsu.pipeline`
+    /// Déclenché par le hook post-push ou le trigger REST quand un pipeline
+    /// doit être exécuté.
+    ///
+    /// Le message contient les informations nécessaires au JutsuConsumer
+    /// pour lancer l'exécution du pipeline :
+    /// - `repository_id` : UUID du dépôt
+    /// - `commit_id` : SHA du commit à builder
+    /// - `trigger_event` : type de déclencheur (push, mr_created, tag, manual)
+    /// - `pipeline_id` : UUID du pipeline pré-créé par le trigger endpoint
+    ///   (Some pour manual trigger, None pour git push auto-trigger)
+    ///
+    /// Si le système Jutsu est désactivé, cette méthode retourne `Ok(())`
+    /// silencieusement (graceful degradation).
+    async fn publish_pipeline_requested(
+        &self,
+        repository_id: Uuid,
+        commit_id: &str,
+        trigger_event: &str,
+        pipeline_id: Option<Uuid>,
+    ) -> Result<(), DomainError>;
+
+    /// Phase 41 — Publie une demande Kage Bunshin sur un topic Kafka dédié.
+    ///
+    /// Topic: `shinobi.jutsu.kage-bunshin`
+    ///
+    /// ## Vegapunk Tweak #10 — File dédiée
+    /// Le Kage Bunshin s'exécute dans son propre consumer (pas dans les
+    /// workers pipeline). L'inférence LLM (30-60s) ne bloque plus
+    /// les 2 workers du `JutsuConsumer` normal.
+    ///
+    /// Le message contient toutes les informations nécessaires au
+    /// `KageBunshinConsumer` pour exécuter le heal :
+    /// - `pipeline_id` : UUID du pipeline parent
+    /// - `stage_id` : UUID du stage en échec
+    /// - `stage_name` : nom du stage
+    /// - `stage_image` : image Docker du stage
+    /// - `stage_commands` : commandes du stage
+    /// - `error_logs` : logs d'erreur du container
+    /// - `repository_id` : UUID du dépôt
+    /// - `commit_id` : SHA du commit
+    async fn publish_kage_bunshin_requested(
+        &self,
+        pipeline_id: Uuid,
+        stage_id: Uuid,
+        stage_name: &str,
+        stage_image: &str,
+        stage_commands: &[String],
+        error_logs: &str,
+        repository_id: Uuid,
+        commit_id: &str,
     ) -> Result<(), DomainError>;
 }

@@ -37,8 +37,15 @@ tracing-subscriber = { workspace = true }
 anyhow = { workspace = true }
 dotenvy = { workspace = true }
 sqlx = { workspace = true }
+chrono = { workspace = true }
 tokio-util = { workspace = true }
 futures = { workspace = true }
+
+# — Phase 40 — Jutsu Consumer (vit dans src/ pour éviter la dépendance circulaire) —
+tempfile = { workspace = true }
+rdkafka = { workspace = true }
+serde_json = { workspace = true }
+uuid = { workspace = true }
 
 # ─────────────────────────────────────────────
 # Dépendances centralisées du workspace
@@ -49,7 +56,7 @@ futures = { workspace = true }
 tokio = { version = "1.52", features = ["full"] }
 
 # — API REST (Axum) —
-axum = { version = "0.8", features = ["macros"] }
+axum = { version = "0.8", features = ["macros", "multipart"] }
 
 # — gRPC / Protobuf (Ninpo) —
 tonic = { version = "0.14" }
@@ -64,6 +71,7 @@ redis = { version = "1.2", features = ["tokio-comp"] }
 
 # — Moteur VCS —
 jj-lib = { version = "=0.41.0", features = ["git"] }
+gix = { version = "0.83.0", default-features = false }
 
 # — Tests —
 tempfile = { version = "3" }
@@ -123,3 +131,27 @@ futures-util = { version = "0.3" }
 
 # — Text Diff (Phase 17 — Commits & Diff Colorisé) —
 similar = { version = "2" }
+
+# — Auth (Phase 19A — Les Portes de Babylone) —
+argon2 = { version = "0.5", features = ["std"] }
+jsonwebtoken = { version = "9" }
+rand = { version = "0.9" }
+sha2 = { version = "0.10" }
+hex = { version = "0.4" }
+
+# — Phase 34 — Chakra (Webhooks HMAC-SHA256) —
+hmac = { version = "0.12" }
+
+# — Fédération (Phase 27 — ForgeFed / ActivityPub) —
+rsa = { version = "0.9", features = ["pem", "sha2"] }
+pkcs8 = { version = "0.10", features = ["pem"] }
+base64 = { version = "0.22" }
+url = { version = "2" }
+
+# — Phase 37C — @Mentions (Le Mégaphone) —
+pulldown-cmark = { version = "0.12" }
+regex = { version = "1" }
+
+# — Phase 40 — Jutsu Runner (Docker CI/CD natif) —
+bollard = { version = "0.18" }
+serde_yaml = { version = "0.9" }

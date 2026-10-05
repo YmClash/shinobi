@@ -24,6 +24,29 @@ use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
 use uuid::Uuid;
 
+// ── Noms Réservés (Phase 25 — Bouclier Anti-Usurpation) ──────────────
+
+/// Handles réservés par le système SHINOBI.
+/// Aucun bot (ni humain) ne peut créer un compte avec ces noms.
+/// Protège contre l'usurpation d'identité des agents système internes.
+pub const RESERVED_HANDLES: &[&str] = &[
+    "system", "admin", "root", "shinobi",
+    "oracle", "sensei", "tensai",
+    "bot", "api", "app", "service",
+    "github", "gitlab", "bitbucket",
+    "help", "support", "info", "contact",
+    "null", "undefined", "none", "anonymous",
+    "moderator", "mod", "staff",
+    // Phase 27-pre — Élargissement du bouclier
+    "noreply", "security", "administrator",
+    "abuse", "postmaster", "webmaster",
+];
+
+/// Vérifie si un handle est réservé par le système.
+pub fn is_reserved_handle(handle: &str) -> bool {
+    RESERVED_HANDLES.contains(&handle.to_lowercase().as_str())
+}
+
 // ── Constantes Fantômes (synchronisées avec migration 006) ────────────
 
 /// UUID déterministe de l'acteur système SHINOBI.
@@ -33,6 +56,15 @@ use uuid::Uuid;
 ///
 /// ⚠️ DOIT correspondre à la valeur dans `migrations/006_actors_repositories.sql`.
 pub const SYSTEM_ACTOR_ID: Uuid = Uuid::from_bytes([0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 1]);
+
+/// Handle déterministe du Service Account Sensei (Phase 41 — Kage Bunshin).
+///
+/// Utilisé comme auteur des MR automatiques d'auto-healing.
+/// Le bot est créé à la demande lors du premier heal réussi
+/// (via `find_by_handle` + `create` si absent).
+///
+/// Vegapunk Tweak #11 : identité du clone.
+pub const SENSEI_ACTOR_HANDLE: &str = "shinobi-sensei-bot";
 
 /// UUID déterministe du dépôt par défaut.
 /// Les opérations MVP existantes y sont rattachées lors de la migration.
@@ -121,8 +153,24 @@ pub struct Actor {
     /// URL de l'avatar (optionnel).
     pub avatar_url: Option<String>,
 
+    /// Adresse email (optionnel — humains uniquement, login Phase 19A).
+    pub email: Option<String>,
+
     /// Biographie / description (optionnel).
     pub bio: Option<String>,
+
+    /// Identifiant GitHub (OAuth Phase 20). Immuable, unique.
+    pub github_id: Option<i64>,
+
+    /// Token OAuth GitHub en clair (Phase 20B — Le Clonage Massif).
+    /// Mis à jour à chaque login OAuth. Permet les appels API GitHub
+    /// authentifiés (lister les repos de l'utilisateur, etc.).
+    pub github_token: Option<String>,
+
+    /// Identifiant du créateur humain (Phase 25 — Service Accounts).
+    /// Non-null uniquement pour les `AiAgent`. Établit la lignée
+    /// bot → humain pour l'héritage RBAC dynamique et la facturation.
+    pub parent_id: Option<Uuid>,
 
     /// Date de création du compte.
     pub created_at: DateTime<Utc>,
@@ -141,7 +189,35 @@ impl Actor {
             display_name: display_name.into(),
             actor_type,
             avatar_url: None,
+            email: None,
             bio: None,
+            github_id: None,
+            github_token: None,
+            parent_id: None,
+            created_at: Utc::now(),
+        }
+    }
+
+    /// Construit un nouvel acteur de type Service Account (AI Agent).
+    ///
+    /// Phase 25 — Le bot hérite des droits de son parent humain.
+    /// Le `parent_id` est obligatoire et doit pointer vers un acteur Human.
+    pub fn new_service_account(
+        handle: impl Into<String>,
+        display_name: impl Into<String>,
+        parent_id: Uuid,
+    ) -> Self {
+        Self {
+            id: Uuid::new_v4(),
+            handle: handle.into(),
+            display_name: display_name.into(),
+            actor_type: ActorType::AiAgent,
+            avatar_url: None,
+            email: None,
+            bio: None,
+            github_id: None,
+            github_token: None,
+            parent_id: Some(parent_id),
             created_at: Utc::now(),
         }
     }
@@ -227,7 +303,7 @@ mod tests {
 
     #[test]
     fn test_actor_serde_roundtrip() {
-        let actor = Actor::new("oracle", "Oracle Reviewer", ActorType::AiAgent);
+        let actor = Actor::new("oracle-test", "Oracle Reviewer", ActorType::AiAgent);
         let json = serde_json::to_string(&actor).unwrap();
         let deserialized: Actor = serde_json::from_str(&json).unwrap();
         assert_eq!(actor, deserialized);
@@ -237,5 +313,33 @@ mod tests {
     fn test_actor_type_serde_snake_case() {
         let json = serde_json::to_string(&ActorType::AiAgent).unwrap();
         assert_eq!(json, "\"ai_agent\"");
+    }
+
+    // ── Phase 25 — Service Accounts ──────────────────────
+
+    #[test]
+    fn test_new_service_account() {
+        let parent_id = Uuid::new_v4();
+        let bot = Actor::new_service_account("ymclash-oracle-bot", "Oracle Bot", parent_id);
+        assert!(bot.is_ai());
+        assert!(!bot.is_human());
+        assert_eq!(bot.parent_id, Some(parent_id));
+        assert_eq!(bot.handle, "ymclash-oracle-bot");
+    }
+
+    #[test]
+    fn test_regular_actor_has_no_parent() {
+        let actor = Actor::new("alice", "Alice", ActorType::Human);
+        assert_eq!(actor.parent_id, None);
+    }
+
+    #[test]
+    fn test_reserved_handles() {
+        assert!(is_reserved_handle("system"));
+        assert!(is_reserved_handle("ORACLE"));
+        assert!(is_reserved_handle("Sensei"));
+        assert!(is_reserved_handle("admin"));
+        assert!(!is_reserved_handle("alice"));
+        assert!(!is_reserved_handle("ymclash-oracle-bot"));
     }
 }

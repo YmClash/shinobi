@@ -43,17 +43,14 @@ export default function CodeViewer({
   const filename = path.split("/").pop() ?? path;
   const lines = content?.split("\n") ?? [];
 
-  // ── Shiki lazy-load ──────────────────────────────────────────
+  // ── Shiki lazy-load (dual-theme via CSS variables) ────────────
   useEffect(() => {
     if (!content || !isText || rawMode) return;
     let cancelled = false;
     (async () => {
       try {
-        const { codeToHtml } = await import("shiki");
-        const html = await codeToHtml(content, {
-          lang: language ?? "text",
-          theme: "github-dark",
-        });
+        const { highlightCode } = await import("@/lib/shiki");
+        const html = await highlightCode(content, language ?? "text");
         if (!cancelled) setHighlightedHtml(html);
       } catch {
         if (!cancelled) setHighlightedHtml(null);

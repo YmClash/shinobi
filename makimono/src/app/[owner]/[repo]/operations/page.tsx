@@ -136,7 +136,7 @@ function RepoSelector({ currentOwner, currentRepo }: { currentOwner: string; cur
   const router = useRouter();
   const [open, setOpen] = useState(false);
   const ref = useRef<HTMLDivElement>(null);
-  const { data: reposData } = useRepositories("system");
+  const { data: reposData } = useRepositories(currentOwner);
   const repos = reposData?.repositories ?? [];
 
   // Close on outside click
@@ -173,7 +173,7 @@ function RepoSelector({ currentOwner, currentRepo }: { currentOwner: string; cur
                 onClick={() => {
                   setOpen(false);
                   if (!isActive) {
-                    router.push(`/system/${repo.name}/operations`);
+                    router.push(`/${currentOwner}/${repo.name}/operations`);
                   }
                 }}
                 className={`repo-selector-item w-full text-left ${isActive ? "active" : ""}`}

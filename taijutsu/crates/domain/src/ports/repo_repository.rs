@@ -42,4 +42,55 @@ pub trait RepoRepository: Send + Sync {
         repo_id: &Uuid,
         role: &str,
     ) -> Result<(), DomainError>;
+
+    /// Vérifie si un acteur est collaborateur d'un dépôt (Phase 19A — RBAC).
+    async fn is_collaborator(
+        &self,
+        actor_id: &Uuid,
+        repo_id: &Uuid,
+    ) -> Result<bool, DomainError>;
+
+    /// Retourne le rôle d'un acteur dans un dépôt (Phase 19A — RBAC).
+    /// Retourne None si l'acteur n'est pas collaborateur.
+    async fn get_role(
+        &self,
+        actor_id: &Uuid,
+        repo_id: &Uuid,
+    ) -> Result<Option<String>, DomainError>;
+
+    /// Met à jour le timestamp `mirror_synced_at` à NOW() (Phase 19B — GitHub Import).
+    async fn update_mirror_synced_at(&self, repo_id: &Uuid) -> Result<(), DomainError>;
+
+    // ── Phase 24 — Soft Delete (Corbeille) ───────────────────────────
+
+    /// Marque un dépôt comme supprimé (soft delete → corbeille).
+    /// Retourne `true` si le dépôt existait et a été marqué.
+    async fn soft_delete(&self, repo_id: &Uuid) -> Result<bool, DomainError>;
+
+    /// Restaure un dépôt depuis la corbeille (annule le soft delete).
+    /// Retourne `true` si le dépôt existait et a été restauré.
+    async fn restore(&self, repo_id: &Uuid) -> Result<bool, DomainError>;
+
+    /// Supprime définitivement un dépôt et ses données (CASCADE).
+    /// Utilisé par la purge automatique après le délai de rétention.
+    async fn hard_delete(&self, repo_id: &Uuid) -> Result<bool, DomainError>;
+
+    /// Liste les dépôts en corbeille d'un propriétaire.
+    async fn list_deleted_by_owner(&self, owner_id: &Uuid) -> Result<Vec<Repository>, DomainError>;
+
+    /// Liste les dépôts à purger (deleted_at plus ancien que le seuil donné).
+    async fn list_expired_trash(&self, retention_secs: i64) -> Result<Vec<Repository>, DomainError>;
+
+    // ── Phase 37B — Fork Local (Le Dédoublement) ────────────────
+
+    /// Compte le nombre de forks d'un dépôt donné.
+    async fn count_forks(&self, repo_id: &Uuid) -> Result<u64, DomainError>;
+
+    /// Vérifie si un owner possède déjà un fork du dépôt source.
+    /// Retourne le fork existant si trouvé.
+    async fn find_fork_by_owner(
+        &self,
+        owner_id: &Uuid,
+        source_repo_id: &Uuid,
+    ) -> Result<Option<Repository>, DomainError>;
 }

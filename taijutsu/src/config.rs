@@ -63,7 +63,6 @@ pub struct Config {
     pub oracle_consumer_group: String,
 
     // ── Phase 15 — Sensei (先生) ──────────────────────────────────────
-
     /// Activer/désactiver l'agent Sensei (chat conversationnel). Défaut: true.
     pub sensei_enabled: bool,
 
@@ -74,66 +73,320 @@ pub struct Config {
     /// Modèle Ollama pour Sensei (conversationnel, spécialisé code).
     /// Défaut: "qwen2.5-coder:7b".
     pub sensei_ollama_model: String,
+
+    // ── Phase 19A — Auth & RBAC ───────────────────────────────────────
+    /// Secret JWT pour signer les tokens (HS256). ≥32 caractères recommandé.
+    /// Défaut: "shinobi-dev-secret-change-me-in-production!" (dev uniquement).
+    pub jwt_secret: String,
+
+    /// Durée de validité des JWT en secondes. Défaut: 604800 (7 jours).
+    pub jwt_duration_secs: i64,
+
+    // ── Phase 20 — GitHub OAuth ────────────────────────────────────
+    /// GitHub OAuth Application Client ID (optionnel).
+    /// Si absent, les routes OAuth sont désactivées (graceful degradation).
+    pub github_client_id: Option<String>,
+
+    /// GitHub OAuth Application Client Secret (optionnel).
+    pub github_client_secret: Option<String>,
+
+    // ── Phase 27 — ForgeFed (Fédération) ──────────────────────
+    /// Domaine public de l'instance pour la fédération ActivityPub.
+    /// Utilisé pour construire les URIs ActivityPub (ex: `https://{domain}/actors/{handle}`).
+    /// Défaut: "localhost:3000" (dev).
+    pub federation_domain: String,
+
+    /// Activer/désactiver la fédération ActivityPub. Défaut: false.
+    pub federation_enabled: bool,
+
+    // ── Phase 34 — Chakra (Webhooks) ─────────────────────────────────
+    /// Activer/désactiver le système Chakra (webhooks). Défaut: true.
+    pub chakra_enabled: bool,
+
+    /// Topic Kafka pour les événements webhook. Défaut: "shinobi.events.webhooks".
+    pub chakra_topic: String,
+
+    /// Consumer group Kafka pour le dispatcher Chakra. Défaut: "shinobi-chakra-dispatcher".
+    pub chakra_consumer_group: String,
+
+    /// Nombre de workers dans le pool Chakra. Défaut: 4.
+    pub chakra_worker_count: usize,
+
+    /// Nombre maximum de webhooks par dépôt. Défaut: 20.
+    pub chakra_max_webhooks_per_repo: usize,
+
+    /// Autoriser les webhooks vers localhost (dev only). Défaut: false.
+    pub chakra_allow_local: bool,
+
+    // ── Phase 40 — Jutsu Runner (CI/CD natif) 🥷⚡ ─────────────────
+    /// Activer/désactiver le Jutsu Runner. Défaut: true.
+    pub jutsu_enabled: bool,
+
+    /// Topic Kafka pour les événements pipeline. Défaut: "shinobi.jutsu.pipeline".
+    pub jutsu_topic: String,
+
+    /// Consumer group Kafka pour le Jutsu Runner. Défaut: "shinobi-jutsu-runner".
+    pub jutsu_consumer_group: String,
+
+    /// Nombre de workers dans le pool Jutsu. Défaut: 2.
+    pub jutsu_worker_count: usize,
+
+    /// Timeout par stage en secondes. Défaut: 600 (10 min).
+    pub jutsu_stage_timeout_secs: u64,
+
+    /// Timeout global par pipeline en secondes. Défaut: 1800 (30 min).
+    pub jutsu_pipeline_timeout_secs: u64,
+
+    // ── Phase 41 — Kage Bunshin (影分身) Auto-Healing 🥷⚡ ─────────
+    /// Activer/désactiver le Kage Bunshin auto-healing. Défaut: true.
+    pub kage_bunshin_enabled: bool,
+
+    /// Topic Kafka dédié pour les demandes Kage Bunshin.
+    /// Défaut: "shinobi.jutsu.kage-bunshin".
+    /// Vegapunk Tweak #10 : file séparée des workers pipeline.
+    pub kage_bunshin_topic: String,
+
+    /// Consumer group Kafka Kage Bunshin. Défaut: "shinobi-kage-bunshin".
+    pub kage_bunshin_consumer_group: String,
+
+    /// Nombre de workers Kage Bunshin. Défaut: 1.
+    /// Un seul worker suffit (l'inférence LLM est séquentielle).
+    pub kage_bunshin_worker_count: usize,
+
+    /// Timeout du shadow re-run en secondes. Défaut: 120 (2 min).
+    /// Vegapunk Tweak #5 : timeout strict anti-boucle infinie.
+    pub kage_bunshin_shadow_timeout_secs: u64,
+
+    /// Seuil de confiance minimum pour appliquer un patch. Défaut: 0.5.
+    pub kage_bunshin_confidence_threshold: f32,
 }
 
 impl Config {
     /// Charge la configuration depuis les variables d'environnement.
     ///
-    /// # Panics
-    /// Panique si `DATABASE_URL` est absente (fail-fast au démarrage).
-    pub fn from_env() -> Self {
-        Self {
-            database_url: env::var("DATABASE_URL")
-                .expect("DATABASE_URL doit être défini (ex: postgres://user:pass@localhost/db)"),
-            redis_url: env::var("REDIS_URL")
-                .unwrap_or_else(|_| "redis://127.0.0.1:6379".to_string()),
-            rest_port: env::var("REST_PORT")
-                .ok()
-                .and_then(|p| p.parse().ok())
-                .unwrap_or(3000),
-            grpc_port: env::var("GRPC_PORT")
-                .ok()
-                .and_then(|p| p.parse().ok())
-                .unwrap_or(50051),
-            vcs_workspace_root: env::var("VCS_WORKSPACE_ROOT")
-                .unwrap_or_else(|_| "./workspace".to_string()),
-            kafka_brokers: env::var("KAFKA_BROKERS")
-                .unwrap_or_else(|_| "localhost:9092".to_string()),
-            kafka_topic: env::var("KAFKA_TOPIC")
-                .unwrap_or_else(|_| "shinobi.vcs.operations".to_string()),
-            kafka_analysis_topic: env::var("KAFKA_ANALYSIS_TOPIC")
-                .unwrap_or_else(|_| "shinobi.tensai.analysis-complete".to_string()),
-            ipfs_api_url: env::var("IPFS_API_URL")
-                .unwrap_or_else(|_| "http://127.0.0.1:5001".to_string()),
-            kafka_consumer_group: env::var("KAFKA_CONSUMER_GROUP")
-                .unwrap_or_else(|_| "shinobi-tensai-analyzer".to_string()),
-            tensai_consumer_enabled: env::var("TENSAI_CONSUMER_ENABLED")
-                .map(|v| v != "false" && v != "0")
-                .unwrap_or(true),
-            embedding_enabled: env::var("EMBEDDING_ENABLED")
-                .map(|v| v != "false" && v != "0")
-                .unwrap_or(true),
-            embedding_dimensions: env::var("EMBEDDING_DIMENSIONS")
-                .ok()
-                .and_then(|d| d.parse().ok())
-                .unwrap_or(256),
-            ollama_url: env::var("OLLAMA_URL")
-                .unwrap_or_else(|_| "http://localhost:11435".to_string()),
-            ollama_model: env::var("OLLAMA_MODEL")
-                .unwrap_or_else(|_| "granite3-dense:2b".to_string()),
-            oracle_consumer_enabled: env::var("ORACLE_CONSUMER_ENABLED")
-                .map(|v| v != "false" && v != "0")
-                .unwrap_or(true),
-            oracle_consumer_group: env::var("ORACLE_CONSUMER_GROUP")
-                .unwrap_or_else(|_| "shinobi-oracle-reviewer".to_string()),
+    /// Collecte toutes les erreurs de validation et les rapporte
+    /// dans un seul message clair au lieu de paniquer sur la première
+    /// variable manquante.
+    pub fn from_env() -> Result<Self, ConfigError> {
+        let mut errors: Vec<String> = Vec::new();
+
+        // ── Variables critiques (sans défaut) ──────────────────
+        let database_url = require_env("DATABASE_URL", &mut errors);
+
+        // ── Variables avec défaut ──────────────────────────────
+        let config = Self {
+            database_url: database_url.unwrap_or_default(),
+            redis_url: env_or("REDIS_URL", "redis://127.0.0.1:6379"),
+            rest_port: env_parse("REST_PORT", 3000),
+            grpc_port: env_parse("GRPC_PORT", 50051),
+            vcs_workspace_root: env_or("VCS_WORKSPACE_ROOT", "./workspace"),
+            kafka_brokers: env_or("KAFKA_BROKERS", "localhost:9092"),
+            kafka_topic: env_or("KAFKA_TOPIC", "shinobi.vcs.operations"),
+            kafka_analysis_topic: env_or("KAFKA_ANALYSIS_TOPIC", "shinobi.tensai.analysis-complete"),
+            ipfs_api_url: env_or("IPFS_API_URL", "http://127.0.0.1:5001"),
+            kafka_consumer_group: env_or("KAFKA_CONSUMER_GROUP", "shinobi-tensai-analyzer"),
+            tensai_consumer_enabled: env_bool("TENSAI_CONSUMER_ENABLED", true),
+            embedding_enabled: env_bool("EMBEDDING_ENABLED", true),
+            embedding_dimensions: env_parse("EMBEDDING_DIMENSIONS", 256),
+            ollama_url: env_or("OLLAMA_URL", "http://localhost:11435"),
+            ollama_model: env_or("OLLAMA_MODEL", "granite3-dense:2b"),
+            oracle_consumer_enabled: env_bool("ORACLE_CONSUMER_ENABLED", true),
+            oracle_consumer_group: env_or("ORACLE_CONSUMER_GROUP", "shinobi-oracle-reviewer"),
             // ── Phase 15 — Sensei ────────────────────────
-            sensei_enabled: env::var("SENSEI_ENABLED")
-                .map(|v| v != "false" && v != "0")
-                .unwrap_or(true),
-            sensei_ollama_url: env::var("SENSEI_OLLAMA_URL")
-                .unwrap_or_else(|_| "http://localhost:11436".to_string()),
-            sensei_ollama_model: env::var("SENSEI_OLLAMA_MODEL")
-                .unwrap_or_else(|_| "smollm2:1.7b".to_string()),
+            sensei_enabled: env_bool("SENSEI_ENABLED", true),
+            sensei_ollama_url: env_or("SENSEI_OLLAMA_URL", "http://localhost:11436"),
+            sensei_ollama_model: env_or("SENSEI_OLLAMA_MODEL", "smollm2:1.7b"),
+            // ── Phase 19A — Auth ────────────────────────
+            jwt_secret: env_or("JWT_SECRET", "shinobi-dev-secret-change-me-in-production!"),
+            jwt_duration_secs: env_parse("JWT_DURATION_SECS", 604_800), // 7 days
+            // ── Phase 20 — GitHub OAuth ────────────────────
+            github_client_id: env::var("GITHUB_CLIENT_ID").ok(),
+            github_client_secret: env::var("GITHUB_CLIENT_SECRET").ok(),
+            // ── Phase 27 — ForgeFed ────────────────────────
+            federation_domain: sanitize_federation_domain(
+                &env_or("FEDERATION_DOMAIN", "localhost:3000"),
+            ),
+            federation_enabled: env_bool("FEDERATION_ENABLED", false),
+            // ── Phase 34 — Chakra (Webhooks) ────────────────
+            chakra_enabled: env_bool("CHAKRA_ENABLED", true),
+            chakra_topic: env_or("CHAKRA_TOPIC", "shinobi.events.webhooks"),
+            chakra_consumer_group: env_or("CHAKRA_CONSUMER_GROUP", "shinobi-chakra-dispatcher"),
+            chakra_worker_count: env_parse("CHAKRA_WORKER_COUNT", 4),
+            chakra_max_webhooks_per_repo: env_parse("CHAKRA_MAX_WEBHOOKS_PER_REPO", 20),
+            chakra_allow_local: env_bool("CHAKRA_ALLOW_LOCAL", false),
+            // ── Phase 40 — Jutsu Runner (CI/CD natif) 🥷⚡ ────
+            jutsu_enabled: env_bool("JUTSU_ENABLED", true),
+            jutsu_topic: env_or("JUTSU_TOPIC", "shinobi.jutsu.pipeline"),
+            jutsu_consumer_group: env_or("JUTSU_CONSUMER_GROUP", "shinobi-jutsu-runner"),
+            jutsu_worker_count: env_parse("JUTSU_WORKER_COUNT", 2),
+            jutsu_stage_timeout_secs: env_parse("JUTSU_STAGE_TIMEOUT_SECS", 600),
+            jutsu_pipeline_timeout_secs: env_parse("JUTSU_PIPELINE_TIMEOUT_SECS", 1800),
+            // ── Phase 41 — Kage Bunshin (影分身) 🥷⚡ ───────────────
+            kage_bunshin_enabled: env_bool("KAGE_BUNSHIN_ENABLED", true),
+            kage_bunshin_topic: env_or("KAGE_BUNSHIN_TOPIC", "shinobi.jutsu.kage-bunshin"),
+            kage_bunshin_consumer_group: env_or("KAGE_BUNSHIN_CONSUMER_GROUP", "shinobi-kage-bunshin"),
+            kage_bunshin_worker_count: env_parse("KAGE_BUNSHIN_WORKER_COUNT", 1),
+            kage_bunshin_shadow_timeout_secs: env_parse("KAGE_BUNSHIN_SHADOW_TIMEOUT_SECS", 120),
+            kage_bunshin_confidence_threshold: env_parse("KAGE_BUNSHIN_CONFIDENCE_THRESHOLD", 0.5),
+        };
+
+        if !errors.is_empty() {
+            return Err(ConfigError {
+                missing_vars: errors,
+            });
+        }
+
+        Ok(config)
+    }
+
+    /// Affiche un résumé de la configuration au démarrage.
+    /// Les secrets sont masqués.
+    pub fn log_summary(&self) {
+        eprintln!("┌───────────────────────────────────────────────────────────────────────────────");
+        eprintln!("│ ⚙️  Configuration Taijutsu");
+        eprintln!("├───────────────────────────────────────────────────────────────────────────────");
+        eprintln!("│ REST port       : {}", self.rest_port);
+        eprintln!("│ gRPC port       : {}", self.grpc_port);
+        eprintln!("│ Database        : {}...{}", &self.database_url[..self.database_url.find('@').unwrap_or(20).min(20)], &self.database_url[self.database_url.rfind('/').unwrap_or(0)..]);
+        eprintln!("│ Redis           : {}", self.redis_url);
+        eprintln!("│ VCS root        : {}", self.vcs_workspace_root);
+        eprintln!("│ Kafka           : {}", self.kafka_brokers);
+        eprintln!("│ IPFS            : {}", self.ipfs_api_url);
+        eprintln!("│ Ollama (Oracle) : {} ({})", self.ollama_url, self.ollama_model);
+        eprintln!("│ Ollama (Sensei) : {} ({})", self.sensei_ollama_url, self.sensei_ollama_model);
+        eprintln!("│ JWT secret      : {}...", &self.jwt_secret[..8.min(self.jwt_secret.len())]);
+        eprintln!("│ Federation      : {} ({})", self.federation_domain, if self.federation_enabled { "enabled" } else { "disabled" });
+        eprintln!("│ GitHub OAuth    : {}", if self.github_client_id.is_some() { "configured" } else { "not configured" });
+        eprintln!("│ Tensai          : {}", if self.tensai_consumer_enabled { "enabled" } else { "disabled" });
+        eprintln!("│ Oracle          : {}", if self.oracle_consumer_enabled { "enabled" } else { "disabled" });
+        eprintln!("│ Sensei          : {}", if self.sensei_enabled { "enabled" } else { "disabled" });
+        eprintln!("│ Embedding       : {} ({}d)", if self.embedding_enabled { "enabled" } else { "disabled" }, self.embedding_dimensions);
+        eprintln!("│ Chakra          : {} ({}w, max {}/repo)", if self.chakra_enabled { "enabled" } else { "disabled" }, self.chakra_worker_count, self.chakra_max_webhooks_per_repo);
+        eprintln!("│ Jutsu Runner    : {} ({}w, stage:{}s, pipeline:{}s)", if self.jutsu_enabled { "enabled" } else { "disabled" }, self.jutsu_worker_count, self.jutsu_stage_timeout_secs, self.jutsu_pipeline_timeout_secs);
+        eprintln!("└───────────────────────────────────────────────────────────────────────────────");
+    }
+}
+
+// ── Config Error ──────────────────────────────────────────────────────
+
+/// Erreur de configuration — variables d'environnement manquantes.
+#[derive(Debug)]
+pub struct ConfigError {
+    pub missing_vars: Vec<String>,
+}
+
+impl std::fmt::Display for ConfigError {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        writeln!(f, "❌ Configuration invalide — variables manquantes :")?;
+        for var in &self.missing_vars {
+            writeln!(f, "   • {}", var)?;
+        }
+        writeln!(f, "\n   Consultez .env.example pour la liste complète.")
+    }
+}
+
+impl std::error::Error for ConfigError {}
+
+// ── Helper functions ──────────────────────────────────────────────────
+
+/// Lit une variable d'environnement requise. Ajoute une erreur si absente.
+fn require_env(key: &str, errors: &mut Vec<String>) -> Option<String> {
+    match env::var(key) {
+        Ok(val) if !val.trim().is_empty() => Some(val),
+        _ => {
+            errors.push(format!("{} (requis, pas de défaut)", key));
+            None
         }
     }
 }
+
+/// Lit une variable d'environnement avec valeur par défaut.
+fn env_or(key: &str, default: &str) -> String {
+    env::var(key).unwrap_or_else(|_| default.to_string())
+}
+
+/// Lit et parse une variable d'environnement numérique avec valeur par défaut.
+fn env_parse<T: std::str::FromStr>(key: &str, default: T) -> T {
+    env::var(key)
+        .ok()
+        .and_then(|v| v.parse().ok())
+        .unwrap_or(default)
+}
+
+/// Lit une variable d'environnement booléenne (false/0 = false, sinon = défaut).
+fn env_bool(key: &str, default: bool) -> bool {
+    env::var(key)
+        .map(|v| v != "false" && v != "0")
+        .unwrap_or(default)
+}
+
+/// Sanitise le domaine fédéré en supprimant schéma, espaces et trailing slash.
+///
+/// Le `FEDERATION_DOMAIN` doit être un domaine nu (ex: `forge.shinobi.dev`)
+/// sans schéma `https://`. Cette fonction corrige les erreurs de copier-coller
+/// fréquentes dans `.env` (espaces, schéma inclus, trailing slash).
+///
+/// ## Exemples
+/// - `" https://forge.shinobi.dev "` → `"forge.shinobi.dev"`
+/// - `"http://localhost:3000/"` → `"localhost:3000"`
+/// - `"localhost:3000"` → `"localhost:3000"` (inchangé)
+fn sanitize_federation_domain(raw: &str) -> String {
+    let trimmed = raw.trim();
+    let without_scheme = trimmed
+        .strip_prefix("https://")
+        .or_else(|| trimmed.strip_prefix("http://"))
+        .unwrap_or(trimmed);
+    let clean = without_scheme.trim_end_matches('/');
+    if clean != trimmed {
+        eprintln!(
+            "⚠️  FEDERATION_DOMAIN sanitized: {:?} → {:?} (stripped scheme/spaces/slash)",
+            raw, clean
+        );
+    }
+    clean.to_string()
+}
+
+// ── Tests ─────────────────────────────────────────────────────────────
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_sanitize_plain_domain() {
+        assert_eq!(sanitize_federation_domain("localhost:3000"), "localhost:3000");
+    }
+
+    #[test]
+    fn test_sanitize_strips_https_scheme() {
+        assert_eq!(
+            sanitize_federation_domain("https://forge.shinobi.dev"),
+            "forge.shinobi.dev"
+        );
+    }
+
+    #[test]
+    fn test_sanitize_strips_http_scheme() {
+        assert_eq!(
+            sanitize_federation_domain("http://localhost:3000"),
+            "localhost:3000"
+        );
+    }
+
+    #[test]
+    fn test_sanitize_strips_spaces_and_scheme() {
+        assert_eq!(
+            sanitize_federation_domain(" https://reliably-recognize-payback.ngrok-free.dev "),
+            "reliably-recognize-payback.ngrok-free.dev"
+        );
+    }
+
+    #[test]
+    fn test_sanitize_strips_trailing_slash() {
+        assert_eq!(
+            sanitize_federation_domain("https://forge.shinobi.dev/"),
+            "forge.shinobi.dev"
+        );
+    }
+}
+

@@ -26,6 +26,12 @@ impl RedisCache {
         Ok(Self { connection })
     }
 
+    /// Retourne un clone de la connexion multiplexée (pour les commandes Redis avancées).
+    /// Utilisé par le Chakra dispatcher pour les opérations ZSET.
+    pub fn clone_connection(&self) -> redis::aio::MultiplexedConnection {
+        self.connection.clone()
+    }
+
     /// Stocke une valeur avec expiration optionnelle (en secondes).
     #[instrument(skip(self, value))]
     pub async fn set(

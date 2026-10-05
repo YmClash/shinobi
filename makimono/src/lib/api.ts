@@ -33,6 +33,23 @@ export function buildRepoPrefix(owner: string, repo: string): string {
   return `/api/v1/repos/${encodeURIComponent(owner)}/${encodeURIComponent(repo)}`;
 }
 
+/**
+ * Retourne l'URL de base pour les opérations Git (clone, push).
+ *
+ * Pointe vers le backend Taijutsu (qui sert le Git Smart HTTP).
+ * Configurable via `NEXT_PUBLIC_GIT_URL` pour les différents environnements :
+ * - Prod (Cloudflare Tunnel) : `https://api.jjshinobi.dev`
+ * - Dev local : `http://localhost:3000`
+ *
+ * @example
+ * getGitCloneUrl("naruto", "kunai-calc")
+ * // → "https://api.jjshinobi.dev/naruto/kunai-calc.git"
+ */
+export function getGitCloneUrl(owner: string, repo: string): string {
+  const base = process.env.NEXT_PUBLIC_GIT_URL || "https://api.jjshinobi.dev";
+  return `${base}/${owner}/${repo}.git`;
+}
+
 // ── Types ────────────────────────────────────────────────────
 
 export interface HealthResponse {
@@ -197,6 +214,18 @@ export interface Repository {
   visibility: string;
   default_branch: string;
   created_at: string;
+  /** URL Git source pour les repos importés depuis GitHub (Phase 19B). */
+  mirror_source_url?: string | null;
+  /** Timestamp du dernier import miroir (Phase 19B). */
+  mirror_synced_at?: string | null;
+  /** UUID du dépôt parent si c'est un fork (Phase 37B). */
+  forked_from_id?: string | null;
+  /** Nombre de forks de ce repo (Phase 37B). */
+  fork_count?: number;
+  /** Handle du propriétaire du repo parent (Phase 37B). */
+  forked_from_owner?: string | null;
+  /** Nom (slug) du repo parent (Phase 37B). */
+  forked_from_name?: string | null;
 }
 
 export interface RepositoriesResponse {
@@ -388,6 +417,90 @@ export async function createRepository(
   });
 }
 
+// ── Phase 24 — Soft Delete (Corbeille) ───────────────────────────
+
+export interface TrashRepository {
+  id: string;
+  name: string;
+  display_name: string;
+  description: string | null;
+  visibility: string;
+  deleted_at: string;
+  seconds_until_purge: number;
+}
+
+export interface TrashResponse {
+  owner: string;
+  trash: TrashRepository[];
+  count: number;
+  retention_seconds: number;
+}
+
+/** Met un dépôt en corbeille (soft delete). Requiert un JWT valide. */
+export async function archiveRepository(
+  owner: string,
+  repo: string,
+  confirmationWord: string,
+  expectedWord: string,
+  token: string,
+): Promise<void> {
+  const url = `${getBaseUrl()}/api/v1/repos/${encodeURIComponent(owner)}/${encodeURIComponent(repo)}/archive`;
+  const res = await fetch(url, {
+    method: "POST",
+    headers: {
+      "Content-Type": "application/json",
+      Authorization: `Bearer ${token}`,
+    },
+    body: JSON.stringify({
+      confirmation_word: confirmationWord,
+      expected_word: expectedWord,
+    }),
+  });
+  if (!res.ok) {
+    const text = await res.text().catch(() => "Unknown error");
+    throw new Error(`HTTP ${res.status}: ${text}`);
+  }
+}
+
+/** Restaure un dépôt depuis la corbeille. Requiert un JWT valide. */
+export async function restoreRepository(
+  owner: string,
+  repo: string,
+  token: string,
+): Promise<Repository> {
+  const url = `${getBaseUrl()}/api/v1/repos/${encodeURIComponent(owner)}/${encodeURIComponent(repo)}/restore`;
+  const res = await fetch(url, {
+    method: "POST",
+    headers: {
+      "Content-Type": "application/json",
+      Authorization: `Bearer ${token}`,
+    },
+  });
+  if (!res.ok) {
+    const text = await res.text().catch(() => "Unknown error");
+    throw new Error(`HTTP ${res.status}: ${text}`);
+  }
+  return res.json() as Promise<Repository>;
+}
+
+/** Liste les dépôts en corbeille d'un utilisateur. Requiert un JWT valide. */
+export async function listTrashRepositories(
+  handle: string,
+  token: string,
+): Promise<TrashResponse> {
+  const url = `${getBaseUrl()}/api/v1/actors/${encodeURIComponent(handle)}/trash`;
+  const res = await fetch(url, {
+    headers: {
+      Authorization: `Bearer ${token}`,
+    },
+  });
+  if (!res.ok) {
+    const text = await res.text().catch(() => "Unknown error");
+    throw new Error(`HTTP ${res.status}: ${text}`);
+  }
+  return res.json() as Promise<TrashResponse>;
+}
+
 // ── Sensei Agent (Phase 15 — 先生) ─────────────────────────────
 
 /** Message dans l'historique de conversation. */
@@ -410,18 +523,22 @@ export interface SenseiModelsResponse {
   active: string;
 }
 
-/** Récupère la liste des modèles installés sur Ollama #2 (Sensei). */
-export async function getSenseiModels(): Promise<SenseiModelsResponse> {
-  const res = await fetch(`${getBaseUrl()}/api/v1/sensei/models`);
+/** Récupère la liste des modèles installés sur Ollama #2 (Sensei). 🔒 Auth requise. */
+export async function getSenseiModels(token?: string | null): Promise<SenseiModelsResponse> {
+  const headers: Record<string, string> = {};
+  if (token) headers["Authorization"] = `Bearer ${token}`;
+  const res = await fetch(`${getBaseUrl()}/api/v1/sensei/models`, { headers });
   if (!res.ok) throw new Error(`Models fetch failed: ${res.status}`);
   return res.json();
 }
 
-/** Pré-charge un modèle dans la RAM d'Ollama (élimine le cold-start ~30s). */
-export async function warmupSenseiModel(model: string): Promise<void> {
+/** Pré-charge un modèle dans la RAM d'Ollama (élimine le cold-start ~30s). 🔒 Auth requise. */
+export async function warmupSenseiModel(model: string, token?: string | null): Promise<void> {
+  const headers: Record<string, string> = { "Content-Type": "application/json" };
+  if (token) headers["Authorization"] = `Bearer ${token}`;
   const res = await fetch(`${getBaseUrl()}/api/v1/sensei/warmup`, {
     method: "POST",
-    headers: { "Content-Type": "application/json" },
+    headers,
     body: JSON.stringify({ model }),
   });
   if (!res.ok) {
@@ -488,12 +605,15 @@ export interface SenseiStreamCallbacks {
 export function senseiChatStream(
   body: SenseiChatRequest,
   callbacks: SenseiStreamCallbacks,
+  token?: string | null,
 ): AbortController {
   const controller = new AbortController();
+  const headers: Record<string, string> = { "Content-Type": "application/json" };
+  if (token) headers["Authorization"] = `Bearer ${token}`;
 
   fetch(`${getBaseUrl()}/api/v1/sensei/chat`, {
     method: "POST",
-    headers: { "Content-Type": "application/json" },
+    headers,
     body: JSON.stringify(body),
     signal: controller.signal,
   })
@@ -564,4 +684,113 @@ export function senseiChatStream(
     });
 
   return controller;
+}
+
+// ── ANBU Checkpoints (Phase 28C) ─────────────────────────────
+
+/** An AI checkpoint synced from the ANBU CLI. */
+export interface Checkpoint {
+  id: string;
+  agent: string;
+  session_id: string;
+  message: string | null;
+  commit_id: string | null;
+  ipfs_cid: string;
+  artifact_count: number;
+  total_size: number;
+  created_at: string;
+}
+
+export interface CheckpointsResponse {
+  owner: string;
+  repo: string;
+  checkpoints: Checkpoint[];
+  count: number;
+}
+
+/** Liste les checkpoints ANBU d'un dépôt. */
+export async function listCheckpoints(
+  repoPrefix: string,
+): Promise<CheckpointsResponse> {
+  return apiFetch<CheckpointsResponse>(`${repoPrefix}/checkpoints`);
+}
+
+/** Récupère le détail d'un checkpoint ANBU. */
+export async function getCheckpoint(
+  repoPrefix: string,
+  id: string,
+): Promise<Checkpoint> {
+  return apiFetch<Checkpoint>(`${repoPrefix}/checkpoints/${id}`);
+}
+
+// ── Phase 37A — Actor Profile (Le Visage Public) ─────────────
+
+/** Activité récente de l'outbox ActivityPub. */
+export interface ProfileActivity {
+  type: string;
+  object_type: string;
+  published: string;
+  object_id: string;
+}
+
+/** Stats publiques d'un acteur. */
+export interface ActorStats {
+  public_repos: number;
+  total_repos: number;
+  bots_count: number;
+  follower_count: number;
+}
+
+/** Profil public d'un acteur (humain, bot, ou système). */
+export interface ActorProfile {
+  actor: {
+    id: string;
+    handle: string;
+    display_name: string;
+    actor_type: string;
+    avatar_url: string | null;
+    bio: string | null;
+    created_at: string | null;
+  };
+  stats: ActorStats;
+  fediverse_address: string;
+  is_followed_by_current_user: boolean;
+  recent_activities: ProfileActivity[];
+  parent: {
+    id: string;
+    handle: string;
+    display_name: string;
+    avatar_url: string | null;
+  } | null;
+  is_system?: boolean;
+}
+
+/** Récupère le profil public d'un acteur par handle. */
+export async function getActorProfile(
+  handle: string,
+  token?: string | null,
+): Promise<ActorProfile> {
+  const headers: Record<string, string> = {};
+  if (token) headers["Authorization"] = `Bearer ${token}`;
+  return apiFetch<ActorProfile>(
+    `/api/v1/actors/${encodeURIComponent(handle)}/profile`,
+    { headers },
+  );
+}
+
+// ── Phase 37B — Fork Local (Le Dédoublement) ────────────────
+
+/** Fork un dépôt dans le namespace de l'utilisateur authentifié. */
+export async function forkRepository(
+  owner: string,
+  repo: string,
+  token: string,
+): Promise<Repository> {
+  return apiFetch<Repository>(
+    `/api/v1/repos/${encodeURIComponent(owner)}/${encodeURIComponent(repo)}/fork`,
+    {
+      method: "POST",
+      headers: { Authorization: `Bearer ${token}` },
+    },
+  );
 }

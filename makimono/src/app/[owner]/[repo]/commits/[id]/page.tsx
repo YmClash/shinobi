@@ -1,12 +1,27 @@
 "use client";
 
 import { useParams, useRouter } from "next/navigation";
-import { buildRepoPrefix } from "@/lib/api";
+import { useEffect, useState, useCallback, useRef } from "react";
+import {
+  buildRepoPrefix,
+  listCheckpoints,
+  type Checkpoint,
+} from "@/lib/api";
 import { useOperation, useCommitDiff } from "@/hooks/use-api";
 import { UnifiedDiffViewer } from "@/components/operations/unified-diff-viewer";
+import {
+  type Manifest,
+  type ManifestFile,
+  FileRenderer,
+  fileIcon,
+  formatSize as viewerFormatSize,
+  isImageFile,
+} from "@/components/viewers/artifact-viewers";
 
-// ── Page de Détail d'un Commit — Diff Colorisé ────────────────────
+// ── Page de Détail d'un Commit — Diff + AI Context ────────────────
 // Route: /[owner]/[repo]/commits/[id]
+
+type TabKey = "diff" | "ai-context";
 
 export default function CommitDetailPage() {
   const params = useParams<{ owner: string; repo: string; id: string }>();
@@ -19,6 +34,92 @@ export default function CommitDetailPage() {
 
   const op = operation.data;
   const diffData = diff.data;
+
+  // ── AI Context ──────────────────────────────────────────────
+  const [activeTab, setActiveTab] = useState<TabKey>("diff");
+  const [checkpoint, setCheckpoint] = useState<Checkpoint | null>(null);
+  const [hasAiContext, setHasAiContext] = useState(false);
+
+  // ── Split-View Explorer State (Phase 28F) ───────────────────
+  const [manifest, setManifest] = useState<Manifest | null>(null);
+  const [manifestLoading, setManifestLoading] = useState(false);
+  const [selectedArtifact, setSelectedArtifact] = useState<ManifestFile | null>(null);
+  const [artifactLoading, setArtifactLoading] = useState(false);
+
+  // Cache mémoire — évite les refetch réseau (suggestion Lab)
+  const contentCache = useRef<Record<string, string>>({});
+
+  useEffect(() => {
+    if (!op) return;
+    const match = op.description.match(/AI-Checkpoint:\s*([a-f0-9-]+)/i);
+    if (!match) return;
+    const checkpointId = match[1];
+
+    listCheckpoints(prefix)
+      .then((data) => {
+        const found = data.checkpoints.find((cp) => cp.id === checkpointId);
+        if (found) {
+          setCheckpoint(found);
+          setHasAiContext(true);
+        }
+      })
+      .catch(() => {});
+  }, [op, prefix]);
+
+  // ── Fetch manifest when checkpoint is available ──────────────
+  useEffect(() => {
+    if (!checkpoint) return;
+    setManifestLoading(true);
+    fetch(`/api/ipfs/${checkpoint.ipfs_cid}`)
+      .then((r) => {
+        if (!r.ok) throw new Error(`IPFS ${r.status}`);
+        return r.json();
+      })
+      .then((data: Manifest) => {
+        setManifest(data);
+        setManifestLoading(false);
+
+        // Auto-select: prefer chat files, fallback to first
+        if (data.files.length > 0) {
+          const chatFile = data.files.find((f) => {
+            const ext = f.path.split(".").pop()?.toLowerCase() || "";
+            return ext === "jsonl" || ext === "txt";
+          });
+          const autoFile = chatFile || data.files[0];
+          openArtifact(autoFile, data);
+        }
+      })
+      .catch(() => setManifestLoading(false));
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [checkpoint]);
+
+  // ── Open artifact with cache ─────────────────────────────────
+  const openArtifact = useCallback((file: ManifestFile, manifestRef?: Manifest) => {
+    setSelectedArtifact(file);
+
+    if (isImageFile(file.path)) {
+      setArtifactLoading(false);
+      return;
+    }
+
+    // Check cache first
+    if (contentCache.current[file.cid]) {
+      setArtifactLoading(false);
+      return;
+    }
+
+    setArtifactLoading(true);
+    fetch(`/api/ipfs/${file.cid}`)
+      .then((r) => r.text())
+      .then((text) => {
+        contentCache.current[file.cid] = text;
+        setArtifactLoading(false);
+      })
+      .catch(() => {
+        contentCache.current[file.cid] = "Failed to load file from IPFS.";
+        setArtifactLoading(false);
+      });
+  }, []);
 
   function shortHash(hash: string): string {
     return hash.substring(0, 7);
@@ -35,6 +136,12 @@ export default function CommitDetailPage() {
       hour: "2-digit",
       minute: "2-digit",
     });
+  }
+
+  function formatSize(bytes: number): string {
+    if (bytes < 1024) return `${bytes} B`;
+    if (bytes < 1024 * 1024) return `${(bytes / 1024).toFixed(1)} KB`;
+    return `${(bytes / (1024 * 1024)).toFixed(1)} MB`;
   }
 
   return (
@@ -72,6 +179,12 @@ export default function CommitDetailPage() {
         <div className="commit-detail-info">
           <div className="commit-detail-message">
             {op.description || "No commit message"}
+            {hasAiContext && checkpoint && (
+              <span className="commit-ai-badge" title={`AI Context: ${checkpoint.agent}`}>
+                <span className="commit-ai-badge-icon">🧠</span>
+                <span className="commit-ai-badge-label">{checkpoint.agent}</span>
+              </span>
+            )}
           </div>
           <div className="commit-detail-meta">
             <div className="commit-detail-meta-left">
@@ -110,12 +223,174 @@ export default function CommitDetailPage() {
         </div>
       )}
 
-      {/* Unified Diff Viewer (extracted component) */}
-      {diffData && (
+      {/* Tab Bar — Diff / AI Context */}
+      {op && (
+        <div className="commit-detail-tabs">
+          <button
+            className={`commit-detail-tab ${activeTab === "diff" ? "commit-detail-tab-active" : ""}`}
+            onClick={() => setActiveTab("diff")}
+          >
+            <span className="commit-detail-tab-icon">📝</span>
+            Diff
+            {diffData && (
+              <span style={{ opacity: 0.6, fontSize: "0.65rem" }}>
+                {diffData.stats.files_changed} file{diffData.stats.files_changed !== 1 ? "s" : ""}
+              </span>
+            )}
+          </button>
+          <button
+            className={`commit-detail-tab ${activeTab === "ai-context" ? "commit-detail-tab-active" : ""}`}
+            onClick={() => setActiveTab("ai-context")}
+          >
+            <span className="commit-detail-tab-icon">🧠</span>
+            AI Context
+            {hasAiContext && (
+              <span style={{
+                width: 6, height: 6, borderRadius: "50%",
+                background: "var(--cp-agent-antigravity)", display: "inline-block",
+                marginLeft: "0.25rem"
+              }} />
+            )}
+          </button>
+        </div>
+      )}
+
+      {/* Tab Content: Diff */}
+      {activeTab === "diff" && diffData && (
         <UnifiedDiffViewer
           files={diffData.files}
           stats={diffData.stats}
+          aiContext={checkpoint ? { agent: checkpoint.agent } : null}
         />
+      )}
+
+      {/* Tab Content: AI Context — Split View Explorer (Phase 28F) */}
+      {activeTab === "ai-context" && (
+        <div className="ai-context-panel">
+          {checkpoint ? (
+            <>
+              {/* Metadata Grid */}
+              <div className="ai-context-meta">
+                <div className="ai-context-meta-item">
+                  <span className="ai-context-meta-label">Agent</span>
+                  <span className="ai-context-meta-value">
+                    {checkpoint.agent === "antigravity" ? "🤖" : "🐙"} {checkpoint.agent}
+                  </span>
+                </div>
+                <div className="ai-context-meta-item">
+                  <span className="ai-context-meta-label">Session ID</span>
+                  <code className="ai-context-meta-value ai-context-meta-mono">
+                    {checkpoint.session_id}
+                  </code>
+                </div>
+                <div className="ai-context-meta-item">
+                  <span className="ai-context-meta-label">Checkpoint ID</span>
+                  <code className="ai-context-meta-value ai-context-meta-mono">
+                    {checkpoint.id}
+                  </code>
+                </div>
+                <div className="ai-context-meta-item">
+                  <span className="ai-context-meta-label">Captured</span>
+                  <span className="ai-context-meta-value">
+                    {new Date(checkpoint.created_at).toLocaleString()}
+                  </span>
+                </div>
+                <div className="ai-context-meta-item">
+                  <span className="ai-context-meta-label">IPFS CID</span>
+                  <code className="ai-context-meta-value ai-context-meta-mono">
+                    {checkpoint.ipfs_cid}
+                  </code>
+                </div>
+                <div className="ai-context-meta-item">
+                  <span className="ai-context-meta-label">Total Size</span>
+                  <span className="ai-context-meta-value">
+                    {formatSize(checkpoint.total_size)} · {checkpoint.artifact_count} artifact{checkpoint.artifact_count !== 1 ? "s" : ""}
+                  </span>
+                </div>
+                {checkpoint.message && (
+                  <div className="ai-context-meta-item" style={{ gridColumn: "1 / -1" }}>
+                    <span className="ai-context-meta-label">Message</span>
+                    <span className="ai-context-meta-value">{checkpoint.message}</span>
+                  </div>
+                )}
+              </div>
+
+              {/* ── Split View Artifact Explorer ──────────────── */}
+              {manifestLoading ? (
+                <div className="ai-explorer-loading">
+                  <div className="ai-explorer-spinner" />
+                  <span>Loading artifacts...</span>
+                </div>
+              ) : manifest ? (
+                <div className="ai-explorer">
+                  {/* Sidebar — File list */}
+                  <aside className="ai-explorer-sidebar">
+                    <div className="ai-explorer-sidebar-header">
+                      <span>Files</span>
+                      <span className="ai-explorer-sidebar-count">{manifest.files.length}</span>
+                    </div>
+                    {manifest.files.map((f) => (
+                      <button
+                        key={f.cid}
+                        className={`ai-explorer-file-btn ${selectedArtifact?.cid === f.cid ? "active" : ""}`}
+                        onClick={() => openArtifact(f)}
+                      >
+                        <span className="ai-explorer-file-icon">{fileIcon(f.path)}</span>
+                        <div className="ai-explorer-file-info">
+                          <span className="ai-explorer-file-name">{f.path}</span>
+                          <span className="ai-explorer-file-size">{viewerFormatSize(f.size)}</span>
+                        </div>
+                      </button>
+                    ))}
+                    {/* Full page link */}
+                    <div style={{ padding: "0.5rem 0.85rem", borderTop: "1px solid var(--border)" }}>
+                      <a
+                        className="ai-explorer-fullpage-link"
+                        href={`/ipfs/view/${checkpoint.ipfs_cid}`}
+                        target="_blank"
+                        rel="noopener noreferrer"
+                      >
+                        ↗ Open full viewer
+                      </a>
+                    </div>
+                  </aside>
+
+                  {/* Content area */}
+                  <main className="ai-explorer-content">
+                    {!selectedArtifact ? (
+                      <div className="ai-explorer-placeholder">
+                        <span className="ai-explorer-placeholder-icon">👈</span>
+                        <p>Select a file to view its contents</p>
+                      </div>
+                    ) : artifactLoading ? (
+                      <div className="ai-explorer-loading">
+                        <div className="ai-explorer-spinner" />
+                        <p>Loading {selectedArtifact.path}...</p>
+                      </div>
+                    ) : (
+                      <FileRenderer
+                        file={selectedArtifact}
+                        content={contentCache.current[selectedArtifact.cid] || ""}
+                      />
+                    )}
+                  </main>
+                </div>
+              ) : (
+                <div className="ai-explorer-loading">
+                  <span>⚠️ Failed to load artifact manifest</span>
+                </div>
+              )}
+            </>
+          ) : (
+            <div className="ai-context-empty">
+              <div className="ai-context-empty-icon">🥷</div>
+              <p className="ai-context-empty-text">
+                No AI context associated with this commit.<br />
+                Use <code>anbu checkpoint --latest</code> to capture context.
+              </p>
+            </div>
+          )}
+        </div>
       )}
     </div>
   );

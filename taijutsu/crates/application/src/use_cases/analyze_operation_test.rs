@@ -252,6 +252,37 @@ mod tests {
             *self.analysis_published.lock().await += 1;
             Ok(())
         }
+
+        async fn publish_webhook_event(
+            &self,
+            _event: &domain::entities::webhook::WebhookEvent,
+        ) -> Result<(), DomainError> {
+            Ok(()) // Phase 34-V2 — No-op dans les tests
+        }
+
+        async fn publish_pipeline_requested(
+            &self,
+            _repository_id: uuid::Uuid,
+            _commit_id: &str,
+            _trigger_event: &str,
+            _pipeline_id: Option<uuid::Uuid>,
+        ) -> Result<(), DomainError> {
+            Ok(()) // Phase 40 — No-op dans les tests
+        }
+
+        async fn publish_kage_bunshin_requested(
+            &self,
+            _pipeline_id: uuid::Uuid,
+            _stage_id: uuid::Uuid,
+            _stage_name: &str,
+            _stage_image: &str,
+            _stage_commands: &[String],
+            _error_logs: &str,
+            _repository_id: uuid::Uuid,
+            _commit_id: &str,
+        ) -> Result<(), DomainError> {
+            Ok(()) // Phase 41 — No-op dans les tests
+        }
     }
 
     // ── Mock EmbeddingService (Phase 7A) ─────────────

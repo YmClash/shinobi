@@ -148,7 +148,10 @@ nen/logs/
 
 # Codex & Documentation locale
 CODEX_BOARD.md
+CODEX_BOARD_1.md
+logo/
 Docs/
+
 
 # ── Workspace JJ ────────────────────────────
 taijutsu/workspace
@@ -159,3 +162,16 @@ taijutsu/.fastembed_cache
 makimono/AGENTS.md
 makimono/CLAUDE.md
 CODEX_BOARD_1.md
+
+
+
+# ANBU — AI context staging (local only, synced via Phase 28B)
+anbu_test_ground/
+boruto/
+
+logo/Shinobi_logo_0.jfif
+CODEX_BOARD_2.md
+phase_index.md
+CHECKPOINT_PHASE_40C.md
+CHECKPOINT_PHASE_40E.md
+CHECKPOINT_PHASE_40E_FIX.md

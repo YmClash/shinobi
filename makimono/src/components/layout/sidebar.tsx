@@ -9,6 +9,8 @@ import { Button } from "@/components/ui/button";
 import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
 import { Skeleton } from "@/components/ui/skeleton";
 import { useHealth, useRepositories } from "@/hooks/use-api";
+import { useAuth } from "@/hooks/use-auth";
+import { NotificationBell } from "@/components/ui/notification-bell";
 
 // ── Main navigation items ────────────────────────────────────
 
@@ -16,6 +18,7 @@ const NAV_ITEMS = [
   { href: "/", icon: "⚙️", label: "Dashboard" },
   { href: "/search", icon: "🔍", label: "Recherche RAG" },
   { href: "/forge", icon: "🔨", label: "Forge" },
+  { href: "/federation", icon: "🌐", label: "Fédération" },
 ];
 
 // ── Sidebar Component ────────────────────────────────────────
@@ -24,7 +27,9 @@ export function Sidebar() {
   const pathname = usePathname();
   const [collapsed, setCollapsed] = useState(false);
   const { data: health } = useHealth();
-  const { data: reposData, loading: reposLoading } = useRepositories("system");
+  const { user } = useAuth();
+  const ownerHandle = user?.handle ?? null;
+  const { data: reposData, loading: reposLoading } = useRepositories(ownerHandle);
 
   const isOnline = health?.status === "operational";
   const repos = reposData?.repositories ?? [];
@@ -117,9 +122,9 @@ export function Sidebar() {
           </div>
         )}
 
-        {!reposLoading && repos.map((repo) => {
-          const repoPath = `/system/${repo.name}`;
-          const isActive = activeRepoOwner === "system" && activeRepoName === repo.name;
+        {!reposLoading && ownerHandle && repos.map((repo) => {
+          const repoPath = `/${ownerHandle}/${repo.name}`;
+          const isActive = activeRepoOwner === ownerHandle && activeRepoName === repo.name;
 
           const repoLink = (
             <Link
@@ -163,6 +168,49 @@ export function Sidebar() {
       {/* ── Bottom section ────────────────────────── */}
       <div className="mt-auto px-2 pb-3 space-y-2">
         <Separator className="bg-sidebar-border" />
+
+        {/* User section (Phase 19A) */}
+        {user && (
+          <>
+            <Link
+              href={`/profile/${user.handle}`}
+              className={`sidebar-user-item ${collapsed ? "justify-center" : ""}`}
+            >
+              {user.avatar_url ? (
+                <img
+                  src={user.avatar_url}
+                  alt={user.handle}
+                  className="sidebar-user-avatar-img"
+                />
+              ) : (
+                <span className="sidebar-user-avatar">
+                  {user.handle.charAt(0).toUpperCase()}
+                </span>
+              )}
+              {!collapsed && (
+                <div className="sidebar-user-info">
+                  <span className="sidebar-user-name">{user.display_name}</span>
+                  <span className="sidebar-user-handle">@{user.handle}</span>
+                </div>
+              )}
+            </Link>
+            {/* Phase 38B — Notifications (Redesign) 🔔 */}
+            <div className="flex items-center gap-0 w-full">
+              <NotificationBell collapsed={collapsed} />
+            </div>
+            {/* Phase 25 — Service Accounts nav link */}
+            {!collapsed && (
+              <Link
+                href="/settings/bots"
+                className={`sidebar-user-item text-xs ${pathname === "/settings/bots" ? "bg-sidebar-accent" : ""}`}
+              >
+                <span className="text-base">🤖</span>
+                <span className="sidebar-user-handle" style={{ fontSize: "0.68rem" }}>Service Accounts</span>
+              </Link>
+            )}
+            <Separator className="bg-sidebar-border" />
+          </>
+        )}
 
         {/* System status */}
         <div className={`flex items-center gap-2 px-2 py-1 ${collapsed ? "justify-center" : ""}`}>

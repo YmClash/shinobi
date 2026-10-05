@@ -53,7 +53,7 @@ struct MockVcsEngine {
 
 #[async_trait]
 impl VcsEngine for MockVcsEngine {
-    async fn init_workspace(&self, _repo_id: &Uuid) -> Result<(), DomainError> {
+    async fn init_workspace(&self, _owner_id: &Uuid, _repo_id: &Uuid) -> Result<(), DomainError> {
         Ok(())
     }
     async fn create_operation(
@@ -82,6 +82,27 @@ impl VcsEngine for MockVcsEngine {
     }
     async fn diff_content(&self, _repo_id: &Uuid, _cid: &ContentId) -> Result<Vec<domain::ports::vcs_engine::FileDiff>, DomainError> {
         Ok(vec![])
+    }
+    async fn can_fast_forward(&self, _repo_id: &Uuid, _source: &str, _target: &str) -> Result<bool, DomainError> {
+        Ok(true)
+    }
+    async fn merge_fast_forward(&self, _repo_id: &Uuid, _source: &str, _target: &str) -> Result<ContentId, DomainError> {
+        Ok(ContentId::new("mock-merge-commit"))
+    }
+    async fn squash_merge(&self, _repo_id: &Uuid, _source: &str, _target: &str, _message: &str) -> Result<ContentId, DomainError> {
+        Ok(ContentId::new("mock-squash-commit"))
+    }
+    async fn diff_merge_base(&self, _repo_id: &Uuid, _source: &str, _target: &str) -> Result<Vec<domain::ports::vcs_engine::FileDiff>, DomainError> {
+        Ok(vec![])
+    }
+    async fn clone_workspace(&self, _source_owner_id: &Uuid, _source_repo_id: &Uuid, _target_owner_id: &Uuid, _target_repo_id: &Uuid) -> Result<(), DomainError> {
+        Ok(())
+    }
+    async fn fetch_fork_refs(&self, _repo_id: &Uuid, _fork_repo_id: &Uuid) -> Result<(), DomainError> {
+        Ok(())
+    }
+    async fn cleanup_fork_remote(&self, _repo_id: &Uuid, _fork_repo_id: &Uuid) -> Result<(), DomainError> {
+        Ok(())
     }
 }
 

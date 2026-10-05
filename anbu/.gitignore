@@ -1,0 +1,5 @@
+# ANBU — AI context staging (local only, synced via Phase 28B)
+/.shinobi/anbu/
+/target
+**/*.rs.bk
+

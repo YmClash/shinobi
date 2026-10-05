@@ -1,11 +1,14 @@
 "use client";
 
+import Link from "next/link";
 import { usePathname } from "next/navigation";
+import { useAuth } from "@/hooks/use-auth";
 import { useHealth } from "@/hooks/use-api";
 import { Badge } from "@/components/ui/badge";
 
 export function Header() {
   const { data: health } = useHealth();
+  const { user, loading: authLoading, logout } = useAuth();
   const pathname = usePathname();
 
   // Detect repo context from URL: /[owner]/[repo]/...
@@ -24,7 +27,9 @@ export function Header() {
         {repoOwner && repoName && (
           <span className="repo-breadcrumb">
             <span>📦</span>
-            <span>{repoOwner}/{repoName}</span>
+            <Link href={`/${repoOwner}`} className="hover:text-primary transition-colors">{repoOwner}</Link>
+            <span className="text-muted-foreground/40">/</span>
+            <span>{repoName}</span>
           </span>
         )}
       </div>
@@ -37,6 +42,45 @@ export function Header() {
         <Badge variant="secondary" className="text-[10px] font-mono px-2 py-0.5">
           Makimono v0.1.0
         </Badge>
+
+        {/* ── Auth Zone (Phase 19A) ───────── */}
+        {!authLoading && (
+          <>
+            {user ? (
+              <div className="header-user-menu">
+                <Link
+                  href={`/${user.handle}`}
+                  className="header-user-badge"
+                  title="Voir mon profil"
+                >
+                  {user.avatar_url ? (
+                    <img
+                      src={user.avatar_url}
+                      alt={user.handle}
+                      className="header-user-avatar-img"
+                    />
+                  ) : (
+                    <span className="header-user-avatar">
+                      {user.handle.charAt(0).toUpperCase()}
+                    </span>
+                  )}
+                  <span className="header-user-handle">{user.handle}</span>
+                </Link>
+                <button
+                  onClick={logout}
+                  className="header-logout-btn"
+                  title="Déconnexion"
+                >
+                  🚪
+                </button>
+              </div>
+            ) : (
+              <Link href="/login" className="header-login-btn">
+                Se connecter
+              </Link>
+            )}
+          </>
+        )}
       </div>
     </header>
   );

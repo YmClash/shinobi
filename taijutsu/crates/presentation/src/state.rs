@@ -9,12 +9,13 @@ use std::sync::Arc;
 use application::use_cases::create_operation::CreateOperationUseCase;
 use application::use_cases::create_repository::CreateRepositoryUseCase;
 use application::use_cases::get_blob::GetBlobUseCase;
+use application::use_cases::get_ipfs_content::GetIpfsContentUseCase;
 use application::use_cases::get_operation::GetOperationUseCase;
 use application::use_cases::get_operation_diff::GetOperationDiffUseCase;
-use application::use_cases::get_ipfs_content::GetIpfsContentUseCase;
 use application::use_cases::get_reviews::GetReviewsUseCase;
 use application::use_cases::get_score_history::GetScoreHistoryUseCase;
 use application::use_cases::get_tree::GetTreeUseCase;
+use application::use_cases::import_github_repo::ImportGitHubRepoUseCase;
 use application::use_cases::list_operations::ListOperationsUseCase;
 use application::use_cases::list_refs::ListRefsUseCase;
 use application::use_cases::list_repositories::ListRepositoriesUseCase;
@@ -61,7 +62,6 @@ pub struct SharedState {
     pub list_repositories: Arc<ListRepositoriesUseCase>,
 
     // ── Phase 6 — Explorateur de Code ─────────────────────────────────
-
     /// Use case: lister l'arborescence d'un dépôt (Phase 6).
     pub get_tree: Arc<GetTreeUseCase>,
 
@@ -72,7 +72,6 @@ pub struct SharedState {
     pub list_refs: Arc<ListRefsUseCase>,
 
     // ── Phase 15 — Sensei (先生) ─────────────────────────────────
-
     /// Use case: chat conversationnel IA avec streaming.
     /// `None` si l'agent Sensei est désactivé (Ollama #2 non disponible).
     pub sensei_chat: Option<Arc<application::use_cases::sensei_chat::SenseiChatUseCase>>,
@@ -81,12 +80,143 @@ pub struct SharedState {
     pub sensei_ollama_url: Option<String>,
 
     // ── Phase 17 — Diff Colorisé ─────────────────────────────────
-
     /// Moteur VCS abstrait pour le diff ligne par ligne (Phase 17).
     pub vcs_engine: Arc<dyn domain::ports::vcs_engine::VcsEngine>,
 
     /// Repository des opérations pour le total_count (Phase 17).
     pub operation_repo: Arc<dyn domain::ports::repository::OperationRepository>,
+
+    // ── Phase 19A — Auth & RBAC ──────────────────────────────────
+    /// Service d'authentification (JWT + Argon2 + PAT).
+    pub auth_service: Arc<dyn domain::ports::auth_service::AuthService>,
+
+    /// Repository des acteurs (pour /me, PAT lookup, etc.).
+    pub actor_repo: Arc<dyn domain::ports::actor_repository::ActorRepository>,
+
+    /// Repository des dépôts (pour RBAC — is_collaborator, get_role).
+    pub repo_repo: Arc<dyn domain::ports::repo_repository::RepoRepository>,
+
+    /// Use case: inscription d'un acteur.
+    pub register_actor: Arc<application::use_cases::register_actor::RegisterActorUseCase>,
+
+    /// Use case: connexion d'un acteur.
+    pub login_actor: Arc<application::use_cases::login_actor::LoginActorUseCase>,
+
+    /// Use case: création de PAT.
+    pub create_pat: Arc<application::use_cases::create_pat::CreatePatUseCase>,
+
+    // ── Phase 19B — GitHub Import ──────────────────────────────────
+    /// Use case: import d'un dépôt GitHub dans la Forge.
+    pub import_github_repo: Arc<ImportGitHubRepoUseCase>,
+
+    /// Service GitHub (API v3 + fetch injecté).
+    pub github_service: Arc<dyn domain::ports::github_service::GitHubService>,
+
+    // ── Phase 20 — GitHub OAuth ──────────────────────────────────
+    /// Use case: authentification via GitHub OAuth.
+    /// `None` si les variables GITHUB_CLIENT_ID/SECRET ne sont pas configurées.
+    pub oauth_github: Option<Arc<application::use_cases::oauth_github::OAuthGitHubUseCase>>,
+
+    /// URL du frontend (pour construire la redirect_uri OAuth).
+    pub frontend_url: Option<String>,
+
+    // ── Phase 20B — Le Clonage Massif ────────────────────────────
+    /// Use case: lister les repos GitHub de l'utilisateur connecté.
+    pub list_github_repos: Arc<application::use_cases::list_github_repos::ListGitHubReposUseCase>,
+
+    /// Use case: import massif de repos GitHub.
+    pub bulk_import_github: Arc<application::use_cases::bulk_import_github::BulkImportGitHubUseCase>,
+
+    // ── Phase 24 — Soft Delete (Corbeille) ────────────────────────
+    /// Use case: suppression (soft delete) et restauration de dépôts.
+    pub delete_repository: Arc<application::use_cases::delete_repository::DeleteRepositoryUseCase>,
+
+    // ── Phase 37B — Fork Local (Le Dédoublement) ────────────────
+    /// Use case: fork intra-instance d'un dépôt.
+    pub fork_repository: Arc<application::use_cases::fork_repository::ForkRepositoryUseCase>,
+
+    // ── Phase 25 — Service Accounts (L'Acte de Naissance) ────────
+    /// Use case: création, listing et suppression de Service Accounts IA.
+    pub create_service_account: Arc<application::use_cases::create_service_account::CreateServiceAccountUseCase>,
+
+    // ── Phase 26A — Merge Requests (Le Katana Croisé) ────────────
+    /// Repository MR (pour les handlers qui lisent directement).
+    pub mr_repo: Arc<dyn domain::ports::mr_repository::MrRepository>,
+    /// Use case: créer une MR.
+    pub create_mr: Arc<application::use_cases::create_mr::CreateMrUseCase>,
+    /// Use case: lister les MR d'un repo.
+    pub list_mrs: Arc<application::use_cases::list_mrs::ListMrsUseCase>,
+    /// Use case: récupérer une MR avec détails + conflits.
+    pub get_mr: Arc<application::use_cases::get_mr::GetMrUseCase>,
+    /// Use case: soumettre une review.
+    pub review_mr: Arc<application::use_cases::review_mr::ReviewMrUseCase>,
+    /// Use case: fusionner une MR.
+    pub merge_mr: Arc<application::use_cases::merge_mr::MergeMrUseCase>,
+    /// Use case: fermer une MR sans fusion.
+    pub close_mr: Arc<application::use_cases::close_mr::CloseMrUseCase>,
+    /// Use case: calculer le diff d'une MR.
+    pub mr_diff: Arc<application::use_cases::mr_diff::MrDiffUseCase>,
+
+    // ── Phase 37E — Cross-Repo MR (Le Trou de Ver Git) ────────────
+    /// Use case: créer une MR cross-repo (fork → parent).
+    pub create_cross_repo_mr: Arc<application::use_cases::create_cross_repo_mr::CreateCrossRepoMrUseCase>,
+
+    // ── Phase 28B — ANBU Checkpoints (Sync CLI → Serveur) ────────
+    /// Use case: créer un checkpoint ANBU (multipart → IPFS + PG).
+    pub create_checkpoint: Arc<application::use_cases::create_checkpoint::CreateCheckpointUseCase>,
+    /// Use case: lister les checkpoints ANBU d'un repo.
+    pub list_checkpoints: Arc<application::use_cases::list_checkpoints::ListCheckpointsUseCase>,
+
+    // ── Phase 27 — ForgeFed (Fédération ActivityPub) ────────
+    /// Domaine public de l'instance (ex: "shinobi.example.com").
+    pub federation_domain: String,
+    /// Indique si la fédération est activée.
+    pub federation_enabled: bool,
+    /// Repository de fédération (keypairs, follows, stats).
+    pub federation_repo: Arc<dyn domain::ports::federation_repository::FederationRepository>,
+
+    // ── Phase 33 — Issues/Tickets (Le Parchemin des Doléances) ────────
+    /// Repository des issues (CRUD issues, comments, events, labels).
+    pub issue_repo: Arc<dyn domain::ports::issue_repository::IssueRepository>,
+    /// Use case: créer une issue.
+    pub create_issue: Arc<application::use_cases::create_issue::CreateIssueUseCase>,
+    /// Use case: lister les issues d'un repo.
+    pub list_issues: Arc<application::use_cases::list_issues::ListIssuesUseCase>,
+    /// Use case: récupérer une issue avec détails.
+    pub get_issue: Arc<application::use_cases::get_issue::GetIssueUseCase>,
+    /// Use case: mise à jour titre/body.
+    pub update_issue: Arc<application::use_cases::update_issue::UpdateIssueUseCase>,
+    /// Use case: fermer/rouvrir une issue.
+    pub close_issue: Arc<application::use_cases::close_issue::CloseIssueUseCase>,
+    /// Use case: commenter une issue.
+    pub comment_issue: Arc<application::use_cases::comment_issue::CommentIssueUseCase>,
+    /// Use case: CRUD labels + assign/unassign.
+    pub manage_labels: Arc<application::use_cases::manage_labels::ManageLabelsUseCase>,
+
+    // ── Phase 38 — Notifications (Le Carillon) 🔔 ────────
+    /// Repository des notifications in-app.
+    pub notification_repo: Arc<dyn domain::ports::notification_repository::NotificationRepository>,
+
+    // ── Phase 34 — Webhooks (Chakra チャクラ) 🔔 ────────
+    /// Use case: CRUD des webhooks d'un dépôt.
+    pub manage_webhooks: Arc<application::use_cases::manage_webhooks::ManageWebhooksUseCase>,
+    /// Use case: émission fire-and-forget d'événements webhook.
+    /// `None` si Chakra est désactivé (pas de broker Kafka).
+    pub emit_webhook: Option<Arc<application::use_cases::emit_webhook_event::EmitWebhookEventUseCase>>,
+
+    // ── Phase 39 — Commit Status API (Le Pont CI/CD) 🌉 ────────
+    /// Use case: CRUD des statuts de commit CI/CD.
+    pub manage_commit_statuses: Arc<application::use_cases::manage_commit_statuses::ManageCommitStatusesUseCase>,
+
+    // ── Phase 40 — Jutsu Runner (CI/CD natif) 🥷⚡ ────────
+    /// Use case: exécution d'un pipeline CI/CD natif.
+    /// `None` si Docker n'est pas disponible.
+    pub run_pipeline: Option<Arc<application::use_cases::run_pipeline::RunPipelineUseCase>>,
+    /// Repository des pipelines CI/CD natifs.
+    pub pipeline_repo: Arc<dyn domain::ports::pipeline_repository::PipelineRepository>,
+    /// Publication Kafka pour trigger manuel (Phase 40-E).
+    /// Nécessaire pour que `POST /trigger` publie l'événement vers le JutsuConsumer.
+    pub event_publisher: Option<Arc<dyn domain::ports::event_publisher::EventPublisher>>,
 }
 
 // ── Phase 12A — Git Bridge HTTP ──────────────────────────────────────
@@ -123,4 +253,21 @@ pub struct GitHttpState {
 
     /// Racine des workspaces VCS (pour construire les chemins).
     pub workspace_root: PathBuf,
+
+    // ── Phase 19A-Git — PAT Auth pour Git HTTP ──────────────────────
+    /// Service d'authentification (SHA-256 hash pour PAT lookup).
+    pub auth_service: Arc<dyn domain::ports::auth_service::AuthService>,
+
+    /// Repository des acteurs (reverse PAT lookup → Actor).
+    pub actor_repo: Arc<dyn domain::ports::actor_repository::ActorRepository>,
+
+    /// Repository des dépôts (ownership check pour push).
+    pub repo_repo: Arc<dyn domain::ports::repo_repository::RepoRepository>,
+
+    // ── Phase 27-ter — Fédération ActivityPub ──────────────────────
+    /// Service de fédération pour le fanout Push (optionnel).
+    pub federation_service: Option<Arc<dyn domain::ports::federation_service::FederationService>>,
+
+    /// Domaine fédéré de l'instance (ex: "forge.shinobi.dev").
+    pub federation_domain: String,
 }

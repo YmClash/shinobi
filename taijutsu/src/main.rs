@@ -9,6 +9,8 @@
 //! Un shutdown gracieux est déclenché via Ctrl+C.
 
 mod config;
+mod jutsu_consumer;
+mod kage_bunshin_consumer;
 
 use std::net::SocketAddr;
 use std::sync::Arc;
@@ -22,43 +24,60 @@ use tracing_subscriber::{EnvFilter, layer::SubscriberExt, util::SubscriberInitEx
 
 use application::use_cases::analyze_operation::AnalyzeOperationUseCase;
 use application::use_cases::create_operation::CreateOperationUseCase;
+use application::use_cases::create_pat::CreatePatUseCase;
 use application::use_cases::create_repository::CreateRepositoryUseCase;
+use application::use_cases::create_service_account::CreateServiceAccountUseCase;
+use application::use_cases::delete_repository::DeleteRepositoryUseCase;
+use application::use_cases::fork_repository::ForkRepositoryUseCase;
 use application::use_cases::get_blob::GetBlobUseCase;
+use application::use_cases::get_ipfs_content::GetIpfsContentUseCase;
 use application::use_cases::get_operation::GetOperationUseCase;
 use application::use_cases::get_operation_diff::GetOperationDiffUseCase;
-use application::use_cases::get_ipfs_content::GetIpfsContentUseCase;
 use application::use_cases::get_reviews::GetReviewsUseCase;
 use application::use_cases::get_score_history::GetScoreHistoryUseCase;
 use application::use_cases::get_tree::GetTreeUseCase;
+use application::use_cases::import_github_repo::ImportGitHubRepoUseCase;
 use application::use_cases::list_operations::ListOperationsUseCase;
 use application::use_cases::list_refs::ListRefsUseCase;
 use application::use_cases::list_repositories::ListRepositoriesUseCase;
+use application::use_cases::login_actor::LoginActorUseCase;
+use application::use_cases::register_actor::RegisterActorUseCase;
 use application::use_cases::resolve_repo::ResolveRepoUseCase;
 use application::use_cases::review_operation::ReviewOperationUseCase;
 use application::use_cases::search_chunks::SearchChunksUseCase;
 use application::use_cases::sensei_chat::SenseiChatUseCase;
+use domain::entities::actor::{DEFAULT_REPO_ID, SYSTEM_ACTOR_ID};
+use domain::ports::repository::OperationRepository as _; // Trait import — rend list_recent() visible (backfill)
+use domain::ports::vcs_engine::VcsEngine as _; // Trait import — rend init_workspace() visible
+use infrastructure::auth::jwt_auth_service::JwtAuthService;
 use infrastructure::cache::redis_cache::RedisCache;
 use infrastructure::content::ipfs_store::IpfsContentStore;
 use infrastructure::embeddings::nomic_service::NomicEmbedService;
+use infrastructure::events::chakra_consumer::ChakraConsumer;
+use infrastructure::events::chakra_dispatcher::ChakraDispatcher;
+use infrastructure::events::chakra_producer::ChakraProducer;
+use infrastructure::events::chakra_retry::ChakraRetryWorker;
+use infrastructure::events::jutsu_runner::JutsuRunner;
 use infrastructure::events::kafka_consumer::KafkaEventConsumer;
 use infrastructure::events::kafka_producer::KafkaEventPublisher;
 use infrastructure::events::oracle_consumer::OracleKafkaConsumer;
+use infrastructure::github::github_client::GitHubClient;
 use infrastructure::llm::ollama_service::OllamaService;
-use infrastructure::persistence::postgres_chunk_repo::PostgresChunkRepository;
 use infrastructure::persistence::postgres_actor_repo::PostgresActorRepository;
+use infrastructure::persistence::postgres_chunk_repo::PostgresChunkRepository;
+use infrastructure::persistence::postgres_federation_repo::PostgresFederationRepository;
 use infrastructure::persistence::postgres_repo::PostgresOperationRepository;
 use infrastructure::persistence::postgres_repo_repo::PostgresRepoRepository;
 use infrastructure::persistence::postgres_review_repo::PostgresReviewRepository;
-use infrastructure::vcs::jujutsu_engine::JujutsuEngine;
+use infrastructure::persistence::postgres_webhook_repo::PostgresWebhookRepo;
 use infrastructure::vcs::git_cgi::GitCgiBackend;
-use domain::entities::actor::DEFAULT_REPO_ID;
-use domain::ports::vcs_engine::VcsEngine as _; // Trait import — rend init_workspace() visible
-use domain::ports::repository::OperationRepository as _; // Trait import — rend list_recent() visible (backfill)
-use presentation::grpc::services::proto::shinobi_service_server::ShinobiServiceServer;
+use infrastructure::vcs::jujutsu_engine::JujutsuEngine;
+use jutsu_consumer::JutsuConsumer;
 use presentation::grpc::services::ShinobiServiceImpl;
-use presentation::rest::routes::create_router;
+use presentation::grpc::services::proto::shinobi_service_server::ShinobiServiceServer;
 use presentation::rest::git_http::create_git_router;
-use presentation::state::{SharedState, GitHttpState};
+use presentation::rest::routes::create_router;
+use presentation::state::{GitHttpState, SharedState};
 use tensai::multi_chunker::MultiChunker;
 
 use config::Config;
@@ -77,24 +96,14 @@ async fn main() -> anyhow::Result<()> {
     print_banner();
 
     // ── Configuration ──────────────────────────────
-    let config = Config::from_env();
-    info!(
-        rest_port = config.rest_port,
-        grpc_port = config.grpc_port,
-        vcs_root = %config.vcs_workspace_root,
-        kafka_brokers = %config.kafka_brokers,
-        ipfs_api_url = %config.ipfs_api_url,
-        tensai_enabled = config.tensai_consumer_enabled,
-        embedding_enabled = config.embedding_enabled,
-        embedding_dimensions = config.embedding_dimensions,
-        ollama_url = %config.ollama_url,
-        ollama_model = %config.ollama_model,
-        oracle_enabled = config.oracle_consumer_enabled,
-        sensei_enabled = config.sensei_enabled,
-        sensei_ollama_url = %config.sensei_ollama_url,
-        sensei_ollama_model = %config.sensei_ollama_model,
-        "Configuration chargée"
-    );
+    let config = match Config::from_env() {
+        Ok(c) => c,
+        Err(e) => {
+            eprintln!("\n{}", e);
+            std::process::exit(1);
+        }
+    };
+    config.log_summary();
 
     // ── Token de shutdown gracieux ─────────────────
     let cancel_token = CancellationToken::new();
@@ -110,45 +119,29 @@ async fn main() -> anyhow::Result<()> {
     // Auto-migration : applique les migrations SQL pendantes au démarrage.
     // Garantit qu'un volume PostgreSQL vierge (premier `docker compose up`)
     // est automatiquement provisionné sans intervention manuelle.
-    sqlx::migrate!("./migrations")
-        .run(&pg_pool)
-        .await?;
+    sqlx::migrate!("./migrations").run(&pg_pool).await?;
     info!("✅ Migrations SQL appliquées");
 
     // Fūinjutsu: Redis
-    let _redis_cache = RedisCache::connect(&config.redis_url).await?;
+    let redis_cache = RedisCache::connect(&config.redis_url).await?;
     info!("✅ Redis connecté");
 
     // VCS Engine (Anti-Corruption Layer) — auto-init au démarrage
-    // Phase 10B : init avec DEFAULT_REPO_ID (UUID fantôme pour rétro-compat MVP).
+    // Phase 21 : SYSTEM_ACTOR_ID comme propriétaire du DEFAULT_REPO_ID.
     let vcs_engine = JujutsuEngine::new(&config.vcs_workspace_root);
-    vcs_engine.init_workspace(&DEFAULT_REPO_ID).await?;
+    vcs_engine
+        .init_workspace(&SYSTEM_ACTOR_ID, &DEFAULT_REPO_ID)
+        .await?;
     info!(
         workspace = %config.vcs_workspace_root,
+        owner_id = %SYSTEM_ACTOR_ID,
         repo_id = %DEFAULT_REPO_ID,
-        "✅ VCS Engine initialisé (jj-lib ACL — DEFAULT_REPO_ID)"
+        "✅ VCS Engine initialisé (jj-lib ACL — Phase 21 Multi-Tenant)"
     );
 
-    // Nen: Kafka Event Publisher (optionnel — graceful degradation)
-    let event_publisher: Option<Arc<dyn domain::ports::event_publisher::EventPublisher>> =
-        match KafkaEventPublisher::new(
-            &config.kafka_brokers,
-            &config.kafka_topic,
-            &config.kafka_analysis_topic,
-        ) {
-            Ok(publisher) => {
-                info!(
-                    brokers = %config.kafka_brokers,
-                    topic = %config.kafka_topic,
-                    "✅ Kafka Event Publisher initialisé"
-                );
-                Some(Arc::new(publisher))
-            }
-            Err(e) => {
-                warn!("⚠️ Kafka non disponible — événements désactivés: {e}");
-                None
-            }
-        };
+    // Nen: Kafka Event Publisher — Phase 34-V2 : construit après ChakraProducer (voir ci-dessous)
+    // Placeholder — sera remplacé par la vraie valeur après l'init Chakra.
+    let mut event_publisher: Option<Arc<dyn domain::ports::event_publisher::EventPublisher>> = None;
 
     // Genjutsu: IPFS Content Store (optionnel — graceful degradation)
     let content_store: Option<Arc<dyn domain::ports::content_store::ContentStore>> =
@@ -255,21 +248,15 @@ async fn main() -> anyhow::Result<()> {
         content_store.clone(),
     ));
 
-    let get_reviews = Arc::new(GetReviewsUseCase::new(
-        review_repo.clone(),
-    ));
+    let get_reviews = Arc::new(GetReviewsUseCase::new(review_repo.clone()));
 
-    let get_score_history = Arc::new(GetScoreHistoryUseCase::new(
-        review_repo.clone(),
-    ));
+    let get_score_history = Arc::new(GetScoreHistoryUseCase::new(review_repo.clone()));
 
     // ── Phase 10C: Résolution sémantique des dépôts ────
-    let actor_repo: Arc<PostgresActorRepository> = Arc::new(
-        PostgresActorRepository::new(pg_pool.clone()),
-    );
-    let repo_repo: Arc<PostgresRepoRepository> = Arc::new(
-        PostgresRepoRepository::new(pg_pool.clone()),
-    );
+    let actor_repo: Arc<PostgresActorRepository> =
+        Arc::new(PostgresActorRepository::new(pg_pool.clone()));
+    let repo_repo: Arc<PostgresRepoRepository> =
+        Arc::new(PostgresRepoRepository::new(pg_pool.clone()));
     let resolve_repo = Arc::new(ResolveRepoUseCase::new(
         actor_repo.clone(),
         repo_repo.clone(),
@@ -281,51 +268,519 @@ async fn main() -> anyhow::Result<()> {
         repo_repo.clone(),
     ));
     let create_repository = Arc::new(CreateRepositoryUseCase::new(
-        actor_repo,
-        repo_repo,
+        actor_repo.clone(),
+        repo_repo.clone(),
         vcs.clone(),
     ));
+
+    // ── Phase 19A : Auth & RBAC ────────────────────────────────
+    let auth_service: Arc<dyn domain::ports::auth_service::AuthService> = Arc::new(
+        JwtAuthService::new(&config.jwt_secret, config.jwt_duration_secs),
+    );
+
+    let register_actor = Arc::new(RegisterActorUseCase::new(
+        actor_repo.clone(),
+        auth_service.clone(),
+        config.jwt_duration_secs,
+    ));
+    let login_actor = Arc::new(LoginActorUseCase::new(
+        actor_repo.clone(),
+        auth_service.clone(),
+        config.jwt_duration_secs,
+    ));
+    let create_pat = Arc::new(CreatePatUseCase::new(
+        actor_repo.clone(),
+        auth_service.clone(),
+    ));
+
+    info!(
+        jwt_duration_days = config.jwt_duration_secs / 86400,
+        "🔐 Auth Service initialisé (JWT HS256 + Argon2 + PAT SHA-256)"
+    );
 
     // ── Phase 6 : Explorateur de Code ─────────────────────────────
-    let get_tree = Arc::new(GetTreeUseCase::new(
-        vcs.clone(),
-        resolve_repo.clone(),
-    ));
-    let get_blob = Arc::new(GetBlobUseCase::new(
-        vcs.clone(),
-        resolve_repo.clone(),
-    ));
-    let list_refs_uc = Arc::new(ListRefsUseCase::new(
-        vcs.clone(),
-        resolve_repo.clone(),
-    ));
+    let get_tree = Arc::new(GetTreeUseCase::new(vcs.clone(), resolve_repo.clone()));
+    let get_blob = Arc::new(GetBlobUseCase::new(vcs.clone(), resolve_repo.clone()));
+    let list_refs_uc = Arc::new(ListRefsUseCase::new(vcs.clone(), resolve_repo.clone()));
 
     // ── Phase 15 : Agent Sensei (先生) — LLM conversationnel ─────────
-    let sensei_chat: Option<Arc<SenseiChatUseCase>> = if config.sensei_enabled {
-        match OllamaService::new(&config.sensei_ollama_url, &config.sensei_ollama_model) {
-            Ok(sensei_llm) => {
-                let use_case = Arc::new(SenseiChatUseCase::new(
-                    search_chunks.clone(),
-                    review_repo.clone(),
-                    Arc::new(sensei_llm),
-                    repo.clone(),
-                ));
-                info!(
-                    url = %config.sensei_ollama_url,
-                    model = %config.sensei_ollama_model,
-                    "🥷 Sensei Agent — Initialisé (Ollama #2)"
+    // Phase 41 : Le LLM Sensei est partagé avec le Kage Bunshin (auto-healing).
+    let sensei_llm_arc: Option<Arc<dyn domain::ports::llm_service::LlmService>> =
+        if config.sensei_enabled {
+            match OllamaService::new(&config.sensei_ollama_url, &config.sensei_ollama_model) {
+                Ok(sensei_llm) => {
+                    info!(
+                        url = %config.sensei_ollama_url,
+                        model = %config.sensei_ollama_model,
+                        "🥷 Sensei LLM — Initialisé (Ollama #2, partagé Chat + KageBunshin)"
+                    );
+                    Some(Arc::new(sensei_llm))
+                }
+                Err(e) => {
+                    warn!("⚠️ Sensei LLM désactivé — Ollama #2 non disponible: {e}");
+                    None
+                }
+            }
+        } else {
+            info!("ℹ️ Sensei Agent désactivé par configuration (SENSEI_ENABLED=false)");
+            None
+        };
+
+    let sensei_chat: Option<Arc<SenseiChatUseCase>> = sensei_llm_arc.as_ref().map(|llm| {
+        Arc::new(SenseiChatUseCase::new(
+            search_chunks.clone(),
+            review_repo.clone(),
+            llm.clone(),
+            repo.clone(),
+        ))
+    });
+
+    // ── Phase 19B : GitHub Import (Le Pont des Mondes) ────────
+    let github_service: Arc<dyn domain::ports::github_service::GitHubService> =
+        Arc::new(GitHubClient::new());
+
+    let vcs_concrete = Arc::new(JujutsuEngine::new(&config.vcs_workspace_root));
+
+    let import_github_repo = Arc::new(ImportGitHubRepoUseCase::new(
+        github_service.clone(),
+        actor_repo.clone(),
+        repo_repo.clone(),
+        vcs_concrete.clone(),
+        repo.clone(),
+        content_store.clone(),
+        event_publisher.clone(),
+    ));
+
+    info!("\u{1f30d} GitHub Import Service initialisé (Phase 19B — Le Pont des Mondes)");
+
+    // ── Phase 20 : GitHub OAuth (Les Portes d'Ōtsutsuki) ──────────
+    let oauth_github: Option<Arc<application::use_cases::oauth_github::OAuthGitHubUseCase>> =
+        match (&config.github_client_id, &config.github_client_secret) {
+            (Some(client_id), Some(client_secret)) => {
+                let use_case = Arc::new(
+                    application::use_cases::oauth_github::OAuthGitHubUseCase::new(
+                        actor_repo.clone(),
+                        auth_service.clone(),
+                        redis_cache.clone(),
+                        client_id.clone(),
+                        client_secret.clone(),
+                        config.jwt_duration_secs,
+                    ),
                 );
+                info!("🔑 GitHub OAuth initialisé (Phase 20 — Les Portes d'Ōtsutsuki)");
                 Some(use_case)
             }
+            _ => {
+                info!("ℹ️ GitHub OAuth désactivé — GITHUB_CLIENT_ID/SECRET non configurés");
+                None
+            }
+        };
+
+    // ── Phase 20B : Le Clonage Massif (GitHub Bulk Import) ──────────
+    let list_github_repos = Arc::new(
+        application::use_cases::list_github_repos::ListGitHubReposUseCase::new(
+            actor_repo.clone(),
+            github_service.clone(),
+            repo_repo.clone(),
+        ),
+    );
+
+    let bulk_import_github = Arc::new(
+        application::use_cases::bulk_import_github::BulkImportGitHubUseCase::new(
+            import_github_repo.clone(),
+            repo_repo.clone(),
+        ),
+    );
+
+    info!("🐙 GitHub Bulk Import initialisé (Phase 20B — Le Clonage Massif)");
+
+    // ── Phase 24 : Soft Delete (Corbeille) ──────────────────────────
+    let delete_repository = Arc::new(DeleteRepositoryUseCase::new(
+        actor_repo.clone(),
+        repo_repo.clone(),
+    ));
+
+    let purge_trash = Arc::new(application::use_cases::purge_trash::PurgeTrashUseCase::new(
+        repo_repo.clone(),
+        std::path::PathBuf::from(&config.vcs_workspace_root),
+    ));
+
+    info!(
+        "🗑️ Corbeille initialisée (Phase 24 — rétention {}s)",
+        application::use_cases::purge_trash::TRASH_RETENTION_SECS
+    );
+
+    // ── Phase 37B : Fork Local (Le Dédoublement) ──────────────────────
+    let fork_repository = Arc::new(ForkRepositoryUseCase::new(
+        actor_repo.clone(),
+        repo_repo.clone(),
+        vcs.clone(),
+    ));
+
+    info!("🍴 Fork Local initialisé (Phase 37B — Le Dédoublement)");
+
+    // ── Phase 25 : Service Accounts (L'Acte de Naissance) ──────────────
+    let create_service_account = Arc::new(CreateServiceAccountUseCase::new(
+        actor_repo.clone(),
+        auth_service.clone(),
+    ));
+
+    info!("🤖 Service Accounts initialisé (Phase 25 — L'Acte de Naissance)");
+
+    // ── Phase 38 — Notifications (Le Carillon) 🔔 ───────────────────────
+    let notification_repo: Arc<dyn domain::ports::notification_repository::NotificationRepository> =
+        Arc::new(
+            infrastructure::persistence::postgres_notification_repo::PostgresNotificationRepo::new(
+                pg_pool.clone(),
+            ),
+        );
+
+    // ── Phase 34 — Chakra (チャクラ) Webhooks 🔔 ───────────────────
+    let webhook_repo: Arc<dyn domain::ports::webhook_repository::WebhookRepository> =
+        Arc::new(PostgresWebhookRepo::new(pg_pool.clone()));
+
+    let manage_webhooks = Arc::new(
+        application::use_cases::manage_webhooks::ManageWebhooksUseCase::new(
+            webhook_repo.clone(),
+            repo_repo.clone(),
+            actor_repo.clone(),
+            config.chakra_max_webhooks_per_repo,
+            config.chakra_allow_local,
+        ),
+    );
+
+    // ── Phase 39 — Commit Status API (Le Pont CI/CD) 🌉 ──────────────
+    let commit_status_repo: Arc<
+        dyn domain::ports::commit_status_repository::CommitStatusRepository,
+    > = Arc::new(
+        infrastructure::persistence::postgres_commit_status_repo::PostgresCommitStatusRepo::new(
+            pg_pool.clone(),
+        ),
+    );
+
+    let manage_commit_statuses = Arc::new(
+        application::use_cases::manage_commit_statuses::ManageCommitStatusesUseCase::new(
+            commit_status_repo,
+            repo_repo.clone(),
+            actor_repo.clone(),
+        ),
+    );
+    info!("🌉 Commit Status API initialisé (Phase 39 — Le Pont CI/CD)");
+
+    // ── Phase 40 — Jutsu Runner (CI/CD natif) 🥷⚡ ────────────────────
+    let pipeline_repo: Arc<dyn domain::ports::pipeline_repository::PipelineRepository> = Arc::new(
+        infrastructure::persistence::postgres_pipeline_repo::PostgresPipelineRepo::new(
+            pg_pool.clone(),
+        ),
+    );
+
+    let container_runner: Option<Arc<dyn domain::ports::container_runner::ContainerRunner>> =
+        if config.jutsu_enabled {
+            match JutsuRunner::new() {
+                Ok(runner) => Some(Arc::new(runner)),
+                Err(e) => {
+                    warn!("⚠️ Docker non disponible — Jutsu Runner désactivé: {e}");
+                    None
+                }
+            }
+        } else {
+            info!("ℹ️ Jutsu Runner désactivé par configuration (JUTSU_ENABLED=false)");
+            None
+        };
+
+    let parse_jutsu =
+        Arc::new(application::use_cases::parse_jutsu_config::ParseJutsuConfigUseCase::new());
+
+    // Note: run_pipeline sera construit APRÈS event_publisher (Phase 41 — besoin du publisher)
+
+    // Chakra Producer (Kafka) — optionnel (graceful degradation)
+    let chakra_producer: Option<Arc<ChakraProducer>> = if config.chakra_enabled {
+        match ChakraProducer::new(&config.kafka_brokers, &config.chakra_topic) {
+            Ok(p) => {
+                info!(
+                    topic = %config.chakra_topic,
+                    "🔔 Chakra Producer initialisé"
+                );
+                Some(Arc::new(p))
+            }
             Err(e) => {
-                warn!("⚠️ Sensei Agent désactivé — Ollama #2 non disponible: {e}");
+                warn!("⚠️ Chakra Producer non disponible — webhooks désactivés: {e}");
                 None
             }
         }
     } else {
-        info!("ℹ️ Sensei Agent désactivé par configuration (SENSEI_ENABLED=false)");
+        info!("ℹ️ Chakra désactivé par configuration (CHAKRA_ENABLED=false)");
         None
     };
+
+    let emit_webhook = chakra_producer.as_ref().map(|p| {
+        Arc::new(
+            application::use_cases::emit_webhook_event::EmitWebhookEventUseCase::new(p.clone()),
+        )
+    });
+
+    info!(
+        "🔔 Chakra Webhooks initialisé (Phase 34 — {} workers, max {}/repo)",
+        config.chakra_worker_count, config.chakra_max_webhooks_per_repo
+    );
+
+    // Nen: Kafka Event Publisher (Phase 34-V2 — pont Nen→Chakra)
+    // Construit ICI (après ChakraProducer) pour pouvoir passer le bridge.
+    event_publisher = match KafkaEventPublisher::new(
+        &config.kafka_brokers,
+        &config.kafka_topic,
+        &config.kafka_analysis_topic,
+        chakra_producer.clone(), // Phase 34-V2 : pont Nen→Chakra
+        &config.jutsu_topic,     // Phase 40 : topic pipeline CI/CD
+        &config.kage_bunshin_topic, // Phase 41 : topic auto-healing dédié
+    ) {
+        Ok(publisher) => {
+            info!(
+                brokers = %config.kafka_brokers,
+                topic = %config.kafka_topic,
+                chakra_bridge = chakra_producer.is_some(),
+                "✅ Kafka Event Publisher initialisé{}",
+                if chakra_producer.is_some() { " + pont Chakra" } else { "" }
+            );
+            Some(Arc::new(publisher))
+        }
+        Err(e) => {
+            warn!("⚠️ Kafka non disponible — événements désactivés: {e}");
+            None
+        }
+    };
+
+    // ── Phase 40+41 — RunPipelineUseCase ────────────────────────────────
+    // Construit APRÈS event_publisher car il a besoin du publisher pour
+    // déclencher le Kage Bunshin sur la file Kafka dédiée (Phase 41).
+    let run_pipeline = container_runner.as_ref().map(|runner| {
+        Arc::new(
+            application::use_cases::run_pipeline::RunPipelineUseCase::new(
+                pipeline_repo.clone(),
+                runner.clone(),
+                manage_commit_statuses.clone(),
+                event_publisher.clone().map(|p| p as Arc<dyn domain::ports::event_publisher::EventPublisher>),
+                config.kage_bunshin_enabled,
+                std::time::Duration::from_secs(config.jutsu_stage_timeout_secs),
+                std::time::Duration::from_secs(config.jutsu_pipeline_timeout_secs),
+            ),
+        )
+    });
+
+    // ── Phase 26A : Merge Requests (Le Katana Croisé) ──────────────────
+    let mr_repo: Arc<dyn domain::ports::mr_repository::MrRepository> = Arc::new(
+        infrastructure::persistence::postgres_mr_repo::PostgresMrRepository::new(pg_pool.clone()),
+    );
+    let create_mr = Arc::new(application::use_cases::create_mr::CreateMrUseCase::new(
+        mr_repo.clone(),
+        repo_repo.clone(),
+        actor_repo.clone(),
+        notification_repo.clone(),
+        event_publisher.clone(), // Phase 34-V2
+    ));
+    let list_mrs = Arc::new(application::use_cases::list_mrs::ListMrsUseCase::new(
+        mr_repo.clone(),
+    ));
+    let get_mr = Arc::new(application::use_cases::get_mr::GetMrUseCase::new(
+        mr_repo.clone(),
+        vcs.clone(),
+    ));
+    let review_mr = Arc::new(application::use_cases::review_mr::ReviewMrUseCase::new(
+        mr_repo.clone(),
+        repo_repo.clone(),
+    ));
+    let merge_mr = Arc::new(application::use_cases::merge_mr::MergeMrUseCase::new(
+        mr_repo.clone(),
+        repo_repo.clone(),
+        vcs.clone(),
+        event_publisher.clone(), // Phase 34-V2
+    ));
+    let close_mr = Arc::new(application::use_cases::close_mr::CloseMrUseCase::new(
+        mr_repo.clone(),
+        repo_repo.clone(),
+        vcs.clone(),
+        event_publisher.clone(), // Phase 34-V2
+    ));
+    let mr_diff = Arc::new(application::use_cases::mr_diff::MrDiffUseCase::new(
+        mr_repo.clone(),
+        vcs.clone(),
+    ));
+
+    info!("⚔️ Merge Requests initialisé (Phase 26A — Le Katana Croisé)");
+
+    // ── Phase 37E — Cross-Repo MR (Le Trou de Ver Git) ──────────
+    let create_cross_repo_mr = Arc::new(
+        application::use_cases::create_cross_repo_mr::CreateCrossRepoMrUseCase::new(
+            mr_repo.clone(),
+            repo_repo.clone(),
+            actor_repo.clone(),
+            notification_repo.clone(),
+            vcs.clone(),
+            event_publisher.clone(), // Phase 34-V2
+        ),
+    );
+    info!("🕳️⚡ Cross-Repo MR initialisé (Phase 37E — Le Trou de Ver Git)");
+
+    // ── Phase 28B — ANBU Checkpoints ──────────────────
+    let anbu_repo: Arc<dyn domain::ports::anbu_repository::AnbuRepository> = Arc::new(
+        infrastructure::persistence::anbu_repo::PostgresAnbuRepository::new(pg_pool.clone()),
+    );
+    let create_checkpoint = Arc::new(
+        application::use_cases::create_checkpoint::CreateCheckpointUseCase::new(
+            anbu_repo.clone(),
+            content_store.clone(),
+            event_publisher.clone(), // Phase 34-V3 — Levier Audit B2B
+        ),
+    );
+    let list_checkpoints_uc = Arc::new(
+        application::use_cases::list_checkpoints::ListCheckpointsUseCase::new(anbu_repo.clone()),
+    );
+    info!("🥷 ANBU Checkpoints initialisé (Phase 28B)");
+
+    // ── Phase 33 — Issues/Tickets (Le Parchemin des Doléances) ────────
+    let issue_repo: Arc<dyn domain::ports::issue_repository::IssueRepository> = Arc::new(
+        infrastructure::persistence::postgres_issue_repo::PostgresIssueRepository::new(
+            pg_pool.clone(),
+        ),
+    );
+    // create_issue construit après le bloc fédération (Phase 37F — besoin de remote_fetcher)
+    let list_issues = Arc::new(application::use_cases::list_issues::ListIssuesUseCase::new(
+        issue_repo.clone(),
+    ));
+    let get_issue = Arc::new(application::use_cases::get_issue::GetIssueUseCase::new(
+        issue_repo.clone(),
+    ));
+    let update_issue = Arc::new(
+        application::use_cases::update_issue::UpdateIssueUseCase::new(
+            issue_repo.clone(),
+            repo_repo.clone(),
+        ),
+    );
+    let close_issue = Arc::new(application::use_cases::close_issue::CloseIssueUseCase::new(
+        issue_repo.clone(),
+        repo_repo.clone(),
+        event_publisher.clone(), // Phase 34-V2
+    ));
+    // comment_issue construit après le bloc fédération (Phase 37F — besoin de remote_fetcher)
+    let manage_labels = Arc::new(
+        application::use_cases::manage_labels::ManageLabelsUseCase::new(
+            issue_repo.clone(),
+            repo_repo.clone(),
+        ),
+    );
+    info!("🎯 Issues/Tickets initialisé (Phase 33)");
+    info!("🔔 Notifications initialisé (Phase 38 — Le Carillon)");
+
+    // ── Phase 27 — ForgeFed (Fédération ActivityPub) ──────────────────
+    let federation_repo: Arc<dyn domain::ports::federation_repository::FederationRepository> =
+        Arc::new(PostgresFederationRepository::new(pg_pool.clone()));
+
+    // Auto-generate instance keypair (SYSTEM_ACTOR_ID) si absente
+    // Phase 37F: le remote_fetcher est extrait séparément pour réutilisation
+    let mut remote_fetcher_for_mentions: Option<
+        Arc<infrastructure::federation::remote_actor::RemoteActorFetcher>,
+    > = None;
+    let federation_service: Option<Arc<dyn domain::ports::federation_service::FederationService>> =
+        if config.federation_enabled {
+            if federation_repo
+                .get_keypair(&SYSTEM_ACTOR_ID)
+                .await?
+                .is_none()
+            {
+                let keypair = infrastructure::federation::crypto::generate_rsa_keypair()
+                    .map_err(|e| anyhow::anyhow!("Federation keygen failed: {e}"))?;
+                let key_id = format!(
+                    "https://{}/actors/system#main-key",
+                    config.federation_domain
+                );
+                let fed_kp = domain::entities::federation::FederationKeypair {
+                    actor_id: SYSTEM_ACTOR_ID,
+                    public_key_pem: keypair.public_key_pem,
+                    private_key_pem: keypair.private_key_pem,
+                    key_id,
+                    created_at: chrono::Utc::now(),
+                };
+                federation_repo.save_keypair(&fed_kp).await?;
+                info!("🔑 Federation keypair generated for SYSTEM_ACTOR_ID");
+            } else {
+                info!("🔑 Federation keypair exists for SYSTEM_ACTOR_ID");
+            }
+            info!(
+                domain = %config.federation_domain,
+                "🌐 ForgeFed Federation — Activée (Phase 27 + 27-ter)"
+            );
+
+            // Phase 27-ter : Instancier le FanoutService
+            // Phase 37F-Fix : Utiliser with_keypair() pour supporter AUTHORIZED_FETCH (Mastodon Secure Mode)
+            let system_kp = federation_repo
+                .get_keypair(&SYSTEM_ACTOR_ID)
+                .await?
+                .expect("System keypair must exist at this point");
+            let remote_fetcher = Arc::new(
+                infrastructure::federation::remote_actor::RemoteActorFetcher::with_keypair(
+                    system_kp.private_key_pem,
+                    system_kp.key_id,
+                ),
+            );
+            remote_fetcher_for_mentions = Some(remote_fetcher.clone()); // Phase 37F
+            let fanout = Arc::new(
+                infrastructure::federation::fanout_service::FanoutService::new(
+                    federation_repo.clone(),
+                    remote_fetcher,
+                ),
+            );
+            info!("📤 FanoutService initialisé (Phase 27-ter)");
+            Some(fanout as Arc<dyn domain::ports::federation_service::FederationService>)
+        } else {
+            info!("ℹ️ ForgeFed Federation désactivée (FEDERATION_ENABLED=false)");
+            None
+        };
+
+    // Phase 27-ter: Réassigner create_repository avec fédération si activée
+    let create_repository = if let Some(ref fed_svc) = federation_service {
+        Arc::new(CreateRepositoryUseCase::with_federation(
+            actor_repo.clone(),
+            repo_repo.clone(),
+            vcs.clone(),
+            fed_svc.clone(),
+            config.federation_domain.clone(),
+        ))
+    } else {
+        create_repository
+    };
+
+    // Phase 37F — RemoteActorFetcher (fallback si fédération désactivée)
+    let remote_fetcher_for_mentions = remote_fetcher_for_mentions.unwrap_or_else(|| {
+        Arc::new(infrastructure::federation::remote_actor::RemoteActorFetcher::new())
+    });
+
+    // Phase 37F — CommentIssue construit ici (après les dépendances fédération)
+    let comment_issue = Arc::new(
+        application::use_cases::comment_issue::CommentIssueUseCase::new(
+            issue_repo.clone(),
+            repo_repo.clone(),
+            actor_repo.clone(),
+            notification_repo.clone(),
+            federation_repo.clone(),
+            remote_fetcher_for_mentions.clone(),
+            config.federation_domain.clone(),
+            event_publisher.clone(), // Phase 34-V2
+        ),
+    );
+
+    // Phase 37F — CreateIssue construit ici (après les dépendances fédération)
+    let create_issue = Arc::new(
+        application::use_cases::create_issue::CreateIssueUseCase::new(
+            issue_repo.clone(),
+            repo_repo.clone(),
+            actor_repo.clone(),
+            notification_repo.clone(),
+            federation_repo.clone(),
+            remote_fetcher_for_mentions.clone(),
+            config.federation_domain.clone(),
+            event_publisher.clone(), // Phase 34-V2
+        ),
+    );
 
     let shared_state = SharedState {
         create_operation,
@@ -343,10 +798,74 @@ async fn main() -> anyhow::Result<()> {
         get_blob,
         list_refs: list_refs_uc,
         sensei_chat,
-        sensei_ollama_url: if config.sensei_enabled { Some(config.sensei_ollama_url.clone()) } else { None },
+        sensei_ollama_url: if config.sensei_enabled {
+            Some(config.sensei_ollama_url.clone())
+        } else {
+            None
+        },
         // Phase 17 — Diff Colorisé
         vcs_engine: vcs.clone(),
         operation_repo: repo.clone(),
+        // Phase 19A — Auth & RBAC
+        auth_service: auth_service.clone(),
+        actor_repo: actor_repo.clone(),
+        repo_repo: repo_repo.clone(),
+        register_actor,
+        login_actor,
+        create_pat,
+        // Phase 19B — GitHub Import
+        import_github_repo,
+        github_service: github_service.clone(),
+        // Phase 20 — GitHub OAuth
+        oauth_github,
+        frontend_url: std::env::var("FRONTEND_URL").ok(),
+        // Phase 20B — Le Clonage Massif
+        list_github_repos,
+        bulk_import_github,
+        // Phase 24 — Soft Delete (Corbeille)
+        delete_repository,
+        // Phase 37B — Fork Local (Le Dédoublement)
+        fork_repository,
+        // Phase 25 — Service Accounts (L'Acte de Naissance)
+        create_service_account,
+        // Phase 26A — Merge Requests (Le Katana Croisé)
+        mr_repo: mr_repo.clone(),
+        create_mr,
+        list_mrs,
+        get_mr,
+        review_mr,
+        merge_mr,
+        close_mr,
+        mr_diff,
+        // Phase 37E — Cross-Repo MR (Le Trou de Ver Git)
+        create_cross_repo_mr,
+        // Phase 28B — ANBU Checkpoints
+        create_checkpoint,
+        list_checkpoints: list_checkpoints_uc,
+        // Phase 27 — ForgeFed (Fédération ActivityPub)
+        federation_domain: config.federation_domain.clone(),
+        federation_enabled: config.federation_enabled,
+        federation_repo: federation_repo.clone(),
+        // Phase 33 — Issues/Tickets (Le Parchemin des Doléances)
+        issue_repo: issue_repo.clone(),
+        create_issue,
+        list_issues,
+        get_issue,
+        update_issue,
+        close_issue,
+        comment_issue,
+        manage_labels,
+        // Phase 38 — Notifications (Le Carillon) 🔔
+        notification_repo: notification_repo.clone(),
+        // Phase 34 — Webhooks (Chakra チャクラ) 🔔
+        manage_webhooks: manage_webhooks.clone(),
+        emit_webhook: emit_webhook.clone(),
+        // Phase 39 — Commit Status API (Le Pont CI/CD) 🌉
+        manage_commit_statuses,
+        // Phase 40 — Jutsu Runner (CI/CD natif) 🥷⚡
+        run_pipeline: run_pipeline.clone(),
+        pipeline_repo: pipeline_repo.clone(),
+        event_publisher: event_publisher.clone(),
     };
 
     // ── Git Bridge HTTP (Phase 12A) ────────────────────
@@ -372,9 +891,15 @@ async fn main() -> anyhow::Result<()> {
             operation_repo: repo.clone(),
             content_store: content_store.clone(),
             workspace_root: std::path::PathBuf::from(&config.vcs_workspace_root),
+            // Phase 19A-Git — PAT Auth pour Git HTTP
+            auth_service: auth_service.clone(),
+            actor_repo: actor_repo.clone(),
+            repo_repo: repo_repo.clone(),
+            // Phase 27-ter — Federation Push fanout
+            federation_service: federation_service.clone(),
+            federation_domain: config.federation_domain.clone(),
         };
-        create_router(shared_state.clone())
-            .merge(create_git_router(git_state))
+        create_router(shared_state.clone()).merge(create_git_router(git_state))
     } else {
         create_router(shared_state.clone())
     };
@@ -391,6 +916,178 @@ async fn main() -> anyhow::Result<()> {
             .await
             .map_err(|e| anyhow::anyhow!("Axum server error: {e}"))
     };
+
+    // ── Phase 24 : Timer de purge automatique (corbeille) ────────────
+    {
+        let purge = purge_trash.clone();
+        let cancel = cancel_token.clone();
+        tokio::spawn(async move {
+            // Vérifier toutes les 10 minutes (adapté au délai de rétention de 1h)
+            let mut interval = tokio::time::interval(std::time::Duration::from_secs(600));
+            loop {
+                interval.tick().await;
+                if cancel.is_cancelled() {
+                    info!("🗑️ Purge timer — arrêt demandé");
+                    break;
+                }
+                match purge.execute().await {
+                    Ok(n) if n > 0 => {
+                        info!("🗑️ Purge: {n} dépôt(s) expiré(s) supprimé(s) définitivement")
+                    }
+                    Ok(_) => {}
+                    Err(e) => warn!("⚠️ Purge automatique échouée: {e}"),
+                }
+            }
+        });
+        info!("⏱️ Timer de purge automatique démarré (toutes les 10 min)");
+    }
+
+    // ── Phase 32 : Inbox Worker — Boucle de traitement des activités entrantes ──
+    if config.federation_enabled {
+        let fed_repo = federation_repo.clone();
+        let cancel = cancel_token.clone();
+        tokio::spawn(async move {
+            let worker =
+                infrastructure::federation::inbox_worker::InboxWorker::new(fed_repo, cancel);
+            worker.run().await;
+        });
+        info!("📥 Inbox Worker démarré (Phase 32 — poll 30s, batch 20, Poison Pill safe)");
+    }
+
+    // ── Phase 34 : Chakra Consumer + Retry Worker ───────────────
+    if config.chakra_enabled {
+        let chakra_dispatcher = Arc::new(ChakraDispatcher::new(
+            redis_cache.clone(),
+            webhook_repo.clone(),
+            config.federation_domain.clone(),
+            config.chakra_allow_local,
+        ));
+
+        // Chakra Consumer (Kafka → HTTP dispatch)
+        match ChakraConsumer::new(
+            &config.kafka_brokers,
+            &config.chakra_topic,
+            &config.chakra_consumer_group,
+            cancel_token.clone(),
+            config.chakra_worker_count,
+        ) {
+            Ok(consumer) => {
+                let dispatcher_clone = chakra_dispatcher.clone();
+                tokio::spawn(async move {
+                    if let Err(e) = consumer.start(dispatcher_clone).await {
+                        error!("❌ Chakra Consumer crashé: {e}");
+                    }
+                });
+                info!(
+                    "🔔 Chakra Consumer démarré (Phase 34 — {} workers)",
+                    config.chakra_worker_count
+                );
+            }
+            Err(e) => {
+                warn!("⚠️ Chakra Consumer non disponible: {e}");
+            }
+        }
+
+        // Chakra Retry Worker (Redis ZSET → backoff exponentiel)
+        let retry_worker = ChakraRetryWorker::new(
+            redis_cache.clone(),
+            chakra_dispatcher.clone(),
+            webhook_repo.clone(),
+            cancel_token.clone(),
+        );
+        tokio::spawn(async move {
+            retry_worker.start().await;
+        });
+        info!("🔄 Chakra Retry Worker démarré (Phase 34 — poll 10s, backoff exponentiel)");
+    }
+
+    // ── Phase 40 : Jutsu Consumer (Kafka → Docker CI/CD) ───────────
+    if config.jutsu_enabled {
+        if let Some(run_pipeline_uc) = run_pipeline.clone() {
+            match JutsuConsumer::new(
+                &config.kafka_brokers,
+                &config.jutsu_topic,
+                &config.jutsu_consumer_group,
+                cancel_token.clone(),
+            ) {
+                Ok(consumer) => {
+                    let workspace_root = std::path::PathBuf::from(&config.vcs_workspace_root);
+                    let worker_count = config.jutsu_worker_count;
+                    let vcs_for_jutsu: Arc<dyn domain::ports::vcs_engine::VcsEngine> = vcs.clone();
+
+                    tokio::spawn(consumer.run(
+                        run_pipeline_uc,
+                        parse_jutsu.clone(),
+                        vcs_for_jutsu,
+                        repo_repo.clone()
+                            as Arc<dyn domain::ports::repo_repository::RepoRepository>,
+                        workspace_root,
+                        worker_count,
+                    ));
+                    info!(
+                        "🥷 Jutsu Consumer démarré (Phase 40 — {} workers, topic: {})",
+                        config.jutsu_worker_count, config.jutsu_topic
+                    );
+                }
+                Err(e) => {
+                    warn!("⚠️ Jutsu Consumer non disponible: {e}");
+                }
+            }
+        } else {
+            warn!("⚠️ Jutsu Consumer non démarré — Docker non disponible");
+        }
+    }
+
+    // ── Phase 41 : Kage Bunshin Consumer (Kafka → Auto-Healing) ─────
+    if config.kage_bunshin_enabled {
+        if let (Some(llm), Some(runner)) = (sensei_llm_arc.clone(), container_runner.clone()) {
+            let kage_bunshin_uc = Arc::new(
+                application::use_cases::kage_bunshin::KageBunshinUseCase::new(
+                    llm,
+                    pipeline_repo.clone(),
+                    runner,
+                    std::time::Duration::from_secs(config.kage_bunshin_shadow_timeout_secs),
+                    config.kage_bunshin_confidence_threshold,
+                ),
+            );
+
+            match kage_bunshin_consumer::KageBunshinConsumer::new(
+                &config.kafka_brokers,
+                &config.kage_bunshin_topic,
+                &config.kage_bunshin_consumer_group,
+                cancel_token.clone(),
+            ) {
+                Ok(consumer) => {
+                    let workspace_root = std::path::PathBuf::from(&config.vcs_workspace_root);
+                    let worker_count = config.kage_bunshin_worker_count;
+                    let vcs_for_kb: Arc<dyn domain::ports::vcs_engine::VcsEngine> = vcs.clone();
+
+                    tokio::spawn(consumer.run(
+                        kage_bunshin_uc,
+                        pipeline_repo.clone(),
+                        vcs_for_kb,
+                        repo_repo.clone()
+                            as Arc<dyn domain::ports::repo_repository::RepoRepository>,
+                        mr_repo.clone(),
+                        actor_repo.clone(),
+                        workspace_root,
+                        worker_count,
+                    ));
+                    info!(
+                        "🥷 Kage Bunshin Consumer démarré (Phase 41 — {} workers, topic: {})",
+                        config.kage_bunshin_worker_count, config.kage_bunshin_topic
+                    );
+                }
+                Err(e) => {
+                    warn!("⚠️ Kage Bunshin Consumer non disponible: {e}");
+                }
+            }
+        } else {
+            warn!("⚠️ Kage Bunshin non démarré — Sensei LLM ou Docker non disponible");
+        }
+    } else {
+        info!("ℹ️ Kage Bunshin désactivé par configuration (KAGE_BUNSHIN_ENABLED=false)");
+    }
 
     // ── Serveur Tonic (gRPC / Ninpo) ───────────────
     let grpc_addr = SocketAddr::from(([0, 0, 0, 0], config.grpc_port));
@@ -411,19 +1108,22 @@ async fn main() -> anyhow::Result<()> {
 
     // ── Agent Tensai : Consumer Kafka (optionnel) ──
     let tensai_consumer_handle = if config.tensai_consumer_enabled {
-        match (&content_store, KafkaEventConsumer::new(
-            &config.kafka_brokers,
-            &config.kafka_topic,
-            &config.kafka_consumer_group,
-            cancel_token.clone(),
-        )) {
+        match (
+            &content_store,
+            KafkaEventConsumer::new(
+                &config.kafka_brokers,
+                &config.kafka_topic,
+                &config.kafka_consumer_group,
+                cancel_token.clone(),
+            ),
+        ) {
             (Some(cs), Ok(consumer)) => {
                 let analyzer = Arc::new(AnalyzeOperationUseCase::new(
                     cs.clone(),
                     Arc::new(MultiChunker::new()),
                     Some(chunk_repo.clone()), // Phase 6B — Persistence des chunks
                     embedding_service.clone(), // Phase 7A — Embedding vectoriel
-                    event_publisher.clone(), // Phase 7B — Re-publication analysis-complete
+                    event_publisher.clone(),  // Phase 7B — Re-publication analysis-complete
                 ));
 
                 info!(
@@ -476,12 +1176,16 @@ async fn main() -> anyhow::Result<()> {
 
     // ── Agent Oracle : Consumer Kafka analysis-complete (Phase 9) ──
     let oracle_consumer_handle = if config.oracle_consumer_enabled {
-        match (&content_store, &llm_service, OracleKafkaConsumer::new(
-            &config.kafka_brokers,
-            &config.kafka_analysis_topic,  // Écoute le topic analysis-complete
-            &config.oracle_consumer_group,
-            cancel_token.clone(),
-        )) {
+        match (
+            &content_store,
+            &llm_service,
+            OracleKafkaConsumer::new(
+                &config.kafka_brokers,
+                &config.kafka_analysis_topic, // Écoute le topic analysis-complete
+                &config.oracle_consumer_group,
+                cancel_token.clone(),
+            ),
+        ) {
             (Some(cs), Some(llm), Ok(consumer)) => {
                 let reviewer = Arc::new(ReviewOperationUseCase::new(
                     repo.clone(),
@@ -499,8 +1203,8 @@ async fn main() -> anyhow::Result<()> {
                 );
 
                 let handle = tokio::spawn(async move {
-                    let handler: infrastructure::events::oracle_consumer::OracleHandler =
-                        Box::new(move |operation_id| {
+                    let handler: infrastructure::events::oracle_consumer::OracleHandler = Box::new(
+                        move |operation_id| {
                             let reviewer = reviewer.clone();
                             async move {
                                 match reviewer.execute(operation_id).await {
@@ -529,7 +1233,8 @@ async fn main() -> anyhow::Result<()> {
                                 }
                             }
                             .boxed()
-                        });
+                        },
+                    );
 
                     if let Err(e) = consumer.start(handler).await {
                         error!("❌ Oracle Consumer terminé avec erreur: {e}");
@@ -678,7 +1383,10 @@ async fn run_backfill(
                 );
                 analyzed += 1;
             }
-            Ok(application::use_cases::analyze_operation::AnalysisOutcome::Skipped { reason, .. }) => {
+            Ok(application::use_cases::analyze_operation::AnalysisOutcome::Skipped {
+                reason,
+                ..
+            }) => {
                 info!(
                     progress = %progress,
                     operation_id = %operation.id,
@@ -699,13 +1407,7 @@ async fn run_backfill(
         }
     }
 
-    info!(
-        total,
-        analyzed,
-        skipped,
-        errors,
-        "\n🏁 BACKFILL TERMINÉ"
-    );
+    info!(total, analyzed, skipped, errors, "\n🏁 BACKFILL TERMINÉ");
 
     Ok(())
 }

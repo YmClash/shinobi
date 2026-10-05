@@ -16,6 +16,7 @@ redis = { workspace = true }
 
 # — Moteur VCS —
 jj-lib    = { workspace = true }
+gix       = { workspace = true }
 pollster  = { workspace = true }
 
 # — Synchronisation haute performance —
@@ -37,6 +38,7 @@ uuid        = { workspace = true }
 chrono      = { workspace = true }
 async-trait = { workspace = true }
 anyhow      = { workspace = true }
+thiserror   = { workspace = true }
 
 # — Événementiel (Nen / Kafka) —
 rdkafka = { workspace = true }
@@ -58,6 +60,26 @@ tokio-stream = { workspace = true }
 # — Text Diff (Phase 17 — Commits & Diff Colorisé) —
 similar = { workspace = true }
 
-[dev-dependencies]
+# — Auth (Phase 19A — Les Portes de Babylone) —
+argon2 = { workspace = true }
+jsonwebtoken = { workspace = true }
+rand = { workspace = true }
+sha2 = { workspace = true }
+hex = { workspace = true }
+
+# — Fédération (Phase 27 — ForgeFed) —
+rsa = { workspace = true }
+pkcs8 = { workspace = true }
+base64 = { workspace = true }
+url = { workspace = true }
+
+# — Phase 34 — Chakra (Webhooks HMAC-SHA256) —
+hmac = { workspace = true }
+
+# — Phase 40 — Jutsu Runner (Docker via bollard) —
+bollard = { workspace = true }
+serde_yaml = { workspace = true }
 tempfile = { workspace = true }
+
+[dev-dependencies]
 tokio = { workspace = true }

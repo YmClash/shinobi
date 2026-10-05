@@ -6,6 +6,7 @@
 //! 3. Persistence dans PostgreSQL
 //! 4. Initialisation du workspace VCS (Jujutsu)
 //! 5. Ajout du propriétaire comme collaborateur Owner
+//! 6. Publier l'activité fédérée Create { Repository } (Phase 27-ter)
 //!
 //! ## Erreurs
 //! - `NotFound` si le owner n'existe pas
@@ -14,12 +15,13 @@
 
 use std::sync::Arc;
 
-use tracing::{info, instrument};
+use tracing::{info, instrument, warn};
 use uuid::Uuid;
 
 use domain::entities::repository::{Repository, Visibility};
 use domain::errors::DomainError;
 use domain::ports::actor_repository::ActorRepository;
+use domain::ports::federation_service::FederationService;
 use domain::ports::repo_repository::RepoRepository;
 use domain::ports::vcs_engine::VcsEngine;
 
@@ -48,6 +50,10 @@ pub struct CreateRepositoryUseCase {
     actor_repo: Arc<dyn ActorRepository>,
     repo_repo: Arc<dyn RepoRepository>,
     vcs: Arc<dyn VcsEngine>,
+    /// Service de fédération (Phase 27-ter). `None` si fédération désactivée.
+    federation_service: Option<Arc<dyn FederationService>>,
+    /// Domaine fédéré de l'instance (ex: "forge.shinobi.dev").
+    federation_domain: String,
 }
 
 impl CreateRepositoryUseCase {
@@ -61,6 +67,25 @@ impl CreateRepositoryUseCase {
             actor_repo,
             repo_repo,
             vcs,
+            federation_service: None,
+            federation_domain: String::new(), // Injecté par with_federation() si fédération active
+        }
+    }
+
+    /// Construit le use case avec fédération activée (Phase 27-ter).
+    pub fn with_federation(
+        actor_repo: Arc<dyn ActorRepository>,
+        repo_repo: Arc<dyn RepoRepository>,
+        vcs: Arc<dyn VcsEngine>,
+        federation_service: Arc<dyn FederationService>,
+        federation_domain: String,
+    ) -> Self {
+        Self {
+            actor_repo,
+            repo_repo,
+            vcs,
+            federation_service: Some(federation_service),
+            federation_domain,
         }
     }
 
@@ -84,7 +109,7 @@ impl CreateRepositoryUseCase {
         validate_slug(&cmd.name)?;
 
         // Étape 2 : Vérifier que le owner existe
-        let _actor = self
+        let actor = self
             .actor_repo
             .find_by_id(&cmd.owner_id)
             .await?
@@ -108,8 +133,8 @@ impl CreateRepositoryUseCase {
             "✅ Dépôt créé dans PostgreSQL"
         );
 
-        // Étape 5 : Initialiser le workspace VCS
-        self.vcs.init_workspace(&repo.id).await?;
+        // Étape 5 : Initialiser le workspace VCS (Phase 21: owner_id/repo_id)
+        self.vcs.init_workspace(&cmd.owner_id, &repo.id).await?;
 
         info!(
             repo_id = %repo.id,
@@ -126,6 +151,41 @@ impl CreateRepositoryUseCase {
             owner_id = %cmd.owner_id,
             "✅ Collaborateur Owner ajouté — Dépôt opérationnel"
         );
+
+        // Étape 7 : Publier l'activité fédérée Create { Repository } (Phase 27-ter)
+        if let Some(federation) = &self.federation_service {
+            let activity = infrastructure::federation::activity_builder::create_repository_activity(
+                &self.federation_domain,
+                &actor.handle,
+                &repo,
+            );
+
+            let scheme = if self.federation_domain.contains("localhost") { "http" } else { "https" };
+            let repo_uri = format!("{}://{}/repos/{}/{}", scheme, self.federation_domain, actor.handle, repo.name);
+            let fed = federation.clone();
+            let owner_id = cmd.owner_id;
+
+            tokio::spawn(async move {
+                if let Err(e) = fed.publish_activity(
+                    &owner_id,
+                    "Create",
+                    "Repository",
+                    &repo_uri,
+                    activity,
+                ).await {
+                    warn!(
+                        error = %e,
+                        repo_uri = %repo_uri,
+                        "⚠️ Federation: Create Repository fanout failed (non-fatal)"
+                    );
+                }
+            });
+
+            info!(
+                repo_id = %repo.id,
+                "📤 Federation: Create Repository activity queued for fanout"
+            );
+        }
 
         Ok(repo)
     }
@@ -197,6 +257,42 @@ mod tests {
         async fn find_by_handle(&self, _handle: &str) -> Result<Option<Actor>, DomainError> {
             Ok(self.actor.clone())
         }
+        async fn find_by_email(&self, _email: &str) -> Result<Option<Actor>, DomainError> {
+            Ok(None)
+        }
+        async fn save_credential(&self, _actor_id: &Uuid, _cred_type: &str, _secret_hash: &str, _email: Option<&str>, _label: Option<&str>) -> Result<(), DomainError> {
+            Ok(())
+        }
+        async fn find_credential_hash(&self, _actor_id: &Uuid, _cred_type: &str) -> Result<Option<String>, DomainError> {
+            Ok(None)
+        }
+        async fn find_all_credential_hashes(&self, _actor_id: &Uuid, _cred_type: &str) -> Result<Vec<String>, DomainError> {
+            Ok(vec![])
+        }
+        async fn find_actor_by_credential_hash(&self, _hash: &str, _cred_type: &str) -> Result<Option<Actor>, DomainError> {
+            Ok(None)
+        }
+        async fn find_by_github_id(&self, _github_id: i64) -> Result<Option<Actor>, DomainError> {
+            Ok(None)
+        }
+        async fn update_github_id(&self, _actor_id: &Uuid, _github_id: i64) -> Result<(), DomainError> {
+            Ok(())
+        }
+        async fn update_github_token(&self, _actor_id: &Uuid, _token: &str) -> Result<(), DomainError> {
+            Ok(())
+        }
+        async fn get_github_token(&self, _actor_id: &Uuid) -> Result<Option<String>, DomainError> {
+            Ok(None)
+        }
+        async fn list_pats(&self, _actor_id: &Uuid) -> Result<Vec<domain::ports::actor_repository::PatInfo>, DomainError> {
+            Ok(vec![])
+        }
+        async fn list_service_accounts(&self, _parent_id: &Uuid) -> Result<Vec<Actor>, DomainError> {
+            Ok(vec![])
+        }
+        async fn delete_service_account(&self, _bot_id: &Uuid) -> Result<bool, DomainError> {
+            Ok(false)
+        }
     }
 
     // ── Mock RepoRepository ──────────────────────────
@@ -258,6 +354,36 @@ mod tests {
             self.collaborator_added.store(true, Ordering::SeqCst);
             Ok(())
         }
+        async fn is_collaborator(&self, _actor_id: &Uuid, _repo_id: &Uuid) -> Result<bool, DomainError> {
+            Ok(true)
+        }
+        async fn get_role(&self, _actor_id: &Uuid, _repo_id: &Uuid) -> Result<Option<String>, DomainError> {
+            Ok(Some("owner".to_string()))
+        }
+        async fn update_mirror_synced_at(&self, _repo_id: &Uuid) -> Result<(), DomainError> {
+            Ok(())
+        }
+        async fn soft_delete(&self, _repo_id: &Uuid) -> Result<bool, DomainError> {
+            Ok(true)
+        }
+        async fn restore(&self, _repo_id: &Uuid) -> Result<bool, DomainError> {
+            Ok(true)
+        }
+        async fn hard_delete(&self, _repo_id: &Uuid) -> Result<bool, DomainError> {
+            Ok(true)
+        }
+        async fn list_deleted_by_owner(&self, _owner_id: &Uuid) -> Result<Vec<Repository>, DomainError> {
+            Ok(vec![])
+        }
+        async fn list_expired_trash(&self, _retention_secs: i64) -> Result<Vec<Repository>, DomainError> {
+            Ok(vec![])
+        }
+        async fn count_forks(&self, _repo_id: &Uuid) -> Result<u64, DomainError> {
+            Ok(0)
+        }
+        async fn find_fork_by_owner(&self, _owner_id: &Uuid, _source_repo_id: &Uuid) -> Result<Option<Repository>, DomainError> {
+            Ok(None)
+        }
     }
 
     // ── Mock VcsEngine ──────────────────────────────
@@ -275,7 +401,7 @@ mod tests {
 
     #[async_trait]
     impl VcsEngine for MockVcsEngine {
-        async fn init_workspace(&self, _repo_id: &Uuid) -> Result<(), DomainError> {
+        async fn init_workspace(&self, _owner_id: &Uuid, _repo_id: &Uuid) -> Result<(), DomainError> {
             self.initialized.store(true, Ordering::SeqCst);
             Ok(())
         }
@@ -305,6 +431,27 @@ mod tests {
         }
         async fn diff_content(&self, _repo_id: &Uuid, _cid: &ContentId) -> Result<Vec<domain::ports::vcs_engine::FileDiff>, DomainError> {
             Ok(vec![])
+        }
+        async fn can_fast_forward(&self, _repo_id: &Uuid, _source: &str, _target: &str) -> Result<bool, DomainError> {
+            Ok(true)
+        }
+        async fn merge_fast_forward(&self, _repo_id: &Uuid, _source: &str, _target: &str) -> Result<ContentId, DomainError> {
+            Ok(ContentId::new("mock-merge-commit"))
+        }
+        async fn squash_merge(&self, _repo_id: &Uuid, _source: &str, _target: &str, _message: &str) -> Result<ContentId, DomainError> {
+            Ok(ContentId::new("mock-squash-commit"))
+        }
+        async fn diff_merge_base(&self, _repo_id: &Uuid, _source: &str, _target: &str) -> Result<Vec<domain::ports::vcs_engine::FileDiff>, DomainError> {
+            Ok(vec![])
+        }
+        async fn clone_workspace(&self, _source_owner_id: &Uuid, _source_repo_id: &Uuid, _target_owner_id: &Uuid, _target_repo_id: &Uuid) -> Result<(), DomainError> {
+            Ok(())
+        }
+        async fn fetch_fork_refs(&self, _repo_id: &Uuid, _fork_repo_id: &Uuid) -> Result<(), DomainError> {
+            Ok(())
+        }
+        async fn cleanup_fork_remote(&self, _repo_id: &Uuid, _fork_repo_id: &Uuid) -> Result<(), DomainError> {
+            Ok(())
         }
     }
 

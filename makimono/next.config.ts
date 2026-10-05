@@ -5,6 +5,9 @@ import type { NextConfig } from "next";
 const taijutsuUrl = process.env.TAIJUTSU_URL || "http://localhost:3000";
 
 const nextConfig: NextConfig = {
+  // Cloudflare Tunnel: autoriser le HMR depuis le domaine public
+  allowedDevOrigins: ["jjshinobi.dev"],
+
   // Mode standalone : produit un serveur autonome sans node_modules
   // Requis pour le Dockerfile multi-stage (Stage 3 runtime slim)
   output: "standalone",
@@ -17,10 +20,15 @@ const nextConfig: NextConfig = {
 
   // Proxy API requests to the Taijutsu backend
   // En dev: localhost:3000 | En Docker: http://taijutsu:3000 (réseau shinobi)
+  //
+  // IMPORTANT: /api/ipfs/* est géré par le route handler Next.js local
+  // (app/api/ipfs/[cid]/route.ts — proxy IPFS anti-CORS).
+  // On utilise un regex source pour exclure /api/ipfs du proxy Taijutsu.
   async rewrites() {
     return [
       {
-        source: "/api/:path*",
+        // Match /api/* SAUF /api/ipfs/*
+        source: "/api/:path((?!ipfs).*)",
         destination: `${taijutsuUrl}/api/:path*`,
       },
       {
@@ -30,6 +38,16 @@ const nextConfig: NextConfig = {
       {
         source: "/metrics",
         destination: `${taijutsuUrl}/metrics`,
+      },
+      // Phase 31 — Federation Dashboard: proxy ActivityPub & NodeInfo
+      // These endpoints live outside /api/ (Fediverse convention)
+      {
+        source: "/actors/:path*",
+        destination: `${taijutsuUrl}/actors/:path*`,
+      },
+      {
+        source: "/nodeinfo/:path*",
+        destination: `${taijutsuUrl}/nodeinfo/:path*`,
       },
     ];
   },

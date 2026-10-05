@@ -1,0 +1,295 @@
+/* ═══════════════════════════════════════════════════════════════
+   Phase 38B — NotificationBell (Redesign) 🔔
+   Styles for bell button, badge, mini-dropdown panel.
+   Positioning handled by @floating-ui (inline styles).
+   ═══════════════════════════════════════════════════════════════ */
+
+/* ── Bell Container ──────────────────────────────────────────── */
+
+.notif-bell-container {
+  position: relative;
+}
+
+.notif-bell-icon-wrap {
+  position: relative;
+  display: inline-flex;
+  align-items: center;
+  flex-shrink: 0;
+}
+
+.notif-bell-btn {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+  width: 100%;
+  padding: 0.4rem 0.5rem;
+  border: none;
+  border-radius: 0.375rem;
+  background: transparent;
+  color: var(--sidebar-foreground, hsl(var(--foreground)));
+  cursor: pointer;
+  font-size: 0.75rem;
+  transition: background 0.2s, transform 0.15s;
+}
+
+.notif-bell-btn:hover {
+  background: hsl(var(--sidebar-accent) / 0.5);
+}
+
+.notif-bell-btn:active {
+  transform: scale(0.97);
+}
+
+.notif-bell-btn.collapsed {
+  justify-content: center;
+  padding: 0.4rem;
+}
+
+.notif-bell-icon {
+  font-size: 1.1rem;
+  flex-shrink: 0;
+  filter: drop-shadow(0 0 3px hsl(var(--primary) / 0.3));
+  animation: bell-idle 3s ease-in-out infinite;
+}
+
+@keyframes bell-idle {
+  0%, 90%, 100% { transform: rotate(0deg); }
+  92% { transform: rotate(8deg); }
+  94% { transform: rotate(-8deg); }
+  96% { transform: rotate(6deg); }
+  98% { transform: rotate(-4deg); }
+}
+
+.notif-bell-label {
+  color: var(--sidebar-foreground, hsl(var(--foreground)));
+  font-size: 0.72rem;
+  opacity: 0.85;
+}
+
+/* ── Badge ───────────────────────────────────────────────────── */
+
+.notif-badge {
+  position: absolute;
+  top: -2px;
+  right: -2px;
+  min-width: 1.1rem;
+  height: 1.1rem;
+  padding: 0 0.25rem;
+  border-radius: 999px;
+  background: linear-gradient(135deg, hsl(0, 85%, 55%), hsl(0, 90%, 45%));
+  color: #fff;
+  font-size: 0.6rem;
+  font-weight: 700;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  line-height: 1;
+  box-shadow:
+    0 0 6px hsl(0, 85%, 55% / 0.5),
+    0 0 12px hsl(0, 85%, 55% / 0.2);
+  animation: badge-pulse 2s ease-in-out infinite;
+  z-index: 10;
+}
+
+@keyframes badge-pulse {
+  0%, 100% { box-shadow: 0 0 6px hsl(0, 85%, 55% / 0.5); }
+  50% { box-shadow: 0 0 12px hsl(0, 85%, 55% / 0.7), 0 0 20px hsl(0, 85%, 55% / 0.3); }
+}
+
+/* ── Invisible Backdrop ──────────────────────────────────────── */
+
+.notif-backdrop {
+  position: fixed;
+  inset: 0;
+  z-index: 9998;
+  /* Transparent — just captures clicks */
+}
+
+/* ── Dropdown Panel ──────────────────────────────────────────── */
+
+.notif-panel {
+  /* Position managed by @floating-ui via inline style */
+  width: 340px;
+  max-height: 420px;
+  border-radius: 0.75rem;
+  /* Vegapunk Tweak — Existence physique garantie */
+  background-color: hsl(var(--card));
+  border: 1px solid hsl(var(--border) / 0.5);
+  box-shadow:
+    0 10px 40px -10px rgba(0, 0, 0, 0.5),
+    0 4px 12px rgba(0, 0, 0, 0.25);
+  overflow: hidden;
+  z-index: 9999;
+  animation: notif-panel-in 0.2s ease-out;
+  display: flex;
+  flex-direction: column;
+}
+
+@keyframes notif-panel-in {
+  from {
+    opacity: 0;
+    transform: translateX(-8px) scale(0.97);
+  }
+  to {
+    opacity: 1;
+    transform: translateX(0) scale(1);
+  }
+}
+
+/* ── Panel Header ────────────────────────────────────────────── */
+
+.notif-panel-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 0.75rem 1rem;
+  border-bottom: 1px solid hsl(var(--border));
+  background-color: hsl(var(--muted));
+  flex-shrink: 0;
+}
+
+.notif-panel-title {
+  font-size: 0.8rem;
+  font-weight: 600;
+  color: hsl(var(--foreground));
+}
+
+.notif-mark-all-btn {
+  border: none;
+  background: transparent;
+  color: hsl(var(--primary));
+  font-size: 0.68rem;
+  font-weight: 500;
+  cursor: pointer;
+  padding: 0.2rem 0.5rem;
+  border-radius: 0.25rem;
+  transition: background 0.15s;
+}
+
+.notif-mark-all-btn:hover {
+  background: hsl(var(--primary) / 0.1);
+}
+
+/* ── Notification List ───────────────────────────────────────── */
+
+.notif-panel-list {
+  flex: 1;
+  overflow-y: auto;
+  scrollbar-width: thin;
+}
+
+.notif-empty {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 2rem 1rem;
+  color: hsl(var(--muted-foreground));
+  font-size: 0.75rem;
+  text-align: center;
+}
+
+/* ── Notification Item ───────────────────────────────────────── */
+
+.notif-item {
+  display: flex;
+  align-items: flex-start;
+  gap: 0.6rem;
+  padding: 0.65rem 1rem;
+  text-decoration: none;
+  color: hsl(var(--foreground));
+  border-bottom: 1px solid hsl(var(--border) / 0.5);
+  transition: background 0.15s;
+  position: relative;
+  cursor: pointer;
+}
+
+.notif-item:hover {
+  background: hsl(var(--accent) / 0.5);
+}
+
+.notif-item:last-child {
+  border-bottom: none;
+}
+
+.notif-item.unread {
+  background: hsl(var(--primary) / 0.04);
+}
+
+.notif-item.unread:hover {
+  background: hsl(var(--primary) / 0.08);
+}
+
+.notif-item-icon {
+  font-size: 1rem;
+  flex-shrink: 0;
+  margin-top: 0.1rem;
+}
+
+.notif-item-content {
+  display: flex;
+  flex-direction: column;
+  gap: 0.15rem;
+  min-width: 0;
+  flex: 1;
+}
+
+.notif-item-message {
+  font-size: 0.72rem;
+  line-height: 1.4;
+  color: hsl(var(--foreground));
+  overflow: hidden;
+  text-overflow: ellipsis;
+  display: -webkit-box;
+  -webkit-line-clamp: 2;
+  -webkit-box-orient: vertical;
+}
+
+.notif-item.unread .notif-item-message {
+  font-weight: 600;
+}
+
+.notif-item-meta {
+  font-size: 0.62rem;
+  color: hsl(var(--muted-foreground));
+  opacity: 0.8;
+}
+
+/* ── Unread dot indicator ────────────────────────────────────── */
+
+.notif-item-dot {
+  width: 7px;
+  height: 7px;
+  border-radius: 50%;
+  background: hsl(var(--primary));
+  flex-shrink: 0;
+  margin-top: 0.35rem;
+  box-shadow: 0 0 6px hsl(var(--primary) / 0.5);
+}
+
+/* ── Panel Footer ────────────────────────────────────────────── */
+
+.notif-panel-footer {
+  padding: 0;
+  border-top: 1px solid hsl(var(--border));
+  flex-shrink: 0;
+}
+
+.notif-view-all-btn {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 100%;
+  padding: 0.65rem 1rem;
+  border: none;
+  background: transparent;
+  color: hsl(var(--primary));
+  font-size: 0.72rem;
+  font-weight: 600;
+  cursor: pointer;
+  transition: background 0.15s;
+  letter-spacing: 0.01em;
+}
+
+.notif-view-all-btn:hover {
+  background: hsl(var(--primary) / 0.06);
+}
