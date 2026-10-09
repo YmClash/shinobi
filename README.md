@@ -16,54 +16,64 @@
   <a href="#-architecture"><img src="https://img.shields.io/badge/Architecture-Hexagonal-purple" alt="Architecture"></a>
   <a href="#-ai-triad"><img src="https://img.shields.io/badge/AI-Triad%20(3%20Agents)-green" alt="AI"></a>
   <a href="#-federation"><img src="https://img.shields.io/badge/Federation-ActivityPub%20%2F%20ForgeFed-pink" alt="Federation"></a>
+  <a href="#%EF%B8%8F-native-cicd--jutsu-runner--kage-bunshin"><img src="https://img.shields.io/badge/CI%2FCD-Jutsu%20%2B%20Kage%20Bunshin-red" alt="CI/CD"></a>
+  <a href="https://jjshinobi.dev"><img src="https://img.shields.io/badge/Live-jjshinobi.dev-black" alt="Live"></a>
 </p>
 
 ---
 
 ## 🥷 What is Shinobi?
 
-**Shinobi** is an experimental, next-generation **federated code forge** designed from the ground up for **human and AI collaboration**. It combines a Jujutsu-powered VCS, a complete project management suite (Merge Requests, Issues, Labels), a federated identity layer (ActivityPub/ForgeFed), and a triad of AI agents — all in a single, self-hostable platform.
+**Shinobi** is an experimental, next-generation **federated code forge** designed from the ground up for **human and AI collaboration**. It combines a Jujutsu-powered VCS, a complete project management suite (Merge Requests, Issues, Labels, Forks), a **native CI/CD runner with AI auto-healing**, a federated identity layer (ActivityPub/ForgeFed), and a triad of AI agents — all in a single, self-hostable platform.
 
 ### Key Capabilities
 
 | Feature | Description |
 |---------|-------------|
 | 🧬 **Semantic Code Memory** | Every commit is chunked via Tree-sitter and vectorized (Nomic 256d) for similarity search |
-| 🤖 **AI Triad** | Tensai (archiviste RAG), Oracle (code reviewer), Sensei (chat mentor SSE) |
-| 🌍 **ActivityPub Federation** | WebFinger + NodeInfo + Inbox/Outbox + HTTP Signatures — interop with the Fediverse |
-| ⚔️ **Merge Requests** | Full lifecycle: create, review, approve, merge (FF/Squash), diff viewer (Unified/Split) |
-| 🎯 **Issues & Labels** | Tickets with unified `#ID` counter (shared MR/Issue), colored labels M:N, timeline events |
-| 🔀 **Git Smart HTTP** | `git push/pull/clone` with PAT authentication and multi-tenant isolation |
-| 🥷 **ANBU CLI** | AI checkpoint capture — exfiltrates Antigravity/Copilot sessions to IPFS |
+| 🤖 **AI Triad** | Tensai (RAG archivist), Oracle (code reviewer), Sensei (chat mentor SSE + CI healer) |
+| ⚡ **Jutsu Runner** | Native CI/CD — `jutsu.yml` at repo root, Docker stages (bollard), DAG `requires`, triggered on `git push` |
+| ⚔️ **Kage Bunshin** | AI auto-healing CI/CD — Sensei diagnoses a failing stage, patches it, verifies in a shadow run, opens an MR |
+| 🪝 **Chakra Webhooks** | Kafka→HTTP delivery, HMAC-SHA256, CloudEvents headers, SSRF guard, exponential retry |
+| ⚔️ **Merge Requests** | Full lifecycle (create, review, approve, merge FF/Squash) + **cross-repo MR** from forks |
+| 🍴 **Forks** | Local forks + **federated forks** (`Offer(Fork)` → `Accept(Offer)`) |
+| 🎯 **Issues & Labels** | Unified `#ID` counter (shared MR/Issue), colored labels M:N, timeline, @mentions |
+| 🔔 **Notifications** | In-app bell, MR/Review/Merge/Mention events, grouped by date |
+| 🌍 **ActivityPub Federation** | WebFinger + NodeInfo + Inbox/Outbox + HTTP Signatures + federated `@user@domain` mentions |
+| 🔀 **Git Smart HTTP** | `git`/`jj` push/pull/clone with PAT authentication and multi-tenant isolation |
+| 🥷 **ANBU CLI** | AI checkpoint capture (Antigravity/Copilot → IPFS) + pipeline control from the terminal |
 | 🎨 **4 Themes** | Ninja (dark), Cyberpunk (neon), Glass (blur), Scroll (parchment) |
 
 ---
 
 ## 🏗️ Architecture
 
-Shinobi follows **Hexagonal Architecture** (Ports & Adapters) with strict dependency inversion across 5 Rust crates + a Next.js frontend.
+Shinobi follows **Hexagonal Architecture** (Ports & Adapters) with strict dependency inversion across 5 Rust crates, a Next.js frontend and a standalone CLI.
 
-> 📐 **Detailed Mermaid diagrams** are available in [`Docs/schema_V2/`](./Docs/schema_V2/) — covering global architecture, hexagonal layers, Docker infrastructure, database ERD, E2E pipeline, and federation flows.
+> 📐 **Detailed Mermaid diagrams** are available in [`Docs/schema_V3/`](./Docs/schema_V3/) — global architecture, hexagonal layers, Docker infrastructure, database ERD, E2E pipeline, federation flows and cross-repo MR lifecycle.
 
 ```
 ┌───────────────────────────────────────────────────────────────────────┐
 │               📜 MAKIMONO — Frontend [Next.js 16 + Bun]              │
-│  31 routes · 4 themes · SWR cache · Sensei chat · Diff viewer        │
+│  35 routes · 4 themes · SWR polling · Jutsus ⚡ dashboard · HealPanel │
 ├───────────────────────────────────────────────────────────────────────┤
 │               🧠 TAIJUTSU — Core Engine [Rust + Axum + Tokio]        │
 │                                                                       │
-│  🌐 REST (68 routes)  ⚡ gRPC (7 RPCs)  🔀 Git HTTP (3 endpoints)   │
+│  🌐 REST (84+ routes)  ⚡ gRPC (7 RPCs)  🔀 Git HTTP (3 endpoints)  │
 │  🔐 Auth (JWT + PAT + GitHub OAuth + RBAC · 3 layers)                │
-│  ⚙️  44 Use Cases · 💎 12 Domain Ports · ❌ 12 Error variants        │
-│  🔄 Workers: Purge Timer + Inbox Worker                               │
+│  ⚙️  50+ Use Cases · Service Accounts (bots IA first-class)          │
+│  🔄 7 Workers: Purge · Inbox · Chakra ×2 · Jutsu · Kage Bunshin · …  │
 ├────────────┬──────────┬─────────────┬──────────┬─────────────────────┤
 │ 💾 Fūinjutsu│ 🐝 Genjutsu│ 📨 Nen      │ 📁 VCS    │ 🤖 Triade IA       │
 │ PostgreSQL │ IPFS Kubo│ Kafka KRaft │ jj-lib   │ Tensai+Oracle+Sensei│
-│ + pgvector │ Merkle   │ 2 topics    │ GitBack  │ 2× Ollama + Nomic  │
-│ + Redis    │ DAG IPLD │             │ Multi-T  │ ONNX 256d          │
+│ + pgvector │ Merkle   │ VCS · Chakra│ 100%     │ 2× Ollama + Nomic  │
+│ + Redis    │ DAG IPLD │ Jutsu · KB  │ natif    │ ONNX 256d          │
 ├────────────┴──────────┴─────────────┴──────────┴─────────────────────┤
+│        ⚡ JUTSU RUNNER + ⚔️ KAGE BUNSHIN — Native CI/CD (bollard)     │
+│  jutsu.yml · Docker stages · log sanitization · shadow re-run · MR   │
+├───────────────────────────────────────────────────────────────────────┤
 │            🌍 FÉDÉRATION — ActivityPub / ForgeFed                     │
-│  WebFinger · NodeInfo 2.1 · RSA-2048 Signatures · Inbox/Outbox       │
+│  WebFinger · NodeInfo 2.1 · RSA-2048 Signatures · Signed Fetch       │
 │  FanoutService (Semaphore 10) · InboxWorker (FIFO, Poison Pill safe) │
 ├───────────────────────────────────────────────────────────────────────┤
 │            👁️ DŌJUTSU — Observabilité                                │
@@ -74,16 +84,19 @@ Shinobi follows **Hexagonal Architecture** (Ports & Adapters) with strict depend
 | Subsystem | Name | Technology | Purpose |
 |-----------|------|------------|---------|
 | Core Engine | **Taijutsu** | Rust, Axum, Tonic, Tokio | Backend — REST + gRPC + Git HTTP, auth, DI |
-| VCS Engine | — | jj-lib 0.41 (GitBackend) | Multi-tenant atomic commits, tree building, diff |
+| VCS Engine | — | jj-lib 0.41 (GitBackend) | Multi-tenant atomic commits, diff, fork remotes — zero `git` CLI |
 | AI & Semantics | **Tensai** | Tree-sitter, Nomic, pgvector | Chunking (5 langs), embedding (256d), RAG search |
 | AI Review | **Oracle** | Ollama, Granite3 2B | Automated code review with scoring |
-| AI Chat | **Sensei** | Ollama, SmolLM2 1.7B | Real-time SSE chat mentor |
-| Database | **Fūinjutsu** | PostgreSQL 17, pgvector, Redis 8 | 19 migrations, HNSW vector index, caching |
+| AI Chat & Healing | **Sensei** | Ollama, SmolLM2 1.7B | SSE chat mentor + Kage Bunshin diagnosis |
+| CI/CD | **Jutsu Runner** | bollard (Docker API), Kafka | `jutsu.yml` pipelines, commit statuses |
+| Auto-Healing | **Kage Bunshin** | Sensei + shadow workspace | Patch hunks → shadow re-run → auto MR |
+| Webhooks | **Chakra** | Kafka, Redis ZSET, HMAC | Outgoing event delivery with retry |
+| Database | **Fūinjutsu** | PostgreSQL 17, pgvector, Redis 8 | 30 migrations, HNSW vector index, caching |
 | Storage | **Genjutsu** | IPFS Kubo | Content-addressable Merkle DAG + AI artifacts |
-| Events | **Nen** | Apache Kafka (KRaft) | Async event propagation (2 topics) |
-| Federation | — | ActivityPub, ForgeFed | WebFinger, Inbox/Outbox, HTTP Signatures |
-| CLI | **ANBU** | Rust standalone binary | AI checkpoint capture & sync |
-| Frontend | **Makimono** | Next.js 16, Bun 1.3.8 | 31 routes, 4 themes, SWR, Shiki |
+| Events | **Nen** | Apache Kafka (KRaft) | Async event propagation (VCS, webhooks, pipelines, healing) |
+| Federation | — | ActivityPub, ForgeFed | WebFinger, Inbox/Outbox, HTTP Signatures, federated forks |
+| CLI | **ANBU** | Rust standalone binary | AI checkpoint capture & sync + `anbu jutsu` |
+| Frontend | **Makimono** | Next.js 16, Bun 1.3.8 | 35 routes, 4 themes, SWR, Shiki |
 | Monitoring | **Dōjutsu** | Prometheus + Grafana | 17 panels, 4 dashboard sections |
 
 ### Workspace Structure
@@ -92,44 +105,61 @@ Shinobi follows **Hexagonal Architecture** (Ports & Adapters) with strict depend
 shinobi/
 ├── README.md
 ├── LICENSE                             # MIT
-├── CODEX_BOARD.md                      # Architecture journal Vol. I
-├── CODEX_BOARD_1.md                    # Architecture journal Vol. II (Phases 6B→33)
+├── CODEX_BOARD.md                      # Architecture journal Vol. I   (Phases 1 → 12A)
+├── CODEX_BOARD_1.md                    # Architecture journal Vol. II  (Phases 6B → 38B)
+├── CODEX_BOARD_2.md                    # Architecture journal Vol. III (Phases 37E → 41-C)
+├── docker-compose.prod.yml             # Prod (11 services, Cloudflare Tunnel)
 ├── Docs/
-│   ├── schema_V1/                      # Original Mermaid diagrams (Phase 8 era)
-│   └── schema_V2/                      # Current diagrams (Post-Phase 33)
-│       ├── architecture-globale.mmd
-│       ├── architecture-hexagonale.mmd
-│       ├── infrastructure-docker.mmd
-│       ├── database-schema.mmd
-│       ├── pipeline-e2e.mmd
-│       └── federation-activitypub.mmd
+│   ├── jutsu-runner.md                 # Native CI/CD reference
+│   ├── kage-bunshin.md                 # Auto-healing reference
+│   ├── kage-bunshin-walkthrough.md     # Implementation walkthrough (Phase 41)
+│   ├── ci-cd-integration.md            # External CI (Drone / Woodpecker / Jenkins)
+│   ├── test-e2e-scenario.md            # End-to-end user test scenario
+│   ├── FORGE_COMPARISON.md             # Shinobi vs other forges
+│   ├── examples/jutsu.yml              # Example pipeline
+│   └── schema_V1/ · schema_V2/ · schema_V3/   # Mermaid diagrams
+│
+├── anbu/                               # ANBU CLI (standalone Rust crate)
+├── dojutsu/                            # Prometheus + Grafana provisioning
 │
 ├── makimono/                           # Frontend (Next.js 16 + Bun)
 │   └── src/
-│       ├── app/                        # 31 routes (App Router)
-│       ├── components/                 # UI components (explorer, issue, MR, etc.)
-│       ├── hooks/                      # SWR hooks (use-api, use-mr, use-issues, etc.)
+│       ├── app/                        # 35 routes (App Router)
+│       ├── components/                 # explorer, issue, MR, pipeline (StageRow, LogDrawer, HealPanel)…
+│       ├── hooks/                      # SWR hooks (use-api, use-mr, use-issues, use-pipelines…)
 │       ├── lib/                        # API clients, auth, cache, shiki
-│       └── styles/                     # CSS modules (issues.css, federation.css, mr.css)
+│       └── styles/                     # CSS modules (issues, federation, mr, pipeline…)
 │
 └── taijutsu/                           # Cargo Workspace (5 crates + binary)
     ├── Cargo.toml                      # Workspace root
-    ├── docker-compose.yml              # Dev (PG + Redis + Kafka + IPFS)
-    ├── docker-compose.prod.yml         # Prod (11 services Zero Trust)
-    ├── .env / .env.example             # Configuration (~55 vars)
+    ├── docker-compose.yml              # Dev (PG + Redis + Kafka + IPFS + Ollama)
+    ├── .env / .env.example             # Configuration
     ├── proto/shinobi.proto             # gRPC schema (7 RPCs)
-    ├── migrations/                     # 19 SQL migrations
+    ├── migrations/                     # 30 SQL migrations (001 → 030)
     ├── src/
     │   ├── main.rs                     # Bootstrap + DI + Workers
-    │   └── config.rs                   # Env vars loader
+    │   ├── config.rs                   # Env vars loader
+    │   ├── jutsu_consumer.rs           # Pipeline Kafka consumer
+    │   └── kage_bunshin_consumer.rs    # Auto-healing Kafka consumer
     └── crates/
-        ├── domain/                     # Pure domain (0 tech deps)
-        │   └── entities, ports, errors
-        ├── application/                # 44 use cases (orchestration)
-        ├── infrastructure/             # Adapters (PG, Kafka, IPFS, jj, Ollama, Federation)
+        ├── domain/                     # Pure domain (0 tech deps) — entities, ports, errors
+        ├── application/                # 50+ use cases (orchestration)
+        ├── infrastructure/             # Adapters (PG, Kafka, IPFS, jj, Ollama, Docker, Federation)
         ├── presentation/               # REST + gRPC + Git HTTP + SharedState
         └── tensai/                     # Semantic chunker (Tree-sitter AST, 5 langs)
 ```
+
+---
+
+## 🌐 Live Instance
+
+| Service | Public URL | Local dev |
+|---------|-----------|-----------|
+| **Makimono** (UI) | [`https://jjshinobi.dev`](https://jjshinobi.dev) | `http://localhost:3001` |
+| **Taijutsu** (API + Git) | `https://api.jjshinobi.dev` | `http://localhost:3000` |
+| **Git clone** | `https://api.jjshinobi.dev/{owner}/{repo}.git` | `http://localhost:3000/{owner}/{repo}.git` |
+
+> Exposed through a **Cloudflare Tunnel**. The clone URL shown in the UI is configurable with `NEXT_PUBLIC_GIT_URL`.
 
 ---
 
@@ -144,6 +174,7 @@ shinobi/
 | **Bun** | 1.3+ | [bun.sh](https://bun.sh/) |
 | **Protoc** | 35+ | `winget install Google.Protobuf` |
 | **CMake** | 3.28+ | `winget install Kitware.CMake` |
+| **Jujutsu** *(optional)* | latest | [jj-vcs.github.io](https://jj-vcs.github.io/jj/) |
 
 ### 1. Clone & Setup
 
@@ -160,7 +191,9 @@ docker compose up -d
 docker compose ps   # Verify all services are healthy
 ```
 
-This starts **PostgreSQL** (pgvector, :5432), **Redis** (:6379), **Kafka** (KRaft, :9092), and **IPFS Kubo** (:5001).
+This starts **PostgreSQL** (pgvector, :5432), **Redis** (:6379), **Kafka** (KRaft, :9092), **IPFS Kubo** (:5001) and the **Ollama** instances.
+
+> The Jutsu Runner talks to the **local Docker daemon** to execute pipeline stages — Docker must stay running.
 
 ### 3. Run Migrations
 
@@ -194,25 +227,89 @@ curl http://localhost:3000/health
 curl http://localhost:3000/api/v1/status
 ```
 
+### 7. Install ANBU (optional)
+
+```bash
+cd ../anbu
+cargo install --path .
+anbu setup     # interactive server + PAT configuration
+```
+
+> 🧪 Want to try everything as a real user? Follow [`Docs/test-e2e-scenario.md`](./Docs/test-e2e-scenario.md) (6 acts, 35 checkpoints).
+
+---
+
+## ⚡️ Native CI/CD — Jutsu Runner + Kage Bunshin
+
+Drop a `jutsu.yml` at the root of any repository — every `git push` triggers a pipeline executed in Docker containers on the Shinobi host.
+
+```yaml
+name: "Rust Pipeline with Auto-Heal"
+on: [push]                 # push | mr_created | tag
+
+stages:
+  Build:
+    image: "rust:1.96-slim"
+    kage_bunshin: true     # ⚔️ let Sensei try to fix this stage if it fails
+    jutsus:
+      - "cargo build --release"
+
+  Test:
+    image: "rust:1.96-slim"
+    requires: [Build]      # DAG dependencies (cycle-checked)
+    kage_bunshin: true
+    jutsus:
+      - "cargo test --workspace"
+```
+
+### ⚔️ Kage Bunshin (影分身) — the auto-healing flow
+
+```
+Stage ❌ failure (kage_bunshin: true)
+  → stage = Healing, pipeline stays "running"
+  → Kafka: shinobi.jutsu.kage-bunshin → KageBunshinConsumer
+  → Sensei reads logs + targeted files → {diagnosis, hunks[], confidence}
+  → confidence ≥ 0.5 → apply hunks in an ephemeral shadow workspace
+  → shadow Docker re-run
+      ✅ exit 0  → Healed → auto MR by shinobi-sensei-bot
+      ❌ exit ≠0 → Failed (original code untouched)
+  → Makimono: ⚔️ badge + HealPanel (diagnosis, colored diff, confidence, MR link)
+```
+
+### Run pipelines from the terminal (ANBU)
+
+```bash
+anbu jutsu trigger --ref main        # remote trigger on the Shinobi server
+anbu jutsu logs --last -f            # follow logs live (zero-flicker TUI)
+anbu jutsu run --local               # run jutsu.yml locally via your Docker
+anbu jutsu run --local --dry-run     # validate the YAML only
+```
+
+> 📚 Full references: [`Docs/jutsu-runner.md`](./Docs/jutsu-runner.md) · [`Docs/kage-bunshin.md`](./Docs/kage-bunshin.md) · [`Docs/ci-cd-integration.md`](./Docs/ci-cd-integration.md) (external CI via Commit Status API)
+
 ---
 
 ## 📡 API Overview
 
-### REST API — 68 Routes (Port 3000)
+### REST API — 84+ Routes (Port 3000)
 
 | Category | Routes | Auth |
 |----------|--------|------|
 | **System** | `GET /health`, `/api/v1/status`, `/metrics` | Public |
 | **Auth** | register, login, GitHub OAuth, PAT CRUD | Mixed |
-| **Repos** | CRUD, visibility, delete, clone URL | Semi-Public / Private |
+| **Repos** | CRUD, visibility, soft delete, clone URL, fork | Semi-Public / Private |
 | **Git HTTP** | info/refs, receive-pack, upload-pack | PAT (Basic Auth) |
 | **Operations** | create, list, get, diff, diff-content | Semi-Public / Private |
 | **Chunks** | search by name, semantic RAG search | Semi-Public |
-| **Merge Requests** | create, list, get, review, merge, close, diff | Semi-Public / Private |
+| **Merge Requests** | create (incl. cross-repo), list, get, review, merge, close, diff | Semi-Public / Private |
 | **Issues** | create, list, get, update, close, reopen, comment | Semi-Public / Private |
 | **Labels** | create, list, delete, assign, unassign | Semi-Public / Private |
+| **Pipelines** | list, detail, stages, trigger, **heals** | Semi-Public / Private |
+| **Commit Statuses** | report / list external CI statuses | PAT |
+| **Webhooks** | CRUD, deliveries, ping, regenerate secret | Private (owner) |
+| **Notifications** | list, unread count, mark read | Private |
 | **Sensei** | chat (SSE), models, warmup | Private |
-| **ANBU** | checkpoint upload, list | Private |
+| **ANBU** | checkpoint upload, list, IPFS proxy | Private |
 | **Federation** | WebFinger, NodeInfo, Actor, Inbox, Outbox, Followers | Mixed |
 
 ### gRPC — Ninpo Protocol (Port 50051)
@@ -235,10 +332,10 @@ Shinobi employs three specialized AI agents working in concert:
 ```
 ┌──────────────┐   ┌──────────────┐   ┌──────────────┐
 │   TENSAI     │   │   ORACLE     │   │   SENSEI     │
-│  Archiviste  │   │  Reviewer    │   │   Mentor     │
+│  Archiviste  │   │  Reviewer    │   │ Mentor+Healer│
 │ Nomic + RAG  │   │ Granite3 2B  │   │ SmolLM2 1.7B │
-│  (pgvector)  │   │ Ollama :11435│   │ Ollama :11436│
-│  Async Kafka │   │  Async Kafka │   │  Sync SSE    │
+│  (pgvector)  │   │   Ollama     │   │   Ollama     │
+│  Async Kafka │   │  Async Kafka │   │ SSE + Kafka  │
 └──────────────┘   └──────────────┘   └──────────────┘
 ```
 
@@ -246,7 +343,9 @@ Shinobi employs three specialized AI agents working in concert:
 |-------|-------|------|-----------|
 | **Tensai** | Nomic-Embed-Text-v1.5 (ONNX, 256d) | Semantic chunking + vectorization + RAG | Kafka consumer |
 | **Oracle** | Granite3 Dense 2B (Ollama) | Automated code review, score 0–100 | Kafka consumer |
-| **Sensei** | SmolLM2 1.7B (Ollama) | Real-time chat mentor with RAG context | SSE streaming |
+| **Sensei** | SmolLM2 1.7B (Ollama) | Chat mentor with RAG context + Kage Bunshin CI diagnosis | SSE streaming + Kafka consumer |
+
+AI work is traceable: **ANBU** checkpoints are stored in IPFS and linked to commits via an `ai-checkpoint:{CID}` trailer, and Sensei's fixes are authored by a dedicated **service account** (`shinobi-sensei-bot`).
 
 ### Semantic Search (RAG)
 
@@ -265,23 +364,36 @@ Shinobi implements **ActivityPub** and **ForgeFed** for decentralized code forge
 - **WebFinger** — `/.well-known/webfinger?resource=acct:handle@domain`
 - **NodeInfo 2.1** — Software identification (`shinobi`)
 - **Actor Profiles** — RSA-2048 public keys for HTTP Signature verification
-- **Inbox** — Receives Follow, Create, Push, Update, Delete, Announce, Undo activities
+- **Signed Fetch** — compatible with Mastodon `AUTHORIZED_FETCH`
+- **Inbox** — Receives Follow, Create, Push, Update, Delete, Announce, Undo, Offer activities
 - **Outbox** — Auto-publishes Create/Push activities on git push
+- **Federated Forks** — `Offer(Fork)` → `Accept(Offer)` with aggregated fork count
+- **Federated Mentions** — `@handle@domain` → WebFinger → signed `Create { Note { tag: Mention } }`
 - **FanoutService** — Signed delivery to followers (Semaphore 10, non-blocking)
 - **InboxWorker** — Background tokio loop (poll 30s, batch 20, Poison Pill safe, FIFO)
 
-> 📐 See [`Docs/schema_V2/federation-activitypub.mmd`](./Docs/schema_V2/federation-activitypub.mmd) for the complete sequence diagram.
+> 📐 See [`Docs/schema_V3/federation-activitypub.mmd`](./Docs/schema_V3/federation-activitypub.mmd) for the complete sequence diagram.
 
 ---
 
 ## 🧪 Testing
 
 ```bash
-cargo test --workspace          # Unit tests (198+ passing)
-cargo test --workspace -- --ignored   # Integration tests (Docker required)
+# Taijutsu
+cd taijutsu
+cargo test --workspace                 # Unit tests
+cargo test --workspace -- --ignored    # Integration tests (Docker required)
+
+# ANBU
+cd ../anbu
+cargo test
+
+# Makimono
+cd ../makimono
+npx tsc --noEmit
 ```
 
-**Current coverage:** 198+ tests (domain 51 + application 66 + infra 58 + presentation 12 + tensai 11)
+**Current status:** 272+ tests passing, 0 failed (Taijutsu 261+ · ANBU 37) · TypeScript 0 errors.
 
 ---
 
@@ -302,11 +414,18 @@ All configuration via environment variables (loaded from `.env`). Key variables:
 | `IPFS_API_URL` | IPFS Kubo RPC endpoint |
 | `ORACLE_OLLAMA_URL` | Oracle Ollama instance URL |
 | `SENSEI_OLLAMA_URL` | Sensei Ollama instance URL |
-| `FEDERATION_DOMAIN` | Public domain for ActivityPub (e.g. forge.example.com) |
+| `FEDERATION_DOMAIN` | Public domain for ActivityPub (e.g. `api.jjshinobi.dev`) |
 | `FEDERATION_ENABLED` | Enable/disable federation features |
 | `EMBEDDING_ENABLED` | Enable/disable RAG embeddings |
+| `CHAKRA_ENABLED` / `CHAKRA_TOPIC` | Webhooks pipeline (default topic: `shinobi.events.webhooks`) |
+| `JUTSU_TOPIC` | Pipeline events topic (default: `shinobi.jutsu.pipeline`) |
+| `KAGE_BUNSHIN_ENABLED` | Enable AI auto-healing globally (default: `true`) |
+| `KAGE_BUNSHIN_TOPIC` | Healing topic (default: `shinobi.jutsu.kage-bunshin`) |
+| `KAGE_BUNSHIN_CONFIDENCE_THRESHOLD` | Minimum Sensei confidence to apply a patch (default: `0.5`) |
+| `KAGE_BUNSHIN_SHADOW_TIMEOUT_SECS` | Shadow re-run timeout (default: `120`) |
+| `NEXT_PUBLIC_GIT_URL` *(Makimono)* | Base URL shown for clone commands (default: `https://api.jjshinobi.dev`) |
 
-> See `.env.example` for the complete list (~55 variables).
+> See `taijutsu/.env.example` for the complete list.
 
 ---
 
@@ -319,17 +438,20 @@ All configuration via environment variables (loaded from `.env`). Key variables:
 | REST | Axum 0.8 |
 | gRPC | Tonic 0.14 + Protobuf |
 | Database | PostgreSQL 17 + pgvector + Redis 8 |
-| VCS Engine | jj-lib 0.41.0 (GitBackend, multi-tenant) |
+| VCS Engine | jj-lib 0.41.0 (GitBackend, multi-tenant, native `jj_lib::git`) |
 | Event Bus | Apache Kafka (KRaft, rdkafka) |
 | Distributed Storage | IPFS Kubo (Merkle DAG IPLD) |
+| CI/CD Execution | bollard (Docker Engine API) |
 | AI Embeddings | fastembed (Nomic-Embed-Text-v1.5, ONNX 256d) |
 | AI LLMs | Ollama (Granite3 2B + SmolLM2 1.7B) |
 | Semantic Parsing | Tree-sitter 0.25 (Rust, TS, TSX, CSS, Python) |
 | Frontend | Next.js 16 (Turbopack) + Bun 1.3.8 |
 | Code Highlighting | Shiki 4.2 |
-| Auth | JWT + PAT + GitHub OAuth + RBAC |
+| Auth | JWT + PAT + GitHub OAuth + RBAC + Service Accounts |
 | Federation | ActivityPub + ForgeFed + HTTP Signatures (Draft-Cavage-12) |
+| Webhooks | HMAC-SHA256 + CloudEvents 1.0 |
 | Observability | tracing + Prometheus + Grafana (17 panels) |
+| Exposure | Cloudflare Tunnel (`jjshinobi.dev`) |
 | Error Handling | thiserror (domain) + anyhow (binary) |
 
 ---
@@ -339,14 +461,19 @@ All configuration via environment variables (loaded from `.env`). Key variables:
 | Decision | Rationale |
 |----------|-----------|
 | **Hexagonal Architecture** | Domain stays pure — no framework deps. Adapters are swappable. |
-| **jj-lib (not Git directly)** | First-class merge conflict support, anonymous branching, operation log |
-| **Unified ticket counter** | Issues and MRs share `next_ticket_number` — `#ID` is unambiguous per repo (GitHub/GitLab convention) |
+| **jj-lib (not Git directly)** | First-class conflicts, anonymous branching, operation log — zero `git` subprocess in the VCS engine |
+| **Unified ticket counter** | Issues and MRs share `next_ticket_number` — `#ID` is unambiguous per repo |
+| **Native CI/CD** | `jutsu.yml` + Docker via bollard — no external runner required (external CI still supported via Commit Status API) |
+| **Dedicated healing topic** | Kage Bunshin runs on its own Kafka topic/consumer so slow LLM calls never block regular pipelines |
+| **Shadow workspace verification** | An AI patch is only proposed (as an MR) after it passes a real re-run — never pushed directly |
+| **Bots as first-class actors** | Sensei's fixes are authored by a service account — full provenance & RBAC |
 | **Nomic over MiniLM** | MTEB ~59.4 vs ~56.3, 8192 token context (16×), Matryoshka support |
 | **ONNX local (not API)** | Zero network latency, zero cost, offline-capable |
 | **pgvector HNSW** | No VACUUM required, consistent quality, O(log n) |
-| **Dual Ollama instances** | Oracle (review) and Sensei (chat) run on separate ports — zero contention |
+| **Dual Ollama instances** | Oracle (review) and Sensei (chat/heal) run separately — zero contention |
 | **3-layer auth** | Public / Semi-Public / Private — Bouclier Global enforced at router level |
 | **ActivityPub federation** | Decentralized, no vendor lock-in, interop with Mastodon/Forgejo |
+| **Fire-and-forget events** | Webhooks/notifications never block the business operation (graceful degradation) |
 | **Poison Pill protection** | Inbox Worker always marks activities as processed, even on error — prevents infinite loops |
 | **Manual mocks (no framework)** | Zero compile-time overhead, total control, zero macro magic |
 
@@ -362,14 +489,23 @@ All configuration via environment variables (loaded from `.env`). Key variables:
 - [x] **Phase 26** — Merge Requests (full lifecycle + Optimistic UI)
 - [x] **Phases 27–27quater** — ActivityPub/ForgeFed federation (WebFinger → Inbox → Outbox → Fanout)
 - [x] **Phases 28–28F** — ANBU CLI (AI checkpoint capture, Copilot collector, IPFS artifacts)
-- [x] **Phases 29–30** — AI Provenance gutter, UnifiedDiffViewer V2
-- [x] **Phases 31–32** — Federation Dashboard (Makimono) + Inbox Worker (tokio)
+- [x] **Phases 29–32** — AI Provenance gutter, UnifiedDiffViewer V2, Federation Dashboard, Inbox Worker
 - [x] **Phase 33** — Issues/Tickets (Le Parchemin des Doléances)
-- [ ] **Phase 34** — Webhooks (CI/CD integrations)
+- [x] **Phase 34 (V1→V4)** — Chakra Webhooks (Kafka→HTTP, auto-emission, ANBU audit, dashboard)
+- [x] **Phases 35–36** — Tech-debt liquidation + Sync Hook surgery
+- [x] **Phase 37 (A→F)** — Public profile, forks, @mentions, federated forks, cross-repo MR, federated mentions
+- [x] **Phase 38** — Notifications (in-app bell + redesign)
+- [x] **Phase 39** — External CI bridge (Commit Status API + Drone/Woodpecker/Jenkins guides)
+- [x] **Phase 40 / 40-C / 40-E** — Jutsu Runner native CI/CD (backend + Makimono dashboard + `anbu jutsu`)
+- [x] **Phase 41 / 41-B / 41-C** — Kage Bunshin auto-healing (backend + HealPanel UI + docs & `jjshinobi.dev`)
+- [ ] **E2E validation** — Run [`Docs/test-e2e-scenario.md`](./Docs/test-e2e-scenario.md) on a fresh repository
+- [ ] **Git over `jjshinobi.dev`** — Proxy Git Smart HTTP through the UI domain (or `git.jjshinobi.dev`)
+- [ ] **Phase 42** — Swarm Mode 🐝 (Architect Tensai + Auditor Oracle on MRs, optional Ronin agent)
+- [ ] **Phase 37F-Fix3** — Mastodon silent drop on federated mention notifications
 - [ ] **Phase 28G** — Service Worker IPFS (decentralized browser resolution)
-- [ ] **Phase 40** — AST-Level AI Provenance (Tree-sitter line-exact)
+- [ ] **Production hardening** — TLS reverse proxy, rate limiting
 
-> 📜 Full architectural journal: [`CODEX_BOARD.md`](./CODEX_BOARD.md) (Vol. I) + [`CODEX_BOARD_1.md`](./CODEX_BOARD_1.md) (Vol. II — 3000+ lines)
+> 📜 Full architectural journal: [`CODEX_BOARD.md`](./CODEX_BOARD.md) (Vol. I) · [`CODEX_BOARD_1.md`](./CODEX_BOARD_1.md) (Vol. II) · [`CODEX_BOARD_2.md`](./CODEX_BOARD_2.md) (Vol. III)
 
 ---
 
