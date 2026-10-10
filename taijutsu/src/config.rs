@@ -159,6 +159,73 @@ pub struct Config {
 
     /// Seuil de confiance minimum pour appliquer un patch. Défaut: 0.5.
     pub kage_bunshin_confidence_threshold: f32,
+
+    // ── Phase 42-pre — Hub d'Agents (Mercenary Switch) 🧠🔌 ─────────
+    /// Clé API Gemini (optionnelle). Si présente, `GEMINI_MODEL` est obligatoire.
+    pub gemini_api_key: Option<Secret>,
+    /// Modèle Gemini (aucun défaut codé en dur).
+    pub gemini_model: Option<String>,
+    /// URL racine de l'API Gemini.
+    pub gemini_base_url: String,
+
+    /// Clé API OpenAI (optionnelle). Si présente, `OPENAI_MODEL` est obligatoire.
+    pub openai_api_key: Option<Secret>,
+    /// Modèle OpenAI.
+    pub openai_model: Option<String>,
+    /// URL racine OpenAI (incluant `/v1`).
+    pub openai_base_url: String,
+
+    /// Clé API DeepSeek (optionnelle).
+    pub deepseek_api_key: Option<Secret>,
+    /// Modèle DeepSeek. Défaut: "deepseek-chat".
+    pub deepseek_model: String,
+    /// URL racine DeepSeek (incluant `/v1`).
+    pub deepseek_base_url: String,
+
+    /// URL vLLM / LM Studio (incluant `/v1`). Si présente, `VLLM_MODEL` est obligatoire.
+    pub vllm_base_url: Option<String>,
+    /// Modèle servi par vLLM / LM Studio.
+    pub vllm_model: Option<String>,
+    /// Clé vLLM (optionnelle — `Bearer not-needed` sinon).
+    pub vllm_api_key: Option<Secret>,
+
+    /// Route LLM de l'Oracle. Défaut: "ollama".
+    pub llm_route_oracle: String,
+    /// Route LLM de Sensei. Défaut: "ollama".
+    pub llm_route_sensei: String,
+    /// Route LLM du Kage Bunshin. Défaut: "auto".
+    pub llm_route_kage_bunshin: String,
+    /// Repli automatique distant → Ollama. Défaut: true.
+    pub llm_fallback_enabled: bool,
+    /// Timeout des API LLM distantes (secondes). Défaut: 120.
+    pub llm_external_timeout_secs: u64,
+}
+
+// ── Secret — valeur sensible jamais affichée ─────────────────────────────────
+
+/// Chaîne sensible (clé d'API). `Debug`/`Display` affichent `***`.
+///
+/// `Config` dérive `Debug` : sans ce wrapper, un `{:?}` ferait fuiter les clés.
+#[derive(Clone, PartialEq, Eq)]
+pub struct Secret(String);
+
+impl Secret {
+    /// Accès explicite à la valeur (à n'utiliser que pour l'appel HTTP).
+    pub fn expose(&self) -> &str {
+        &self.0
+    }
+}
+
+impl std::fmt::Debug for Secret {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str("Secret(***)")
+    }
+}
+
+impl std::fmt::Display for Secret {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str("***")
+    }
 }
 
 impl Config {
@@ -228,7 +295,29 @@ impl Config {
             kage_bunshin_worker_count: env_parse("KAGE_BUNSHIN_WORKER_COUNT", 1),
             kage_bunshin_shadow_timeout_secs: env_parse("KAGE_BUNSHIN_SHADOW_TIMEOUT_SECS", 120),
             kage_bunshin_confidence_threshold: env_parse("KAGE_BUNSHIN_CONFIDENCE_THRESHOLD", 0.5),
+            // ── Phase 42-pre — Hub d'Agents 🧠🔌 ────────────────────
+            gemini_api_key: env_opt("GEMINI_API_KEY").map(Secret),
+            gemini_model: env_opt("GEMINI_MODEL"),
+            gemini_base_url: env_or("GEMINI_BASE_URL", "https://generativelanguage.googleapis.com"),
+            openai_api_key: env_opt("OPENAI_API_KEY").map(Secret),
+            openai_model: env_opt("OPENAI_MODEL"),
+            openai_base_url: env_or("OPENAI_BASE_URL", "https://api.openai.com/v1"),
+            deepseek_api_key: env_opt("DEEPSEEK_API_KEY").map(Secret),
+            deepseek_model: env_or("DEEPSEEK_MODEL", "deepseek-chat"),
+            deepseek_base_url: env_or("DEEPSEEK_BASE_URL", "https://api.deepseek.com/v1"),
+            vllm_base_url: env_opt("VLLM_BASE_URL"),
+            vllm_model: env_opt("VLLM_MODEL"),
+            vllm_api_key: env_opt("VLLM_API_KEY").map(Secret),
+            llm_route_oracle: env_or("LLM_ROUTE_ORACLE", "ollama"),
+            llm_route_sensei: env_or("LLM_ROUTE_SENSEI", "ollama"),
+            llm_route_kage_bunshin: env_or("LLM_ROUTE_KAGE_BUNSHIN", "auto"),
+            llm_fallback_enabled: env_bool("LLM_FALLBACK_ENABLED", true),
+            llm_external_timeout_secs: env_parse("LLM_EXTERNAL_TIMEOUT_SECS", 120),
         };
+
+        // ── Phase 42-pre — Modèle obligatoire dès qu'un fournisseur est activé ──
+        // Aucun nom de modèle distant n'est codé en dur (ils changent trop vite).
+        errors.extend(config.validate_llm_hub());
 
         if !errors.is_empty() {
             return Err(ConfigError {
@@ -237,6 +326,62 @@ impl Config {
         }
 
         Ok(config)
+    }
+
+    /// Vérifie la cohérence du Hub d'Agents (Phase 42-pre).
+    fn validate_llm_hub(&self) -> Vec<String> {
+        let mut errors = Vec::new();
+        if self.gemini_api_key.is_some() && self.gemini_model.is_none() {
+            errors.push("GEMINI_MODEL (requis quand GEMINI_API_KEY est défini)".to_string());
+        }
+        if self.openai_api_key.is_some() && self.openai_model.is_none() {
+            errors.push("OPENAI_MODEL (requis quand OPENAI_API_KEY est défini)".to_string());
+        }
+        if self.vllm_base_url.is_some() && self.vllm_model.is_none() {
+            errors.push("VLLM_MODEL (requis quand VLLM_BASE_URL est défini)".to_string());
+        }
+        errors
+    }
+
+    /// Construit la configuration du Hub d'Agents pour l'infrastructure.
+    pub fn llm_hub_config(&self) -> infrastructure::llm::registry::LlmHubConfig {
+        use infrastructure::llm::registry::{LlmHubConfig, RemoteProviderConfig};
+
+        let expose = |s: &Option<Secret>| s.as_ref().map(|k| k.expose().to_string());
+
+        LlmHubConfig {
+            gemini: match (&self.gemini_api_key, &self.gemini_model) {
+                (Some(_), Some(model)) => Some(RemoteProviderConfig {
+                    api_key: expose(&self.gemini_api_key),
+                    model: model.clone(),
+                    base_url: self.gemini_base_url.clone(),
+                }),
+                _ => None,
+            },
+            openai: match (&self.openai_api_key, &self.openai_model) {
+                (Some(_), Some(model)) => Some(RemoteProviderConfig {
+                    api_key: expose(&self.openai_api_key),
+                    model: model.clone(),
+                    base_url: self.openai_base_url.clone(),
+                }),
+                _ => None,
+            },
+            deepseek: self.deepseek_api_key.as_ref().map(|_| RemoteProviderConfig {
+                api_key: expose(&self.deepseek_api_key),
+                model: self.deepseek_model.clone(),
+                base_url: self.deepseek_base_url.clone(),
+            }),
+            vllm: match (&self.vllm_base_url, &self.vllm_model) {
+                (Some(url), Some(model)) => Some(RemoteProviderConfig {
+                    api_key: expose(&self.vllm_api_key),
+                    model: model.clone(),
+                    base_url: url.clone(),
+                }),
+                _ => None,
+            },
+            fallback_enabled: self.llm_fallback_enabled,
+            external_timeout: std::time::Duration::from_secs(self.llm_external_timeout_secs),
+        }
     }
 
     /// Affiche un résumé de la configuration au démarrage.
@@ -263,6 +408,19 @@ impl Config {
         eprintln!("│ Embedding       : {} ({}d)", if self.embedding_enabled { "enabled" } else { "disabled" }, self.embedding_dimensions);
         eprintln!("│ Chakra          : {} ({}w, max {}/repo)", if self.chakra_enabled { "enabled" } else { "disabled" }, self.chakra_worker_count, self.chakra_max_webhooks_per_repo);
         eprintln!("│ Jutsu Runner    : {} ({}w, stage:{}s, pipeline:{}s)", if self.jutsu_enabled { "enabled" } else { "disabled" }, self.jutsu_worker_count, self.jutsu_stage_timeout_secs, self.jutsu_pipeline_timeout_secs);
+        let configured = |b: bool| if b { "configured" } else { "-" };
+        eprintln!(
+            "│ LLM providers   : gemini:{} openai:{} deepseek:{} vllm:{}",
+            configured(self.gemini_api_key.is_some()),
+            configured(self.openai_api_key.is_some()),
+            configured(self.deepseek_api_key.is_some()),
+            configured(self.vllm_base_url.is_some()),
+        );
+        eprintln!(
+            "│ LLM routes      : oracle={} sensei={} kage_bunshin={} (fallback: {}, timeout: {}s)",
+            self.llm_route_oracle, self.llm_route_sensei, self.llm_route_kage_bunshin,
+            if self.llm_fallback_enabled { "on" } else { "off" }, self.llm_external_timeout_secs,
+        );
         eprintln!("└───────────────────────────────────────────────────────────────────────────────");
     }
 }
@@ -303,6 +461,14 @@ fn require_env(key: &str, errors: &mut Vec<String>) -> Option<String> {
 /// Lit une variable d'environnement avec valeur par défaut.
 fn env_or(key: &str, default: &str) -> String {
     env::var(key).unwrap_or_else(|_| default.to_string())
+}
+
+/// Lit une variable optionnelle (absente ou vide → `None`).
+fn env_opt(key: &str) -> Option<String> {
+    env::var(key)
+        .ok()
+        .map(|v| v.trim().to_string())
+        .filter(|v| !v.is_empty())
 }
 
 /// Lit et parse une variable d'environnement numérique avec valeur par défaut.
@@ -351,6 +517,14 @@ fn sanitize_federation_domain(raw: &str) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn test_secret_is_redacted_in_debug_and_display() {
+        let s = Secret("sk-super-secret".to_string());
+        assert_eq!(format!("{s:?}"), "Secret(***)");
+        assert_eq!(format!("{s}"), "***");
+        assert_eq!(s.expose(), "sk-super-secret");
+    }
 
     #[test]
     fn test_sanitize_plain_domain() {

@@ -1628,45 +1628,55 @@ async fn sensei_chat_handler(
 struct SenseiModelsResponse {
     models: Vec<SenseiModelInfo>,
     active: String,
+    /// Fournisseur actif (Phase 42-pre — ex: "ollama", "gemini").
+    provider: String,
 }
 
 #[derive(Debug, Serialize, Deserialize)]
 struct SenseiModelInfo {
     name: String,
+    /// Taille en octets (0 pour les modèles distants).
     size: u64,
+    provider: String,
 }
 
-/// GET /api/v1/sensei/models — Liste les modèles installés sur Ollama #2.
+/// Récupère le LLM routé de Sensei (Phase 42-pre).
+fn sensei_llm(
+    state: &SharedState,
+) -> Result<Arc<dyn domain::ports::llm_service::LlmService>, AppError> {
+    state
+        .sensei_chat
+        .as_ref()
+        .map(|s| s.llm().clone())
+        .ok_or_else(|| AppError::from(DomainError::Internal("Sensei non activé".to_string())))
+}
+
+/// GET /api/v1/sensei/models — Liste les modèles du fournisseur Sensei actif.
+///
+/// Phase 42-pre : passe par le port `LlmService::list_models()` (Ollama : `/api/tags`,
+/// API distantes : modèle configuré).
 async fn sensei_models_handler(
     State(state): State<SharedState>,
 ) -> Result<Json<SenseiModelsResponse>, AppError> {
-    let ollama_url = state.sensei_ollama_url.as_ref().ok_or_else(|| {
-        AppError::from(DomainError::Internal("Sensei non activé".to_string()))
-    })?;
+    let llm = sensei_llm(&state)?;
 
-    let active = state.sensei_chat.as_ref()
-        .map(|s| s.model_name().to_string())
-        .unwrap_or_default();
-
-    // Appeler l'API Ollama /api/tags pour lister les modèles.
-    let resp = reqwest::get(format!("{ollama_url}/api/tags"))
+    let models = llm
+        .list_models()
         .await
-        .map_err(|e| AppError::from(DomainError::Internal(format!("Ollama tags: {e}"))))?;
+        .map_err(AppError::from)?
+        .into_iter()
+        .map(|m| SenseiModelInfo {
+            name: m.name,
+            size: m.size.unwrap_or(0),
+            provider: m.provider,
+        })
+        .collect();
 
-    #[derive(Deserialize)]
-    struct OllamaTags { models: Vec<OllamaModel> }
-    #[derive(Deserialize)]
-    struct OllamaModel { name: String, size: u64 }
-
-    let tags: OllamaTags = resp.json().await
-        .map_err(|e| AppError::from(DomainError::Internal(format!("Ollama tags parse: {e}"))))?;
-
-    let models = tags.models.into_iter().map(|m| SenseiModelInfo {
-        name: m.name,
-        size: m.size,
-    }).collect();
-
-    Ok(Json(SenseiModelsResponse { models, active }))
+    Ok(Json(SenseiModelsResponse {
+        models,
+        active: llm.model_name().to_string(),
+        provider: llm.provider().to_string(),
+    }))
 }
 
 /// Corps de POST /api/v1/sensei/warmup.
@@ -1675,7 +1685,7 @@ struct SenseiWarmupBody {
     model: String,
 }
 
-/// POST /api/v1/sensei/warmup — Pré-charge un modèle dans la RAM d'Ollama.
+/// POST /api/v1/sensei/warmup — Pré-charge un modèle (Ollama) ; no-op pour les API distantes.
 ///
 /// Le frontend appelle cette route quand l'utilisateur sélectionne un modèle
 /// dans le dropdown. Cela force Ollama à charger le modèle en arrière-plan,
@@ -1684,43 +1694,19 @@ async fn sensei_warmup_handler(
     State(state): State<SharedState>,
     Json(body): Json<SenseiWarmupBody>,
 ) -> Result<Json<serde_json::Value>, AppError> {
-    let ollama_url = state.sensei_ollama_url.as_ref().ok_or_else(|| {
-        AppError::from(DomainError::Internal("Sensei non activé".to_string()))
-    })?;
+    let llm = sensei_llm(&state)?;
 
-    info!(model = %body.model, "🥷 Sensei — Warmup modèle demandé");
+    info!(model = %body.model, provider = %llm.provider(), "🥷 Sensei — Warmup modèle demandé");
 
-    let client = reqwest::Client::builder()
-        .timeout(std::time::Duration::from_secs(120))
-        .build()
-        .map_err(|e| AppError::from(DomainError::Internal(format!("HTTP client: {e}"))))?;
+    llm.warmup(&body.model).await.map_err(AppError::from)?;
 
-    // Envoyer un prompt vide avec keep_alive pour forcer le chargement.
-    let resp = client
-        .post(format!("{ollama_url}/api/generate"))
-        .json(&serde_json::json!({
-            "model": body.model,
-            "prompt": "",
-            "keep_alive": "24h"
-        }))
-        .send()
-        .await
-        .map_err(|e| AppError::from(DomainError::Internal(format!("Warmup failed: {e}"))))?;
-
-    if resp.status().is_success() {
-        info!(model = %body.model, "🥷 Sensei — Modèle chargé en RAM ✅");
-        Ok(Json(serde_json::json!({
-            "status": "ok",
-            "model": body.model,
-            "message": "Modèle chargé en RAM"
-        })))
-    } else {
-        let status = resp.status();
-        let text = resp.text().await.unwrap_or_default();
-        Err(AppError::from(DomainError::Internal(
-            format!("Warmup error (HTTP {status}): {text}")
-        )))
-    }
+    info!(model = %body.model, "🥷 Sensei — Modèle prêt ✅");
+    Ok(Json(serde_json::json!({
+        "status": "ok",
+        "model": body.model,
+        "provider": llm.provider(),
+        "message": "Modèle chargé en RAM"
+    })))
 }
 
 // ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━

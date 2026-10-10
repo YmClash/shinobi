@@ -83,3 +83,5 @@ tempfile = { workspace = true }
 
 [dev-dependencies]
 tokio = { workspace = true }
+# — Phase 42-pre — Mocks HTTP des adaptateurs LLM distants —
+wiremock = "0.6"

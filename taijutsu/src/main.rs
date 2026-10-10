@@ -63,6 +63,7 @@ use infrastructure::events::kafka_producer::KafkaEventPublisher;
 use infrastructure::events::oracle_consumer::OracleKafkaConsumer;
 use infrastructure::github::github_client::GitHubClient;
 use infrastructure::llm::ollama_service::OllamaService;
+use infrastructure::llm::registry::{LlmRegistry, LlmRoute, LlmTask};
 use infrastructure::persistence::postgres_actor_repo::PostgresActorRepository;
 use infrastructure::persistence::postgres_chunk_repo::PostgresChunkRepository;
 use infrastructure::persistence::postgres_federation_repo::PostgresFederationRepository;
@@ -192,8 +193,19 @@ async fn main() -> anyhow::Result<()> {
             None
         };
 
-    // Oracle: Ollama LLM Service (Phase 9 — optionnel)
-    let llm_service: Option<Arc<dyn domain::ports::llm_service::LlmService>> =
+    // ── Phase 42-pre : Hub d'Agents (Mercenary Switch) 🧠🔌 ──────────
+    // Chaque tâche reçoit son propre `Arc<dyn LlmService>` selon LLM_ROUTE_*.
+    // Les use cases restent agnostiques du fournisseur.
+    let llm_registry = LlmRegistry::from_config(&config.llm_hub_config());
+    let route_for = |task: LlmTask, raw: &str| -> LlmRoute {
+        raw.parse::<LlmRoute>().unwrap_or_else(|e| {
+            warn!(%task, "⚠️ {e} — repli sur 'ollama'");
+            LlmRoute::Ollama
+        })
+    };
+
+    // Oracle: Ollama LLM Service (Phase 9 — optionnel) = LLM local de l'Oracle.
+    let oracle_local_llm: Option<Arc<dyn domain::ports::llm_service::LlmService>> =
         match OllamaService::new(&config.ollama_url, &config.ollama_model) {
             Ok(service) => {
                 info!(
@@ -208,6 +220,11 @@ async fn main() -> anyhow::Result<()> {
                 None
             }
         };
+    let llm_service = llm_registry.resolve(
+        LlmTask::Oracle,
+        route_for(LlmTask::Oracle, &config.llm_route_oracle),
+        oracle_local_llm,
+    );
 
     // ── Use Cases (couche application) ───────────
     let create_operation = Arc::new(CreateOperationUseCase::new(
@@ -304,25 +321,50 @@ async fn main() -> anyhow::Result<()> {
     let list_refs_uc = Arc::new(ListRefsUseCase::new(vcs.clone(), resolve_repo.clone()));
 
     // ── Phase 15 : Agent Sensei (先生) — LLM conversationnel ─────────
-    // Phase 41 : Le LLM Sensei est partagé avec le Kage Bunshin (auto-healing).
-    let sensei_llm_arc: Option<Arc<dyn domain::ports::llm_service::LlmService>> =
+    // Phase 42-pre : l'Ollama #2 est le LLM *local* de Sensei et du Kage Bunshin ;
+    // chaque tâche est ensuite routée indépendamment par le Hub d'Agents.
+    let sensei_local_llm: Option<Arc<dyn domain::ports::llm_service::LlmService>> =
         if config.sensei_enabled {
             match OllamaService::new(&config.sensei_ollama_url, &config.sensei_ollama_model) {
                 Ok(sensei_llm) => {
                     info!(
                         url = %config.sensei_ollama_url,
                         model = %config.sensei_ollama_model,
-                        "🥷 Sensei LLM — Initialisé (Ollama #2, partagé Chat + KageBunshin)"
+                        "🥷 Sensei LLM local — Initialisé (Ollama #2)"
                     );
                     Some(Arc::new(sensei_llm))
                 }
                 Err(e) => {
-                    warn!("⚠️ Sensei LLM désactivé — Ollama #2 non disponible: {e}");
+                    warn!("⚠️ Sensei LLM local désactivé — Ollama #2 non disponible: {e}");
                     None
                 }
             }
         } else {
             info!("ℹ️ Sensei Agent désactivé par configuration (SENSEI_ENABLED=false)");
+            None
+        };
+
+    let sensei_llm_arc: Option<Arc<dyn domain::ports::llm_service::LlmService>> =
+        if config.sensei_enabled {
+            llm_registry.resolve(
+                LlmTask::Sensei,
+                route_for(LlmTask::Sensei, &config.llm_route_sensei),
+                sensei_local_llm.clone(),
+            )
+        } else {
+            None
+        };
+
+    // Phase 42-pre : le Kage Bunshin (gros contexte) a sa propre route —
+    // il ne partage plus le LLM de Sensei.
+    let kage_bunshin_llm: Option<Arc<dyn domain::ports::llm_service::LlmService>> =
+        if config.kage_bunshin_enabled {
+            llm_registry.resolve(
+                LlmTask::KageBunshin,
+                route_for(LlmTask::KageBunshin, &config.llm_route_kage_bunshin),
+                sensei_local_llm.clone(),
+            )
+        } else {
             None
         };
 
@@ -798,11 +840,6 @@ async fn main() -> anyhow::Result<()> {
         get_blob,
         list_refs: list_refs_uc,
         sensei_chat,
-        sensei_ollama_url: if config.sensei_enabled {
-            Some(config.sensei_ollama_url.clone())
-        } else {
-            None
-        },
         // Phase 17 — Diff Colorisé
         vcs_engine: vcs.clone(),
         operation_repo: repo.clone(),
@@ -1040,7 +1077,7 @@ async fn main() -> anyhow::Result<()> {
 
     // ── Phase 41 : Kage Bunshin Consumer (Kafka → Auto-Healing) ─────
     if config.kage_bunshin_enabled {
-        if let (Some(llm), Some(runner)) = (sensei_llm_arc.clone(), container_runner.clone()) {
+        if let (Some(llm), Some(runner)) = (kage_bunshin_llm.clone(), container_runner.clone()) {
             let kage_bunshin_uc = Arc::new(
                 application::use_cases::kage_bunshin::KageBunshinUseCase::new(
                     llm,
@@ -1083,7 +1120,7 @@ async fn main() -> anyhow::Result<()> {
                 }
             }
         } else {
-            warn!("⚠️ Kage Bunshin non démarré — Sensei LLM ou Docker non disponible");
+            warn!("⚠️ Kage Bunshin non démarré — aucun LLM routé ou Docker non disponible");
         }
     } else {
         info!("ℹ️ Kage Bunshin désactivé par configuration (KAGE_BUNSHIN_ENABLED=false)");
@@ -1198,7 +1235,8 @@ async fn main() -> anyhow::Result<()> {
                 info!(
                     topic = %config.kafka_analysis_topic,
                     group = %config.oracle_consumer_group,
-                    model = %config.ollama_model,
+                    model = %llm.model_name(),
+                    provider = %llm.provider(),
                     "🔮 Oracle Reviewer — Consumer Kafka actif"
                 );
 

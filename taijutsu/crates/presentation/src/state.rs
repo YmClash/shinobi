@@ -76,8 +76,8 @@ pub struct SharedState {
     /// `None` si l'agent Sensei est désactivé (Ollama #2 non disponible).
     pub sensei_chat: Option<Arc<application::use_cases::sensei_chat::SenseiChatUseCase>>,
 
-    /// URL du serveur Ollama Sensei pour les appels directs (models, warmup).
-    pub sensei_ollama_url: Option<String>,
+    // Phase 42-pre : `sensei_ollama_url` supprimé — models/warmup passent par
+    // le port `LlmService` (agnostique du fournisseur).
 
     // ── Phase 17 — Diff Colorisé ─────────────────────────────────
     /// Moteur VCS abstrait pour le diff ligne par ligne (Phase 17).

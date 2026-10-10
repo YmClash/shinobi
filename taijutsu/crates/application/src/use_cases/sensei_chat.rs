@@ -117,6 +117,11 @@ impl SenseiChatUseCase {
         self.llm.model_name()
     }
 
+    /// LLM routé de Sensei (Phase 42-pre — models/warmup via le port).
+    pub fn llm(&self) -> &Arc<dyn LlmService> {
+        &self.llm
+    }
+
     /// Exécute une conversation Sensei en streaming.
     ///
     /// ## Retourne

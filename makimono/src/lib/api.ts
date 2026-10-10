@@ -3,6 +3,8 @@
 // Typed wrappers for the Taijutsu REST API
 // ═══════════════════════════════════════════════════════════════
 
+import { EventStreamContentType, fetchEventSource } from "@microsoft/fetch-event-source";
+
 // ── Repo Prefix Helper (Phase 5C — URL-Driven) ──────────────
 // Le prefix est désormais calculé à partir de l'URL (params.owner, params.repo).
 // Plus de constante hardcodée — chaque page passe son propre prefix.
@@ -511,16 +513,21 @@ export interface SenseiMessage {
 
 // ── Sensei Models & Warmup ──────────────────────────────────────────
 
-/** Modèle installé sur Ollama Sensei. */
+/** Modèle disponible chez le fournisseur Sensei (Ollama, Gemini, OpenAI-compatible…). */
 export interface SenseiModelInfo {
   name: string;
+  /** Taille en octets (0 pour les modèles distants). */
   size: number;
+  /** Fournisseur du modèle (Phase 42-pre). */
+  provider?: string;
 }
 
 /** Réponse de GET /api/v1/sensei/models. */
 export interface SenseiModelsResponse {
   models: SenseiModelInfo[];
   active: string;
+  /** Fournisseur actif de Sensei (Phase 42-pre — ex: "ollama", "gemini"). */
+  provider?: string;
 }
 
 /** Récupère la liste des modèles installés sur Ollama #2 (Sensei). 🔒 Auth requise. */
@@ -583,11 +590,27 @@ export interface SenseiStreamCallbacks {
   onError: (error: string) => void;
 }
 
+/** Erreur non récupérable : stoppe `fetchEventSource` (aucune reconnexion). */
+class SenseiStreamFatalError extends Error {
+  constructor(message: string) {
+    super(message);
+    this.name = "SenseiStreamFatalError";
+  }
+}
+
 /**
  * Ouvre un stream SSE vers l'agent Sensei (先生).
  *
- * Utilise fetch + ReadableStream (pas EventSource, car POST avec body).
- * Retourne un AbortController pour permettre l'annulation (bouton Stop).
+ * Phase 42-pre : utilise `@microsoft/fetch-event-source` (POST + body JSON +
+ * `Authorization: Bearer`, parsing SSE conforme à la spec, tolérant à la
+ * fragmentation réseau). Retourne un AbortController pour l'annulation (bouton Stop).
+ *
+ * ⚠️ **Aucune reconnexion automatique** : rejouer le POST relancerait une
+ * génération LLM complète (doublon + coût API). Toute erreur est remontée
+ * via `onError` et le flux s'arrête.
+ *
+ * `openWhenHidden: true` : sans cela, la lib ferme puis rouvre le flux quand
+ * l'onglet passe en arrière-plan (→ nouvelle génération).
  *
  * @example
  * ```ts
@@ -611,77 +634,53 @@ export function senseiChatStream(
   const headers: Record<string, string> = { "Content-Type": "application/json" };
   if (token) headers["Authorization"] = `Bearer ${token}`;
 
-  fetch(`${getBaseUrl()}/api/v1/sensei/chat`, {
+  fetchEventSource(`${getBaseUrl()}/api/v1/sensei/chat`, {
     method: "POST",
     headers,
     body: JSON.stringify(body),
     signal: controller.signal,
-  })
-    .then(async (response) => {
-      if (!response.ok) {
-        const text = await response.text().catch(() => "Unknown error");
-        callbacks.onError(`HTTP ${response.status}: ${text}`);
-        return;
+    openWhenHidden: true,
+
+    async onopen(response) {
+      const contentType = response.headers.get("content-type") ?? "";
+      if (response.ok && contentType.includes(EventStreamContentType)) return;
+      const text = await response.text().catch(() => "Unknown error");
+      throw new SenseiStreamFatalError(`HTTP ${response.status}: ${text}`);
+    },
+
+    onmessage(message) {
+      if (!message.data) return; // keep-alive / événement vide
+      let event: SenseiStreamEvent;
+      try {
+        event = JSON.parse(message.data) as SenseiStreamEvent;
+      } catch {
+        return; // Payload non-JSON ignoré
       }
-
-      const reader = response.body?.getReader();
-      if (!reader) {
-        callbacks.onError("No readable stream available");
-        return;
+      switch (event.type) {
+        case "context":
+          callbacks.onContext(event.sources, event.oracle_score, event.oracle_summary);
+          break;
+        case "token":
+          callbacks.onToken(event.content);
+          break;
+        case "done":
+          callbacks.onDone(event.model, event.duration_ms);
+          break;
+        case "error":
+          callbacks.onError(event.message);
+          break;
       }
+    },
 
-      const decoder = new TextDecoder();
-      let buffer = "";
-
-      while (true) {
-        const { done, value } = await reader.read();
-        if (done) break;
-
-        buffer += decoder.decode(value, { stream: true });
-
-        // Parse SSE events (format: "data: {...}\n\n")
-        const lines = buffer.split("\n");
-        buffer = lines.pop() ?? ""; // Keep incomplete line in buffer
-
-        for (const line of lines) {
-          const trimmed = line.trim();
-          if (!trimmed || trimmed === ":") continue; // SSE comment / keep-alive
-
-          if (trimmed.startsWith("data:")) {
-            const jsonStr = trimmed.slice(5).trim();
-            if (!jsonStr) continue;
-
-            try {
-              const event = JSON.parse(jsonStr) as SenseiStreamEvent;
-
-              switch (event.type) {
-                case "context":
-                  callbacks.onContext(event.sources, event.oracle_score, event.oracle_summary);
-                  break;
-                case "token":
-                  callbacks.onToken(event.content);
-                  break;
-                case "done":
-                  callbacks.onDone(event.model, event.duration_ms);
-                  break;
-                case "error":
-                  callbacks.onError(event.message);
-                  break;
-              }
-            } catch {
-              // Skip unparseable lines (keep-alive, etc.)
-            }
-          }
-        }
-      }
-    })
-    .catch((err) => {
-      if (err instanceof DOMException && err.name === "AbortError") {
-        // User cancelled — normal behavior
-        return;
-      }
-      callbacks.onError(String(err));
-    });
+    onerror(err) {
+      // Relancer l'erreur = pas de retry (voir doc ci-dessus).
+      throw err;
+    },
+  }).catch((err: unknown) => {
+    if (controller.signal.aborted) return; // Annulation utilisateur — normal
+    if (err instanceof DOMException && err.name === "AbortError") return;
+    callbacks.onError(err instanceof Error ? err.message : String(err));
+  });
 
   return controller;
 }

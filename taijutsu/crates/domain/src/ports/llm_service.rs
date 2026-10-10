@@ -10,6 +10,11 @@
 //! ## Phase 15 — Sensei (先生)
 //! Extension streaming : `generate_stream()` émet les tokens un par un
 //! via un canal `mpsc` pour alimenter le Server-Sent Events côté API.
+//!
+//! ## Phase 42-pre — Hub d'Agents 🧠🔌
+//! Le port devient agnostique du fournisseur (Ollama, Gemini, OpenAI-compatible).
+//! Ajout de `provider()`, `list_models()` et `warmup()` avec implémentations
+//! par défaut — les adaptateurs ne surchargent que ce qu'ils supportent.
 
 use async_trait::async_trait;
 
@@ -48,10 +53,21 @@ pub enum LlmStreamChunk {
     },
 }
 
-/// Contrat d'accès à un modèle de langage local.
+/// Description d'un modèle disponible chez un fournisseur (Phase 42-pre).
+#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize)]
+pub struct LlmModelInfo {
+    /// Identifiant du modèle (ex: "smollm2:1.7b", "gpt-4o-mini").
+    pub name: String,
+    /// Taille sur disque en octets (connue uniquement pour les modèles locaux).
+    pub size: Option<u64>,
+    /// Fournisseur (ex: "ollama", "gemini", "openai").
+    pub provider: String,
+}
+
+/// Contrat d'accès à un modèle de langage (local ou distant).
 ///
 /// Conçu pour l'inversion de dépendance : le domaine définit le contrat,
-/// l'infrastructure fournit l'implémentation (Ollama HTTP, etc.).
+/// l'infrastructure fournit l'implémentation (Ollama, Gemini, OpenAI-compatible…).
 #[async_trait]
 pub trait LlmService: Send + Sync {
     /// Génère une complétion à partir d'un prompt utilisateur et d'un prompt système.
@@ -85,4 +101,27 @@ pub trait LlmService: Send + Sync {
 
     /// Retourne le nom du modèle configuré (ex: "granite3.1-dense:2b").
     fn model_name(&self) -> &str;
+
+    /// Nom du fournisseur (Phase 42-pre). Défaut : `"unknown"`.
+    fn provider(&self) -> &str {
+        "unknown"
+    }
+
+    /// Liste les modèles disponibles (Phase 42-pre).
+    ///
+    /// Défaut : uniquement le modèle configuré. Ollama surcharge via `/api/tags`.
+    async fn list_models(&self) -> Result<Vec<LlmModelInfo>, DomainError> {
+        Ok(vec![LlmModelInfo {
+            name: self.model_name().to_string(),
+            size: None,
+            provider: self.provider().to_string(),
+        }])
+    }
+
+    /// Pré-charge un modèle pour éliminer le cold-start (Phase 42-pre).
+    ///
+    /// Défaut : no-op (les API distantes n'ont pas de cold-start côté client).
+    async fn warmup(&self, _model: &str) -> Result<(), DomainError> {
+        Ok(())
+    }
 }

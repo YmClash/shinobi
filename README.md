@@ -347,6 +347,29 @@ Shinobi employs three specialized AI agents working in concert:
 
 AI work is traceable: **ANBU** checkpoints are stored in IPFS and linked to commits via an `ai-checkpoint:{CID}` trailer, and Sensei's fixes are authored by a dedicated **service account** (`shinobi-sensei-bot`).
 
+### 🧠🔌 Agent Hub — Multi-provider LLMs
+
+Every LLM-powered task is **provider-agnostic** (hexagonal `LlmService` port). Ollama remains the default; remote providers are opt-in per task:
+
+| Provider | Adapter | Notes |
+|----------|---------|-------|
+| **Ollama** | `OllamaService` | Local default (Oracle + Sensei instances) |
+| **Google Gemini** | `GeminiService` | System prompt mapped to `systemInstruction`, SSE via `?alt=sse` |
+| **OpenAI / DeepSeek / vLLM / LM Studio** | `OpenAiCompatibleService` | `/chat/completions`, `Bearer not-needed` when keyless |
+
+```bash
+# Offload Kage Bunshin (large context) to Gemini, keep chat & reviews local
+GEMINI_API_KEY=...
+GEMINI_MODEL=<current-gemini-model>   # required when the key is set
+LLM_ROUTE_KAGE_BUNSHIN=gemini          # ollama | gemini | openai | deepseek | vllm | auto
+LLM_ROUTE_SENSEI=ollama
+LLM_ROUTE_ORACLE=ollama
+```
+
+If a remote provider fails, the task **falls back to Ollama** automatically (for streaming, only before the first token, so a chat answer is never mixed from two models).
+
+> ⚠️ A remote route sends code (diffs, CI logs, files) to the third-party provider, **including private repositories**. A per-repository opt-in is planned.
+
 ### Semantic Search (RAG)
 
 ```bash
@@ -393,7 +416,7 @@ cd ../makimono
 npx tsc --noEmit
 ```
 
-**Current status:** 272+ tests passing, 0 failed (Taijutsu 261+ · ANBU 37) · TypeScript 0 errors.
+**Current status:** 345 Taijutsu tests passing, 0 failed (incl. 44 Agent Hub tests, HTTP-mocked with `wiremock`) · ANBU 37 · TypeScript 0 errors.
 
 ---
 
@@ -412,8 +435,14 @@ All configuration via environment variables (loaded from `.env`). Key variables:
 | `GITHUB_CLIENT_ID` / `SECRET` | GitHub OAuth credentials |
 | `KAFKA_BROKERS` | Kafka brokers (default: localhost:9092) |
 | `IPFS_API_URL` | IPFS Kubo RPC endpoint |
-| `ORACLE_OLLAMA_URL` | Oracle Ollama instance URL |
-| `SENSEI_OLLAMA_URL` | Sensei Ollama instance URL |
+| `OLLAMA_URL` / `OLLAMA_MODEL` | Oracle Ollama instance (local LLM) |
+| `SENSEI_OLLAMA_URL` / `SENSEI_OLLAMA_MODEL` | Sensei Ollama instance (local LLM, also Kage Bunshin's local fallback) |
+| `GEMINI_API_KEY` / `GEMINI_MODEL` | Gemini provider (model **required** when the key is set) |
+| `OPENAI_API_KEY` / `OPENAI_MODEL` / `OPENAI_BASE_URL` | OpenAI provider |
+| `DEEPSEEK_API_KEY` / `DEEPSEEK_MODEL` | DeepSeek provider (default model: `deepseek-chat`) |
+| `VLLM_BASE_URL` / `VLLM_MODEL` / `VLLM_API_KEY` | vLLM / LM Studio (OpenAI-compatible, URL incl. `/v1`) |
+| `LLM_ROUTE_ORACLE` / `LLM_ROUTE_SENSEI` / `LLM_ROUTE_KAGE_BUNSHIN` | Per-task route (defaults: `ollama` / `ollama` / `auto`) |
+| `LLM_FALLBACK_ENABLED` / `LLM_EXTERNAL_TIMEOUT_SECS` | Remote → Ollama fallback (default `true`) / remote timeout (default `120`) |
 | `FEDERATION_DOMAIN` | Public domain for ActivityPub (e.g. `api.jjshinobi.dev`) |
 | `FEDERATION_ENABLED` | Enable/disable federation features |
 | `EMBEDDING_ENABLED` | Enable/disable RAG embeddings |
@@ -443,7 +472,7 @@ All configuration via environment variables (loaded from `.env`). Key variables:
 | Distributed Storage | IPFS Kubo (Merkle DAG IPLD) |
 | CI/CD Execution | bollard (Docker Engine API) |
 | AI Embeddings | fastembed (Nomic-Embed-Text-v1.5, ONNX 256d) |
-| AI LLMs | Ollama (Granite3 2B + SmolLM2 1.7B) |
+| AI LLMs | Ollama (Granite3 2B + SmolLM2 1.7B) + optional Gemini / OpenAI-compatible (DeepSeek, vLLM, LM Studio) |
 | Semantic Parsing | Tree-sitter 0.25 (Rust, TS, TSX, CSS, Python) |
 | Frontend | Next.js 16 (Turbopack) + Bun 1.3.8 |
 | Code Highlighting | Shiki 4.2 |
@@ -471,6 +500,7 @@ All configuration via environment variables (loaded from `.env`). Key variables:
 | **ONNX local (not API)** | Zero network latency, zero cost, offline-capable |
 | **pgvector HNSW** | No VACUUM required, consistent quality, O(log n) |
 | **Dual Ollama instances** | Oracle (review) and Sensei (chat/heal) run separately — zero contention |
+| **Provider-agnostic LLM port** | Per-task routing (Agent Hub) offloads heavy tasks to remote APIs without touching use cases; Ollama stays the fallback |
 | **3-layer auth** | Public / Semi-Public / Private — Bouclier Global enforced at router level |
 | **ActivityPub federation** | Decentralized, no vendor lock-in, interop with Mastodon/Forgejo |
 | **Fire-and-forget events** | Webhooks/notifications never block the business operation (graceful degradation) |
@@ -498,8 +528,10 @@ All configuration via environment variables (loaded from `.env`). Key variables:
 - [x] **Phase 39** — External CI bridge (Commit Status API + Drone/Woodpecker/Jenkins guides)
 - [x] **Phase 40 / 40-C / 40-E** — Jutsu Runner native CI/CD (backend + Makimono dashboard + `anbu jutsu`)
 - [x] **Phase 41 / 41-B / 41-C** — Kage Bunshin auto-healing (backend + HealPanel UI + docs & `jjshinobi.dev`)
+- [x] **Phase 42-pre** — Agent Hub 🧠🔌 (multi-provider LLMs: Gemini + OpenAI-compatible, per-task routing, Ollama fallback)
 - [ ] **E2E validation** — Run [`Docs/test-e2e-scenario.md`](./Docs/test-e2e-scenario.md) on a fresh repository
 - [ ] **Git over `jjshinobi.dev`** — Proxy Git Smart HTTP through the UI domain (or `git.jjshinobi.dev`)
+- [ ] **Agent Hub V2** — Per-repository opt-in for remote LLMs (private code) + per-repo routing
 - [ ] **Phase 42** — Swarm Mode 🐝 (Architect Tensai + Auditor Oracle on MRs, optional Ronin agent)
 - [ ] **Phase 37F-Fix3** — Mastodon silent drop on federated mention notifications
 - [ ] **Phase 28G** — Service Worker IPFS (decentralized browser resolution)

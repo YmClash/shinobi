@@ -36,7 +36,7 @@ use serde::{Deserialize, Serialize};
 use tracing::{info, warn};
 
 use domain::errors::DomainError;
-use domain::ports::llm_service::{LlmResponse, LlmService, LlmStreamChunk};
+use domain::ports::llm_service::{LlmModelInfo, LlmResponse, LlmService, LlmStreamChunk};
 
 /// Client HTTP pour le serveur Ollama (LLM local).
 ///
@@ -416,5 +416,65 @@ impl LlmService for OllamaService {
 
     fn model_name(&self) -> &str {
         &self.model
+    }
+
+    fn provider(&self) -> &str {
+        "ollama"
+    }
+
+    /// Liste les modèles installés (`GET /api/tags`) — Phase 42-pre.
+    async fn list_models(&self) -> Result<Vec<LlmModelInfo>, DomainError> {
+        #[derive(Deserialize)]
+        struct OllamaTags {
+            models: Vec<OllamaModel>,
+        }
+        #[derive(Deserialize)]
+        struct OllamaModel {
+            name: String,
+            size: u64,
+        }
+
+        let tags: OllamaTags = self
+            .client
+            .get(format!("{}/api/tags", self.base_url))
+            .send()
+            .await
+            .map_err(|e| DomainError::Internal(format!("Ollama tags: {e}")))?
+            .json()
+            .await
+            .map_err(|e| DomainError::Internal(format!("Ollama tags parse: {e}")))?;
+
+        Ok(tags
+            .models
+            .into_iter()
+            .map(|m| LlmModelInfo {
+                name: m.name,
+                size: Some(m.size),
+                provider: "ollama".to_string(),
+            })
+            .collect())
+    }
+
+    /// Pré-charge un modèle en RAM (`keep_alive: 24h`) — Phase 42-pre.
+    async fn warmup(&self, model: &str) -> Result<(), DomainError> {
+        let resp = self
+            .client
+            .post(format!("{}/api/generate", self.base_url))
+            .json(&serde_json::json!({
+                "model": model,
+                "prompt": "",
+                "keep_alive": "24h"
+            }))
+            .send()
+            .await
+            .map_err(|e| DomainError::Internal(format!("Warmup failed: {e}")))?;
+
+        if resp.status().is_success() {
+            Ok(())
+        } else {
+            let status = resp.status();
+            let text = resp.text().await.unwrap_or_default();
+            Err(DomainError::Internal(format!("Warmup error (HTTP {status}): {text}")))
+        }
     }
 }
