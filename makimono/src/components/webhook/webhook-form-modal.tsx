@@ -15,7 +15,7 @@ import { emitWebhookChanged } from "@/hooks/use-webhooks";
 interface EventDef {
   value: string;
   label: string;
-  cat: "git" | "mr" | "issue" | "anbu";
+  cat: "git" | "mr" | "issue" | "anbu" | "jutsu";
 }
 
 const EVENT_TYPES: EventDef[] = [
@@ -27,6 +27,8 @@ const EVENT_TYPES: EventDef[] = [
   { value: "issue_closed",    label: "Issue Closed",      cat: "issue" },
   { value: "issue_comment",   label: "Issue Comment",     cat: "issue" },
   { value: "anbu_checkpoint", label: "ANBU Checkpoint",   cat: "anbu" },
+  // Phase 42-pre-Fix — fin de pipeline (Runner, Kage Bunshin ou Watchdog)
+  { value: "pipeline_completed", label: "Pipeline Completed", cat: "jutsu" },
 ];
 
 const CATEGORIES = [
@@ -34,6 +36,7 @@ const CATEGORIES = [
   { key: "mr",    label: "Merge Requests" },
   { key: "issue", label: "Issues" },
   { key: "anbu",  label: "ANBU (AI)" },
+  { key: "jutsu", label: "Jutsu (CI/CD)" },
 ] as const;
 
 // ── Props ────────────────────────────────────────────────────

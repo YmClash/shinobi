@@ -227,16 +227,9 @@ impl ContainerRunner for JutsuRunner {
                 .docker
                 .wait_container(&container_id, None::<WaitContainerOptions<String>>);
 
-            let exit_code = if let Some(result) = wait_stream.next().await {
-                match result {
-                    Ok(response) => response.status_code,
-                    Err(e) => {
-                        warn!(error = %e, "Docker wait_container error");
-                        -1
-                    }
-                }
-            } else {
-                -1
+            let exit_code = match wait_stream.next().await {
+                Some(result) => exit_code_from_wait(result),
+                None => -1,
             };
 
             (exit_code, logs)
@@ -284,5 +277,53 @@ impl ContainerRunner for JutsuRunner {
             logs,
             duration_ms,
         })
+    }
+}
+
+/// Phase 42-pre-Fix — Extrait le vrai code de sortie d'un `wait_container`.
+///
+/// ⚠️ bollard 0.18 renvoie `Err(DockerContainerWaitError { code, .. })`
+/// dès que le container sort avec un code ≠ 0 (ce n'est PAS une erreur
+/// d'infrastructure). On récupère donc `code` au lieu de le masquer en `-1`.
+/// Seules les vraies erreurs (socket, API…) donnent `-1`.
+fn exit_code_from_wait(
+    result: Result<bollard::models::ContainerWaitResponse, bollard::errors::Error>,
+) -> i64 {
+    match result {
+        Ok(response) => response.status_code,
+        Err(bollard::errors::Error::DockerContainerWaitError { code, .. }) => code,
+        Err(e) => {
+            warn!(error = %e, "Docker wait_container error");
+            -1
+        }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::exit_code_from_wait;
+
+    #[test]
+    fn wait_error_with_code_returns_real_exit_code() {
+        let err = bollard::errors::Error::DockerContainerWaitError {
+            error: String::new(),
+            code: 101,
+        };
+        assert_eq!(exit_code_from_wait(Err(err)), 101);
+    }
+
+    #[test]
+    fn wait_ok_returns_status_code() {
+        let resp = bollard::models::ContainerWaitResponse {
+            status_code: 0,
+            error: None,
+        };
+        assert_eq!(exit_code_from_wait(Ok(resp)), 0);
+    }
+
+    #[test]
+    fn other_errors_return_minus_one() {
+        let err = bollard::errors::Error::RequestTimeoutError;
+        assert_eq!(exit_code_from_wait(Err(err)), -1);
     }
 }

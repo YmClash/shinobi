@@ -52,6 +52,7 @@ pub mod manage_commit_statuses;
 pub mod parse_jutsu_config;
 pub mod run_pipeline;
 pub mod kage_bunshin;
+pub mod finalize_pipeline; // Phase 42-pre-Fix — Kage Bunshin V2
 
 
 #[cfg(test)]
@@ -60,4 +61,6 @@ mod analyze_operation_test;
 mod create_operation_test;
 #[cfg(test)]
 mod get_score_history_test;
+#[cfg(test)]
+pub(crate) mod pipeline_test_support;
 

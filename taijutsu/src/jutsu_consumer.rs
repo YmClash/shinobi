@@ -16,6 +16,14 @@
 //! - Chaque worker : parse jutsu.yml → valide → exécute le pipeline
 //! - Workspace éphémère via `tempfile::TempDir` (Vegapunk Tweak #1)
 //! - Graceful shutdown via `CancellationToken`
+//!
+//! ## Idempotence (Phase 42-pre-Fix)
+//! `auto.offset.reset = earliest` + garde avant exécution :
+//! - message avec `pipeline_id` → ignoré si le pipeline n'est plus `queued` ;
+//! - message auto (push…) → ignoré si `EXISTS` un pipeline pour le triplet
+//!   exact (dépôt, commit, trigger) — sans fenêtre ni limite —, doublé par
+//!   l'index unique partiel `uq_pipelines_repo_commit_trigger_auto` (032)
+//!   qui ferme la course entre deux workers.
 
 use std::path::PathBuf;
 use std::sync::Arc;
@@ -30,6 +38,9 @@ use uuid::Uuid;
 
 use application::use_cases::parse_jutsu_config::ParseJutsuConfigUseCase;
 use application::use_cases::run_pipeline::RunPipelineUseCase;
+use domain::entities::pipeline::{PipelineStatus, TriggerEvent};
+use domain::errors::DomainError;
+use domain::ports::pipeline_repository::PipelineRepository;
 use domain::ports::repo_repository::RepoRepository;
 use domain::ports::vcs_engine::VcsEngine;
 
@@ -70,7 +81,9 @@ impl JutsuConsumer {
         let consumer: StreamConsumer = ClientConfig::new()
             .set("bootstrap.servers", brokers)
             .set("group.id", group)
-            .set("auto.offset.reset", "latest")
+            // Phase 42-pre-Fix : `earliest` (sans offset commité uniquement) —
+            // les replays sont neutralisés par la garde d'idempotence.
+            .set("auto.offset.reset", "earliest")
             .set("enable.auto.commit", "false")
             .create()
             .map_err(|e| {
@@ -111,6 +124,7 @@ impl JutsuConsumer {
         parse_config: Arc<ParseJutsuConfigUseCase>,
         vcs_engine: Arc<dyn VcsEngine>,
         repo_repo: Arc<dyn RepoRepository>,
+        pipeline_repo: Arc<dyn PipelineRepository>,
         workspace_root: PathBuf,
         worker_count: usize,
     ) {
@@ -124,6 +138,7 @@ impl JutsuConsumer {
             let parse_config = parse_config.clone();
             let vcs_engine = vcs_engine.clone();
             let repo_repo = repo_repo.clone();
+            let pipeline_repo = pipeline_repo.clone();
             let workspace_root = workspace_root.clone();
 
             tokio::spawn(async move {
@@ -148,6 +163,7 @@ impl JutsuConsumer {
                         &parse_config,
                         &*vcs_engine,
                         &*repo_repo,
+                        &*pipeline_repo,
                         &workspace_root,
                     )
                     .await;
@@ -226,6 +242,7 @@ impl JutsuConsumer {
     }
 
     /// Traite une demande de pipeline individuelle.
+    #[allow(clippy::too_many_arguments)]
     async fn process_request(
         worker_id: usize,
         request: &PipelineRequest,
@@ -233,6 +250,7 @@ impl JutsuConsumer {
         parse_config: &ParseJutsuConfigUseCase,
         vcs_engine: &dyn VcsEngine,
         repo_repo: &dyn RepoRepository,
+        pipeline_repo: &dyn PipelineRepository,
         workspace_root: &PathBuf,
     ) {
         info!(
@@ -242,6 +260,11 @@ impl JutsuConsumer {
             trigger = %request.trigger_event,
             "🥷 Jutsu Worker — traitement pipeline"
         );
+
+        // ── Phase 42-pre-Fix — Garde d'idempotence (replays Kafka) ──
+        if Self::is_duplicate(request, pipeline_repo).await {
+            return;
+        }
 
         // 0. Résoudre owner_id et initialiser le workspace VCS
         //    init_workspace est idempotent — si déjà chargé, c'est un no-op.
@@ -357,14 +380,10 @@ impl JutsuConsumer {
         }
 
         // 5. Exécuter le pipeline
-        // TODO: résoudre owner/repo_name depuis le repo_id (pour le commit status context)
-        let owner = "system";
-        let repo_name = &request.repository_id.to_string()[..8];
-
+        // Phase 42-pre-Fix : le commit status est reporté par repository_id
+        // (fin du TODO owner="system" / repo_name=repo_id[..8]).
         match run_pipeline
             .execute(
-                owner,
-                repo_name,
                 request.repository_id,
                 &request.commit_id,
                 &request.trigger_event,
@@ -380,7 +399,16 @@ impl JutsuConsumer {
                     worker_id,
                     pipeline_id = %pipeline.id,
                     status = %pipeline.status,
-                    "🏁 Pipeline terminé avec succès"
+                    "🏁 Pipeline traité par le worker"
+                );
+            }
+            Err(DomainError::Duplicate(msg)) => {
+                // Course entre deux workers : l'index unique a tranché.
+                info!(
+                    worker_id,
+                    repo_id = %request.repository_id,
+                    reason = %msg,
+                    "⏭️ Pipeline doublon rejeté par l'index unique — ignoré"
                 );
             }
             Err(e) => {
@@ -397,6 +425,63 @@ impl JutsuConsumer {
         //    Vegapunk Tweak #3 : `jj workspace forget` n'est pas nécessaire ici
         //    car on utilise un git clone local, pas un jj workspace add.
         drop(temp_dir);
+    }
+
+    /// Phase 42-pre-Fix — `true` si la demande a déjà été traitée.
+    ///
+    /// - Avec `pipeline_id` (trigger REST) : le pipeline doit encore être `queued`.
+    /// - Sans `pipeline_id` (push/tag/mr auto) : `EXISTS` exact sur
+    ///   (dépôt, commit, trigger), sans fenêtre temporelle.
+    /// - `manual` sans `pipeline_id` : jamais doublon (relance légitime).
+    ///
+    /// En cas d'erreur BDD, on laisse passer (l'index unique reste le filet).
+    async fn is_duplicate(request: &PipelineRequest, pipeline_repo: &dyn PipelineRepository) -> bool {
+        if let Some(pid) = request.pipeline_id {
+            return match pipeline_repo.find_by_id(&pid).await {
+                Ok(Some(p)) if p.status == PipelineStatus::Queued => false,
+                Ok(Some(p)) => {
+                    info!(
+                        pipeline_id = %pid,
+                        status = %p.status,
+                        "⏭️ Replay ignoré — pipeline déjà démarré/terminé"
+                    );
+                    true
+                }
+                Ok(None) => {
+                    warn!(pipeline_id = %pid, "⚠️ Pipeline pré-créé introuvable — demande ignorée");
+                    true
+                }
+                Err(e) => {
+                    warn!(error = %e, "⚠️ Garde d'idempotence indisponible — exécution autorisée");
+                    false
+                }
+            };
+        }
+
+        let trigger = TriggerEvent::from_sql(&request.trigger_event).unwrap_or(TriggerEvent::Manual);
+        if trigger == TriggerEvent::Manual {
+            return false;
+        }
+
+        match pipeline_repo
+            .exists_for_commit(&request.repository_id, &request.commit_id, &trigger)
+            .await
+        {
+            Ok(true) => {
+                info!(
+                    repo_id = %request.repository_id,
+                    commit_id = %request.commit_id,
+                    trigger = %trigger,
+                    "⏭️ Replay ignoré — pipeline déjà existant pour ce commit"
+                );
+                true
+            }
+            Ok(false) => false,
+            Err(e) => {
+                warn!(error = %e, "⚠️ Garde d'idempotence indisponible — l'index unique fera foi");
+                false
+            }
+        }
     }
 }
 

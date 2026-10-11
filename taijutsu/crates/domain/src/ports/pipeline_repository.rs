@@ -12,7 +12,7 @@ use chrono::{DateTime, Utc};
 use uuid::Uuid;
 
 use crate::entities::pipeline::{
-    Pipeline, PipelineStage, PipelineStageStatus, PipelineStatus,
+    Pipeline, PipelineStage, PipelineStageStatus, PipelineStatus, TriggerEvent,
 };
 use crate::entities::kage_bunshin::{HealAttempt, HealStatus};
 use crate::errors::DomainError;
@@ -147,5 +147,56 @@ pub trait PipelineRepository: Send + Sync {
         stage_name: &str,
         mr_id: &Uuid,
     ) -> Result<(), DomainError>;
+
+    // ── Phase 42-pre-Fix — Kage Bunshin V2 (fiabilisation) ──────
+
+    /// Vérifie s'il existe déjà un pipeline pour la combinaison exacte
+    /// (`repository_id`, `commit_id`, `trigger_event`).
+    ///
+    /// Requête `EXISTS` **sans fenêtre temporelle ni limite** : sert de
+    /// garde d'idempotence au `JutsuConsumer` (replays Kafka). Doublée
+    /// côté BDD par un index unique partiel (migration 032) pour les
+    /// triggers non-manuels.
+    async fn exists_for_commit(
+        &self,
+        repository_id: &Uuid,
+        commit_id: &str,
+        trigger_event: &TriggerEvent,
+    ) -> Result<bool, DomainError>;
+
+    /// Transition atomique *compare-and-set* du statut d'un stage.
+    ///
+    /// N'applique `to` que si le statut courant vaut `from`.
+    /// Retourne `true` si la transition a eu lieu, `false` si le stage
+    /// avait déjà changé d'état (ex : heal expiré par le watchdog pendant
+    /// que le `KageBunshinConsumer` travaillait).
+    async fn transition_stage_status(
+        &self,
+        id: &Uuid,
+        from: PipelineStageStatus,
+        to: PipelineStageStatus,
+        finished_at: Option<DateTime<Utc>>,
+    ) -> Result<bool, DomainError>;
+
+    /// Liste les stages en `healing` dont la dernière mise à jour est
+    /// antérieure à `cutoff` (heals perdus ou bloqués → watchdog).
+    async fn list_stale_healing_stages(
+        &self,
+        cutoff: DateTime<Utc>,
+    ) -> Result<Vec<PipelineStage>, DomainError>;
+
+    /// Finalise atomiquement un pipeline encore `queued`/`running`.
+    ///
+    /// Retourne `true` si **cet appel** a effectué la transition — seul
+    /// l'appelant gagnant annonce la fin (commit status + webhook
+    /// `pipeline_completed`). Protège contre la double annonce quand le
+    /// runner, le `KageBunshinConsumer` et le watchdog se croisent.
+    async fn complete_pipeline(
+        &self,
+        id: &Uuid,
+        status: PipelineStatus,
+        finished_at: DateTime<Utc>,
+        duration_ms: Option<i32>,
+    ) -> Result<bool, DomainError>;
 }
 

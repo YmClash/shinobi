@@ -62,7 +62,19 @@ impl PipelineRepository for PostgresPipelineRepo {
         .bind(pipeline.updated_at)
         .fetch_one(&self.pool)
         .await
-        .map_err(|e| DomainError::Persistence(format!("pipeline create: {e}")))?;
+        .map_err(|e| {
+            // Phase 42-pre-Fix : l'index unique partiel (migration 032) rejette
+            // un 2e pipeline auto pour le même (repo, commit, trigger).
+            if let sqlx::Error::Database(db) = &e {
+                if db.is_unique_violation() {
+                    return DomainError::Duplicate(format!(
+                        "pipeline déjà existant pour commit {} (trigger {})",
+                        pipeline.commit_id, pipeline.trigger_event
+                    ));
+                }
+            }
+            DomainError::Persistence(format!("pipeline create: {e}"))
+        })?;
 
         Ok(row.into_domain())
     }
@@ -390,6 +402,110 @@ impl PipelineRepository for PostgresPipelineRepo {
         .map_err(|e| DomainError::Persistence(format!("heal_attempt update mr_id: {e}")))?;
 
         Ok(())
+    }
+
+    // ── Phase 42-pre-Fix — Kage Bunshin V2 ──────────────────────────────
+
+    async fn exists_for_commit(
+        &self,
+        repository_id: &Uuid,
+        commit_id: &str,
+        trigger_event: &TriggerEvent,
+    ) -> Result<bool, DomainError> {
+        // Couvert par idx_pipelines_repo_commit (029) — pas de LIMIT ni de fenêtre.
+        let exists: bool = sqlx::query_scalar(
+            r#"
+            SELECT EXISTS (
+                SELECT 1 FROM pipelines
+                WHERE repository_id = $1 AND commit_id = $2 AND trigger_event = $3
+            )
+            "#,
+        )
+        .bind(repository_id)
+        .bind(commit_id)
+        .bind(trigger_event.as_sql_str())
+        .fetch_one(&self.pool)
+        .await
+        .map_err(|e| DomainError::Persistence(format!("pipeline exists_for_commit: {e}")))?;
+
+        Ok(exists)
+    }
+
+    async fn transition_stage_status(
+        &self,
+        id: &Uuid,
+        from: PipelineStageStatus,
+        to: PipelineStageStatus,
+        finished_at: Option<DateTime<Utc>>,
+    ) -> Result<bool, DomainError> {
+        let result = sqlx::query(
+            r#"
+            UPDATE pipeline_stages
+            SET status = $3,
+                finished_at = COALESCE($4, finished_at),
+                updated_at = NOW()
+            WHERE id = $1 AND status = $2
+            "#,
+        )
+        .bind(id)
+        .bind(from.as_sql_str())
+        .bind(to.as_sql_str())
+        .bind(finished_at)
+        .execute(&self.pool)
+        .await
+        .map_err(|e| DomainError::Persistence(format!("pipeline_stage transition: {e}")))?;
+
+        Ok(result.rows_affected() == 1)
+    }
+
+    async fn list_stale_healing_stages(
+        &self,
+        cutoff: DateTime<Utc>,
+    ) -> Result<Vec<PipelineStage>, DomainError> {
+        let rows = sqlx::query_as::<_, PipelineStageRow>(
+            r#"
+            SELECT id, pipeline_id, name, image, status, sort_order,
+                   started_at, finished_at, duration_ms, logs, exit_code,
+                   created_at, updated_at
+            FROM pipeline_stages
+            WHERE status = 'healing' AND updated_at < $1
+            ORDER BY updated_at ASC
+            "#,
+        )
+        .bind(cutoff)
+        .fetch_all(&self.pool)
+        .await
+        .map_err(|e| DomainError::Persistence(format!("pipeline_stage list_stale_healing: {e}")))?;
+
+        Ok(rows.into_iter().map(|r| r.into_domain()).collect())
+    }
+
+    async fn complete_pipeline(
+        &self,
+        id: &Uuid,
+        status: PipelineStatus,
+        finished_at: DateTime<Utc>,
+        duration_ms: Option<i32>,
+    ) -> Result<bool, DomainError> {
+        let result = sqlx::query(
+            r#"
+            UPDATE pipelines
+            SET status = $2,
+                finished_at = $3,
+                duration_ms = COALESCE($4, duration_ms),
+                updated_at = NOW()
+            WHERE id = $1 AND status IN ('queued', 'running')
+            "#,
+        )
+        .bind(id)
+        .bind(status.as_sql_str())
+        .bind(finished_at)
+        .bind(duration_ms)
+        .execute(&self.pool)
+        .await
+        .map_err(|e| DomainError::Persistence(format!("pipeline complete: {e}")))?;
+
+        Ok(result.rows_affected() == 1)
     }
 }
 

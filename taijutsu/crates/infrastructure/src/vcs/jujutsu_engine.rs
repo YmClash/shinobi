@@ -942,6 +942,12 @@ fn copy_dir_recursive(src: &std::path::Path, dst: &std::path::Path) -> Result<()
 
 #[async_trait]
 impl VcsEngine for JujutsuEngine {
+    /// Phase 42-pre-Fix — délègue à la méthode inhérente `reload_repo`
+    /// (rechargement + `jj_lib::git::import_refs`), comme le Sync Hook.
+    async fn import_git_refs(&self, repo_id: &Uuid) -> Result<(), DomainError> {
+        JujutsuEngine::reload_repo(self, repo_id).await
+    }
+
     #[instrument(skip(self))]
     async fn init_workspace(&self, owner_id: &Uuid, repo_id: &Uuid) -> Result<(), DomainError> {
         let workspace_path = self.repo_path(owner_id, repo_id);

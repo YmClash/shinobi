@@ -249,6 +249,37 @@ impl MergeMrUseCase {
             }),
         );
 
+        // Phase 42-pre-Fix — Déclencher Jutsu sur le commit fusionné.
+        // Le merge écrit directement dans le store (pas de git-receive-pack),
+        // donc le Sync Hook ne voit rien : sans ceci, merger la MR Sensei ne
+        // relançait aucun pipeline (boucle Fail-Fast cassée).
+        // Fire-and-forget, non-fatal, même règle que le push : jutsu.yml requis.
+        if let Some(publisher) = self.event_publisher.clone() {
+            let vcs = self.vcs.clone();
+            let repo_id = mr.repository_id;
+            let commit_sha = merge_cid.as_str().to_string();
+            tokio::spawn(async move {
+                if vcs.read_blob(&repo_id, &commit_sha, "jutsu.yml").await.is_err() {
+                    return; // pas de CI configurée
+                }
+                match publisher
+                    .publish_pipeline_requested(repo_id, &commit_sha, "push", None)
+                    .await
+                {
+                    Ok(()) => info!(
+                        repo_id = %repo_id,
+                        commit_sha = %commit_sha,
+                        "🥷 Pipeline CI/CD déclenché après merge (jutsu.yml détecté)"
+                    ),
+                    Err(e) => warn!(
+                        repo_id = %repo_id,
+                        error = %e,
+                        "⚠️ Pipeline post-merge non déclenché (non-fatal)"
+                    ),
+                }
+            });
+        }
+
         Ok(MergeResult {
             merge_commit_id: merge_cid.to_string(),
         })

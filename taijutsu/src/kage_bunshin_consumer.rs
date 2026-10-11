@@ -24,11 +24,18 @@
 //! - 1 worker par défaut (inférence LLM séquentielle)
 //! - Workspace éphémère via `tempfile::TempDir`
 //! - Graceful shutdown via `CancellationToken`
+//!
+//! ## Kage Bunshin V2 — Fiabilisation (Phase 42-pre-Fix)
+//! - `auto.offset.reset = earliest` : le topic est auto-créé au 1er publish,
+//!   `latest` faisait sauter les premières demandes (pipeline bloqué à vie).
+//! - **Claim atomique** (`Healing → Healing`) avant tout travail : ignore les
+//!   replays / heals déjà traités ou expirés, et sert de heartbeat watchdog.
+//! - Toute issue (succès, échec, abandon) passe par
+//!   `FinalizePipelineUseCase::resolve_heal` → commit status + webhook.
 
 use std::path::PathBuf;
 use std::sync::Arc;
 
-use chrono::Utc;
 use rdkafka::config::ClientConfig;
 use rdkafka::consumer::{CommitMode, Consumer, StreamConsumer};
 use rdkafka::message::Message;
@@ -36,6 +43,7 @@ use tokio_util::sync::CancellationToken;
 use tracing::{error, info, warn};
 use uuid::Uuid;
 
+use application::use_cases::finalize_pipeline::{FinalizePipelineUseCase, FinalizedBy};
 use application::use_cases::kage_bunshin::KageBunshinUseCase;
 use domain::entities::actor::{Actor, SENSEI_ACTOR_HANDLE, SYSTEM_ACTOR_ID};
 use domain::entities::kage_bunshin::HealResult;
@@ -45,7 +53,7 @@ use domain::ports::mr_repository::MrRepository;
 use domain::ports::pipeline_repository::PipelineRepository;
 use domain::ports::vcs_engine::VcsEngine;
 use domain::ports::repo_repository::RepoRepository;
-use domain::entities::pipeline::{PipelineStageStatus, PipelineStatus};
+use domain::entities::pipeline::PipelineStageStatus;
 
 /// Message reçu depuis Kafka pour déclencher un Kage Bunshin.
 #[derive(Debug, Clone)]
@@ -79,7 +87,11 @@ impl KageBunshinConsumer {
         let consumer: StreamConsumer = ClientConfig::new()
             .set("bootstrap.servers", brokers)
             .set("group.id", group)
-            .set("auto.offset.reset", "latest")
+            // Phase 42-pre-Fix : `earliest` (ne s'applique que sans offset commité).
+            // Le topic étant auto-créé au 1er publish, `latest` sautait les
+            // premières demandes de heal. Les replays sont neutralisés par le
+            // claim atomique dans `process_request`.
+            .set("auto.offset.reset", "earliest")
             .set("enable.auto.commit", "false")
             .create()
             .map_err(|e| {
@@ -110,9 +122,11 @@ impl KageBunshinConsumer {
     }
 
     /// Lance la boucle de consommation avec un pool de workers.
+    #[allow(clippy::too_many_arguments)]
     pub async fn run(
         self,
         kage_bunshin_uc: Arc<KageBunshinUseCase>,
+        finalizer: Arc<FinalizePipelineUseCase>,
         pipeline_repo: Arc<dyn PipelineRepository>,
         vcs_engine: Arc<dyn VcsEngine>,
         repo_repo: Arc<dyn RepoRepository>,
@@ -128,6 +142,7 @@ impl KageBunshinConsumer {
         for worker_id in 0..worker_count {
             let rx = rx.clone();
             let kage_bunshin_uc = kage_bunshin_uc.clone();
+            let finalizer = finalizer.clone();
             let pipeline_repo = pipeline_repo.clone();
             let vcs_engine = vcs_engine.clone();
             let repo_repo = repo_repo.clone();
@@ -154,6 +169,7 @@ impl KageBunshinConsumer {
                         worker_id,
                         &request,
                         &kage_bunshin_uc,
+                        &finalizer,
                         &*pipeline_repo,
                         &*vcs_engine,
                         &*repo_repo,
@@ -253,14 +269,18 @@ impl KageBunshinConsumer {
     /// Traite une demande Kage Bunshin individuelle.
     ///
     /// Flow :
+    /// 0. **Claim atomique** du stage (`Healing → Healing`) — sinon ignorer
     /// 1. Résoudre le repository depuis la BDD
     /// 2. Checkout le code dans un workspace éphémère
     /// 3. Appeler KageBunshinUseCase::attempt_heal()
-    /// 4. Nettoyer le workspace (Tweak #9)
+    /// 4. Résoudre le heal via `FinalizePipelineUseCase` (CAS + annonce)
+    /// 5. Nettoyer le workspace (Tweak #9)
+    #[allow(clippy::too_many_arguments)]
     async fn process_request(
         worker_id: usize,
         request: &KageBunshinRequest,
         kage_bunshin_uc: &KageBunshinUseCase,
+        finalizer: &FinalizePipelineUseCase,
         pipeline_repo: &dyn PipelineRepository,
         vcs_engine: &dyn VcsEngine,
         repo_repo: &dyn RepoRepository,
@@ -275,6 +295,24 @@ impl KageBunshinConsumer {
             "🥷 KageBunshin Worker — traitement heal"
         );
 
+        // ── Phase 42-pre-Fix — Garde d'idempotence (claim atomique) ──
+        match finalizer.claim_heal(&request.stage_id).await {
+            Ok(true) => {}
+            Ok(false) => {
+                info!(
+                    worker_id,
+                    pipeline_id = %request.pipeline_id,
+                    stage = %request.stage_name,
+                    "🥷⏭️ Demande ignorée — stage plus en guérison (replay, déjà traité ou expiré)"
+                );
+                return;
+            }
+            Err(e) => {
+                warn!(error = %e, "⚠️ Claim du heal impossible — le watchdog prendra le relais");
+                return;
+            }
+        }
+
         // 0. Résoudre le repository
         let repository = match repo_repo.find_by_id(&request.repository_id).await {
             Ok(Some(r)) => r,
@@ -283,7 +321,7 @@ impl KageBunshinConsumer {
                     repo_id = %request.repository_id,
                     "⚠️ Repository introuvable — heal abandonné"
                 );
-                Self::mark_stage_failed(pipeline_repo, &request.stage_id, "Repository not found").await;
+                Self::abandon_heal(finalizer, request, "Repository not found").await;
                 return;
             }
             Err(e) => {
@@ -292,7 +330,7 @@ impl KageBunshinConsumer {
                     error = %e,
                     "⚠️ Erreur BDD — heal abandonné"
                 );
-                Self::mark_stage_failed(pipeline_repo, &request.stage_id, &format!("DB error: {e}")).await;
+                Self::abandon_heal(finalizer, request, &format!("DB error: {e}")).await;
                 return;
             }
         };
@@ -303,7 +341,7 @@ impl KageBunshinConsumer {
                 error = %e,
                 "⚠️ Impossible d'initialiser le workspace VCS — heal abandonné"
             );
-            Self::mark_stage_failed(pipeline_repo, &request.stage_id, &format!("VCS init failed: {e}")).await;
+            Self::abandon_heal(finalizer, request, &format!("VCS init failed: {e}")).await;
             return;
         }
 
@@ -312,7 +350,7 @@ impl KageBunshinConsumer {
             Ok(d) => d,
             Err(e) => {
                 error!(error = %e, "❌ Impossible de créer le répertoire temporaire shadow");
-                Self::mark_stage_failed(pipeline_repo, &request.stage_id, &format!("TempDir failed: {e}")).await;
+                Self::abandon_heal(finalizer, request, &format!("TempDir failed: {e}")).await;
                 return;
             }
         };
@@ -326,7 +364,7 @@ impl KageBunshinConsumer {
                 error = %e,
                 "❌ Impossible de matérialiser le code dans le shadow workspace"
             );
-            Self::mark_stage_failed(pipeline_repo, &request.stage_id, &format!("Checkout failed: {e}")).await;
+            Self::abandon_heal(finalizer, request, &format!("Checkout failed: {e}")).await;
             return;
         }
 
@@ -355,50 +393,93 @@ impl KageBunshinConsumer {
                     "🥷✅ Kage Bunshin SUCCESS — heal réussi"
                 );
 
-                // Mettre à jour le stage → Healed
-                if let Err(e) = pipeline_repo
-                    .update_stage_status(
-                        &request.stage_id,
-                        domain::entities::pipeline::PipelineStageStatus::Healed,
-                        None,
-                        Some(chrono::Utc::now()),
-                        None,
+                // Phase 42-pre-Fix : re-claim (heartbeat) juste avant la MR —
+                // si le watchdog a expiré le heal entre-temps, on n'ouvre pas
+                // de MR pour un pipeline déjà finalisé.
+                if !matches!(finalizer.claim_heal(&request.stage_id).await, Ok(true)) {
+                    warn!(
+                        pipeline_id = %request.pipeline_id,
+                        stage = %request.stage_name,
+                        "⏰ Heal terminé après expiration (watchdog) — MR non créée"
+                    );
+                } else {
+                    // Phase 42-pre-Fix : publier RÉELLEMENT la branche shadow
+                    // (commit du patch + push dans le store Git + import jj).
+                    // Avant ce fix, seul le NOM de branche existait → MR
+                    // fantôme (merge 500, « Files Changed » vide).
+                    let published = Self::publish_shadow_branch(
+                        request,
+                        &shadow_branch,
+                        &diagnosis,
+                        &temp_path,
+                        vcs_engine,
+                        pipeline_repo,
                     )
-                    .await
-                {
-                    warn!(error = %e, "⚠️ Impossible de mettre à jour le stage status → Healed");
-                }
+                    .await;
 
-                // Phase 41-A4 : Créer la MR auto (Vegapunk Tweak #11)
-                match Self::create_heal_mr(
-                    request,
-                    &shadow_branch,
-                    &diagnosis,
-                    mr_repo,
-                    actor_repo,
-                    pipeline_repo,
-                ).await {
-                    Ok(mr) => {
-                        info!(
-                            mr_id = %mr.id,
-                            mr_number = mr.number,
-                            source = %mr.source_branch,
-                            target = %mr.target_branch,
-                            author = %SENSEI_ACTOR_HANDLE,
-                            "🥷✨ MR auto-heal #{} créée par Sensei (Phase 41-A4)",
-                            mr.number
-                        );
-                    }
-                    Err(e) => {
-                        warn!(
-                            error = %e,
-                            "⚠️ MR auto-heal non créée (le heal a quand même réussi)"
-                        );
-                    }
-                }
+                    let note = match published {
+                        Err(e) => {
+                            warn!(
+                                error = %e,
+                                branch = %shadow_branch,
+                                "⚠️ Branche shadow non publiée — MR non créée"
+                            );
+                            format!(
+                                "[kage-bunshin] ✅ Heal réussi — branche {shadow_branch} non publiée, MR non créée : {e}"
+                            )
+                        }
+                        Ok(sha) => {
+                            info!(
+                                branch = %shadow_branch,
+                                sha = %sha,
+                                "🌿 Branche shadow publiée dans le dépôt"
+                            );
+                            // Phase 41-A4 : Créer la MR auto (Vegapunk Tweak #11)
+                            match Self::create_heal_mr(
+                                request,
+                                &shadow_branch,
+                                &diagnosis,
+                                mr_repo,
+                                actor_repo,
+                                pipeline_repo,
+                            ).await {
+                                Ok(mr) => {
+                                    info!(
+                                        mr_id = %mr.id,
+                                        mr_number = mr.number,
+                                        source = %mr.source_branch,
+                                        target = %mr.target_branch,
+                                        author = %SENSEI_ACTOR_HANDLE,
+                                        "🥷✨ MR auto-heal #{} créée par Sensei (Phase 41-A4)",
+                                        mr.number
+                                    );
+                                    format!(
+                                        "[kage-bunshin] ✅ Correctif proposé par Sensei : MR #{} (branche {})",
+                                        mr.number, shadow_branch
+                                    )
+                                }
+                                Err(e) => {
+                                    warn!(
+                                        error = %e,
+                                        "⚠️ MR auto-heal non créée (le heal a quand même réussi)"
+                                    );
+                                    format!(
+                                        "[kage-bunshin] ✅ Heal réussi (branche {shadow_branch}) — MR non créée : {e}"
+                                    )
+                                }
+                            }
+                        }
+                    };
 
-                // VP-13: Finaliser le statut du pipeline après le heal
-                Self::finalize_pipeline_after_heal(pipeline_repo, &request.pipeline_id).await;
+                    // Stage → Healed + finalisation (commit status + webhook)
+                    Self::resolve(
+                        finalizer,
+                        request,
+                        PipelineStageStatus::Healed,
+                        &note,
+                    )
+                    .await;
+                }
             }
             Ok(HealResult::Failed { diagnosis, reason }) => {
                 warn!(
@@ -411,10 +492,7 @@ impl KageBunshinConsumer {
                 );
 
                 // Remettre le stage → Failure (le heal n'a pas marché)
-                Self::mark_stage_failed(pipeline_repo, &request.stage_id, &reason).await;
-
-                // VP-13: Finaliser le statut du pipeline après le heal
-                Self::finalize_pipeline_after_heal(pipeline_repo, &request.pipeline_id).await;
+                Self::abandon_heal(finalizer, request, &format!("heal échoué — {reason}")).await;
             }
             Err(e) => {
                 error!(
@@ -423,10 +501,7 @@ impl KageBunshinConsumer {
                     error = %e,
                     "❌ KageBunshin — erreur inattendue"
                 );
-                Self::mark_stage_failed(pipeline_repo, &request.stage_id, &format!("Internal error: {e}")).await;
-
-                // VP-13: Finaliser le statut du pipeline apr\u{00e8}s le heal
-                Self::finalize_pipeline_after_heal(pipeline_repo, &request.pipeline_id).await;
+                Self::abandon_heal(finalizer, request, &format!("Internal error: {e}")).await;
             }
             Ok(HealResult::Skipped) => {
                 info!(
@@ -435,10 +510,7 @@ impl KageBunshinConsumer {
                     stage = %request.stage_name,
                     "🥷⏭️ Kage Bunshin SKIPPED — kage_bunshin non actif pour ce stage"
                 );
-                Self::mark_stage_failed(pipeline_repo, &request.stage_id, "Kage Bunshin skipped").await;
-
-                // VP-13: Finaliser le statut du pipeline apr\u{00e8}s le heal
-                Self::finalize_pipeline_after_heal(pipeline_repo, &request.pipeline_id).await;
+                Self::abandon_heal(finalizer, request, "Kage Bunshin skipped").await;
             }
         }
 
@@ -465,101 +537,143 @@ impl KageBunshinConsumer {
         );
     }
 
-    /// Marque un stage comme Failure après l'échec du heal.
-    async fn mark_stage_failed(
-        pipeline_repo: &dyn PipelineRepository,
-        stage_id: &Uuid,
-        _reason: &str,
+    // ── Phase 42-pre-Fix : résolution unifiée du heal ────────────────────
+
+    /// Heal abandonné/échoué → stage `failure` + finalisation du pipeline.
+    ///
+    /// Remplace l'ancien `mark_stage_failed` qui ne finalisait pas le
+    /// pipeline sur les chemins d'abandon (pipeline bloqué « running »).
+    async fn abandon_heal(
+        finalizer: &FinalizePipelineUseCase,
+        request: &KageBunshinRequest,
+        reason: &str,
     ) {
-        if let Err(e) = pipeline_repo
-            .update_stage_status(
-                stage_id,
-                PipelineStageStatus::Failure,
-                None,
-                Some(Utc::now()),
-                None,
+        let note = format!("[kage-bunshin] ❌ {reason}");
+        Self::resolve(finalizer, request, PipelineStageStatus::Failure, &note).await;
+    }
+
+    /// Résout le heal via le finaliseur (CAS `Healing → outcome` + annonce).
+    async fn resolve(
+        finalizer: &FinalizePipelineUseCase,
+        request: &KageBunshinRequest,
+        outcome: PipelineStageStatus,
+        note: &str,
+    ) {
+        match finalizer
+            .resolve_heal(
+                &request.pipeline_id,
+                &request.stage_id,
+                outcome,
+                Some(note),
+                FinalizedBy::KageBunshin,
             )
             .await
         {
-            warn!(error = %e, "⚠️ Impossible de mettre à jour le stage → Failure après heal échoué");
+            Ok(true) => {}
+            Ok(false) => info!(
+                pipeline_id = %request.pipeline_id,
+                stage = %request.stage_name,
+                "🥷 Heal déjà résolu (watchdog) — résultat ignoré"
+            ),
+            Err(e) => warn!(
+                pipeline_id = %request.pipeline_id,
+                error = %e,
+                "⚠️ Résolution du heal échouée — le watchdog prendra le relais"
+            ),
         }
     }
 
-    // ── VP-13 : Finalisation du pipeline après heal ──────────────────────
+    // ── Phase 42-pre-Fix : publication de la branche shadow ──────────────
 
-    /// Recalcule le statut du pipeline après la fin d'un heal.
+    /// Commit le patch du shadow workspace et le pousse dans le store Git
+    /// du dépôt sous `refs/heads/<shadow_branch>`, puis importe les refs
+    /// dans jj. Retourne le SHA du commit publié.
     ///
-    /// Le pipeline avait été maintenu en "running" par VP-13 tant que
-    /// des stages étaient en `Healing`. Cette méthode vérifie si
-    /// tous les stages ont atteint un état terminal et calcule le
-    /// statut final du pipeline.
-    ///
-    /// États terminaux : success, failure, error, skipped, healed
-    /// États non-terminaux : pending, running, healing
-    async fn finalize_pipeline_after_heal(
+    /// Seuls les fichiers touchés par les hunks sont indexés : le shadow
+    /// re-run Docker peut avoir modifié d'autres fichiers suivis
+    /// (ex : `Cargo.lock`) qui ne font pas partie du correctif.
+    async fn publish_shadow_branch(
+        request: &KageBunshinRequest,
+        shadow_branch: &str,
+        diagnosis: &str,
+        workspace: &std::path::Path,
+        vcs_engine: &dyn VcsEngine,
         pipeline_repo: &dyn PipelineRepository,
-        pipeline_id: &Uuid,
-    ) {
-        // Récupérer tous les stages du pipeline
-        let stages = match pipeline_repo.list_stages(pipeline_id).await {
-            Ok(s) => s,
-            Err(e) => {
-                warn!(error = %e, "VP-13: Impossible de lister les stages pour finaliser le pipeline");
-                return;
-            }
-        };
-
-        // Vérifier s'il reste des stages non-terminaux
-        let has_healing = stages.iter().any(|s| s.status == PipelineStageStatus::Healing);
-        let has_running = stages.iter().any(|s| {
-            s.status == PipelineStageStatus::Running || s.status == PipelineStageStatus::Pending
-        });
-
-        if has_healing || has_running {
-            // Il reste des stages en cours — ne pas finaliser encore
-            info!(
-                pipeline_id = %pipeline_id,
-                healing = has_healing,
-                running = has_running,
-                "🥷 Pipeline pas encore finalisé — stages en cours"
-            );
-            return;
-        }
-
-        // Tous les stages sont terminés — calculer le statut final
-        let has_failure = stages.iter().any(|s| {
-            s.status == PipelineStageStatus::Failure || s.status == PipelineStageStatus::Error
-        });
-        let has_error = stages.iter().any(|s| s.status == PipelineStageStatus::Error);
-
-        let final_status = if has_error {
-            PipelineStatus::Error
-        } else if has_failure {
-            PipelineStatus::Failure
-        } else {
-            // Tous les stages sont success/healed/skipped
-            PipelineStatus::Success
-        };
-
-        info!(
-            pipeline_id = %pipeline_id,
-            final_status = ?final_status,
-            "🥷 VP-13: Pipeline finalisé après heal → {:?}",
-            final_status
-        );
-
-        if let Err(e) = pipeline_repo
-            .update_status(
-                pipeline_id,
-                final_status,
-                None,
-                Some(Utc::now()),
-                None,
-            )
+    ) -> Result<String, String> {
+        // Chemins des hunks (tentative la plus récente pour ce stage — Tri Temporel)
+        let mut paths: Vec<String> = pipeline_repo
+            .list_heal_attempts(&request.pipeline_id)
             .await
-        {
-            warn!(error = %e, "VP-13: Impossible de finaliser le statut du pipeline");
-        }
+            .ok()
+            .and_then(|attempts| {
+                attempts
+                    .into_iter()
+                    .find(|a| a.stage_name == request.stage_name)
+                    .map(|a| a.hunks.into_iter().map(|h| h.path).collect())
+            })
+            .unwrap_or_default();
+        paths.sort();
+        paths.dedup();
+
+        let first_line = diagnosis.lines().next().unwrap_or("").chars().take(120).collect::<String>();
+        let message = format!(
+            "fix({}): auto-heal Kage Bunshin\n\n{}\n\nPipeline: {}\nCo-authored-by: {} <{}@jjshinobi.dev>",
+            request.stage_name, first_line, request.pipeline_id, SENSEI_ACTOR_HANDLE, SENSEI_ACTOR_HANDLE
+        );
+        let refspec = format!("HEAD:refs/heads/{shadow_branch}");
+        let workspace = workspace.to_path_buf();
+
+        let sha = tokio::task::spawn_blocking(move || -> Result<String, String> {
+            let git = |args: &[&str]| -> Result<String, String> {
+                let out = std::process::Command::new("git")
+                    .args(args)
+                    .current_dir(&workspace)
+                    .output()
+                    .map_err(|e| format!("git {}: {e}", args.first().unwrap_or(&"")))?;
+                if !out.status.success() {
+                    return Err(format!(
+                        "git {} a échoué : {}",
+                        args.first().unwrap_or(&""),
+                        String::from_utf8_lossy(&out.stderr).trim()
+                    ));
+                }
+                Ok(String::from_utf8_lossy(&out.stdout).trim().to_string())
+            };
+
+            // 1. Indexer le correctif
+            if paths.is_empty() {
+                git(&["add", "-u"])?;
+            } else {
+                let mut args = vec!["add", "--"];
+                args.extend(paths.iter().map(String::as_str));
+                git(&args)?;
+            }
+
+            // 2. Commit (identité Sensei, sans hooks ni signature)
+            let author = format!("user.email={SENSEI_ACTOR_HANDLE}@jjshinobi.dev");
+            let name = format!("user.name={SENSEI_ACTOR_HANDLE}");
+            git(&[
+                "-c", &name,
+                "-c", &author,
+                "-c", "commit.gpgsign=false",
+                "commit", "--no-verify", "-m", &message,
+            ])?;
+
+            // 3. Push vers le store Git du dépôt (origin = clone --shared)
+            git(&["push", "--no-verify", "origin", &refspec])?;
+
+            git(&["rev-parse", "HEAD"])
+        })
+        .await
+        .map_err(|e| format!("spawn_blocking join error: {e}"))??;
+
+        // 4. Rendre la branche visible pour jj (MR diff / merge)
+        vcs_engine
+            .import_git_refs(&request.repository_id)
+            .await
+            .map_err(|e| format!("import des refs jj échoué : {e}"))?;
+
+        Ok(sha)
     }
 
     // ── Phase 41-A4 : MR Auto-Healing (Vegapunk Tweak #11) ────────────

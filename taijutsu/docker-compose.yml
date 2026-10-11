@@ -65,6 +65,11 @@ services:
   ipfs:
     image: ipfs/kubo:latest
     container_name: shinobi-ipfs
+    # Phase 42-pre-Fix : redémarrage auto (le nœud était resté Exited(1)
+    # après un verrou repo.lock orphelin, sans que personne ne le voie).
+    # ⚠️ Ne jamais lancer `ipfs` en root via `docker exec` : les fichiers
+    # créés en root (uid 0) bloquent le démon (uid 1000) au démarrage.
+    restart: unless-stopped
     ports:
       - "4001:4001" # Swarm P2P
       - "127.0.0.1:5001:5001" # RPC API (localhost only — sécurité)

@@ -11,6 +11,7 @@
 mod config;
 mod jutsu_consumer;
 mod kage_bunshin_consumer;
+mod kage_bunshin_watchdog; // Phase 42-pre-Fix
 
 use std::net::SocketAddr;
 use std::sync::Arc;
@@ -592,17 +593,32 @@ async fn main() -> anyhow::Result<()> {
         }
     };
 
+    // ── Phase 42-pre-Fix — Finalisation unifiée des pipelines ────────────
+    // Point unique partagé par le runner, le KageBunshinConsumer et le
+    // watchdog : CAS BDD + commit status + webhook `pipeline_completed`.
+    let finalize_pipeline = Arc::new(
+        application::use_cases::finalize_pipeline::FinalizePipelineUseCase::new(
+            pipeline_repo.clone(),
+            manage_commit_statuses.clone()
+                as Arc<dyn application::use_cases::finalize_pipeline::CommitStatusReporter>,
+            event_publisher.clone().map(|p| p as Arc<dyn domain::ports::event_publisher::EventPublisher>),
+        ),
+    );
+
     // ── Phase 40+41 — RunPipelineUseCase ────────────────────────────────
     // Construit APRÈS event_publisher car il a besoin du publisher pour
     // déclencher le Kage Bunshin sur la file Kafka dédiée (Phase 41).
+    // Phase 42-pre-Fix : pas de heal si aucun LLM n'est routé pour le
+    // Kage Bunshin (sinon la demande ne serait jamais consommée).
+    let kage_bunshin_active = config.kage_bunshin_enabled && kage_bunshin_llm.is_some();
     let run_pipeline = container_runner.as_ref().map(|runner| {
         Arc::new(
             application::use_cases::run_pipeline::RunPipelineUseCase::new(
                 pipeline_repo.clone(),
                 runner.clone(),
-                manage_commit_statuses.clone(),
+                finalize_pipeline.clone(),
                 event_publisher.clone().map(|p| p as Arc<dyn domain::ports::event_publisher::EventPublisher>),
-                config.kage_bunshin_enabled,
+                kage_bunshin_active,
                 std::time::Duration::from_secs(config.jutsu_stage_timeout_secs),
                 std::time::Duration::from_secs(config.jutsu_pipeline_timeout_secs),
             ),
@@ -1058,6 +1074,7 @@ async fn main() -> anyhow::Result<()> {
                         vcs_for_jutsu,
                         repo_repo.clone()
                             as Arc<dyn domain::ports::repo_repository::RepoRepository>,
+                        pipeline_repo.clone(), // Phase 42-pre-Fix : garde d'idempotence
                         workspace_root,
                         worker_count,
                     ));
@@ -1101,6 +1118,7 @@ async fn main() -> anyhow::Result<()> {
 
                     tokio::spawn(consumer.run(
                         kage_bunshin_uc,
+                        finalize_pipeline.clone(), // Phase 42-pre-Fix
                         pipeline_repo.clone(),
                         vcs_for_kb,
                         repo_repo.clone()
@@ -1125,6 +1143,15 @@ async fn main() -> anyhow::Result<()> {
     } else {
         info!("ℹ️ Kage Bunshin désactivé par configuration (KAGE_BUNSHIN_ENABLED=false)");
     }
+
+    // ── Phase 42-pre-Fix : Watchdog Kage Bunshin ───────────────────────
+    // Toujours actif : expire aussi les heals orphelins hérités d'un
+    // redémarrage ou d'un consumer indisponible (pipeline « running » à vie).
+    tokio::spawn(kage_bunshin_watchdog::run(
+        finalize_pipeline.clone(),
+        std::time::Duration::from_secs(config.kage_bunshin_heal_timeout_secs),
+        cancel_token.clone(),
+    ));
 
     // ── Serveur Tonic (gRPC / Ninpo) ───────────────
     let grpc_addr = SocketAddr::from(([0, 0, 0, 0], config.grpc_port));

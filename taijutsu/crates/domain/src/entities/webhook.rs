@@ -114,6 +114,8 @@ pub enum WebhookEventType {
     IssueComment,
     /// Phase 34-V3 — Checkpoint ANBU (preuve de provenance IA).
     AnbuCheckpoint,
+    /// Phase 42-pre-Fix — Pipeline Jutsu terminé (runner, Kage Bunshin ou watchdog).
+    PipelineCompleted,
 }
 
 impl WebhookEventType {
@@ -128,6 +130,7 @@ impl WebhookEventType {
             Self::IssueClosed => "issue_closed",
             Self::IssueComment => "issue_comment",
             Self::AnbuCheckpoint => "anbu_checkpoint",
+            Self::PipelineCompleted => "pipeline_completed",
         }
     }
 
@@ -142,6 +145,7 @@ impl WebhookEventType {
             "issue_closed" => Some(Self::IssueClosed),
             "issue_comment" => Some(Self::IssueComment),
             "anbu_checkpoint" => Some(Self::AnbuCheckpoint),
+            "pipeline_completed" => Some(Self::PipelineCompleted),
             _ => None,
         }
     }
@@ -159,6 +163,7 @@ impl WebhookEventType {
             Self::IssueClosed => "dev.jjshinobi.issue.closed",
             Self::IssueComment => "dev.jjshinobi.issue.commented",
             Self::AnbuCheckpoint => "dev.jjshinobi.anbu.checkpoint",
+            Self::PipelineCompleted => "dev.jjshinobi.pipeline.completed",
         }
     }
 
@@ -173,6 +178,7 @@ impl WebhookEventType {
             Self::IssueClosed,
             Self::IssueComment,
             Self::AnbuCheckpoint,
+            Self::PipelineCompleted,
         ]
     }
 }

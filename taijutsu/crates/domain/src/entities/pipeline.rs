@@ -128,6 +128,13 @@ impl PipelineStageStatus {
             Self::Healed => "healed",
         }
     }
+
+    /// Phase 42-pre-Fix — `true` si le stage a atteint un état final.
+    ///
+    /// États non-terminaux : `pending`, `running`, `healing`.
+    pub fn is_terminal(&self) -> bool {
+        !matches!(self, Self::Pending | Self::Running | Self::Healing)
+    }
 }
 
 impl std::fmt::Display for PipelineStageStatus {
@@ -302,5 +309,75 @@ impl PipelineStage {
             created_at: now,
             updated_at: now,
         }
+    }
+}
+
+// ── Phase 42-pre-Fix — Statut final calculé à partir des stages ───────
+
+/// Calcule le statut final d'un pipeline à partir de ses stages.
+///
+/// Retourne `None` tant qu'un stage n'est pas terminal (pending/running/healing).
+///
+/// ## Règles (Kage Bunshin V2 — Fail-Fast)
+/// - au moins un stage `error` → `Error`
+/// - au moins un stage `failure` **ou `healed`** → `Failure`
+///   (un stage `healed` signifie que le correctif vit dans une MR du Sensei :
+///   le commit testé reste cassé. Le merge de la MR créera un nouveau commit
+///   et donc un nouveau pipeline propre.)
+/// - sinon (success/skipped) → `Success`
+pub fn compute_pipeline_status(stages: &[PipelineStage]) -> Option<PipelineStatus> {
+    if stages.iter().any(|s| !s.status.is_terminal()) {
+        return None;
+    }
+    if stages.iter().any(|s| s.status == PipelineStageStatus::Error) {
+        return Some(PipelineStatus::Error);
+    }
+    if stages.iter().any(|s| {
+        matches!(s.status, PipelineStageStatus::Failure | PipelineStageStatus::Healed)
+    }) {
+        return Some(PipelineStatus::Failure);
+    }
+    Some(PipelineStatus::Success)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn stage(status: PipelineStageStatus) -> PipelineStage {
+        let mut s = PipelineStage::new(Uuid::new_v4(), "s".into(), "img".into(), 0);
+        s.status = status;
+        s
+    }
+
+    #[test]
+    fn healing_stage_is_not_terminal() {
+        assert!(!PipelineStageStatus::Healing.is_terminal());
+        assert!(PipelineStageStatus::Healed.is_terminal());
+        assert!(PipelineStageStatus::Skipped.is_terminal());
+    }
+
+    #[test]
+    fn pending_heal_returns_none() {
+        let stages = vec![stage(PipelineStageStatus::Healing), stage(PipelineStageStatus::Skipped)];
+        assert_eq!(compute_pipeline_status(&stages), None);
+    }
+
+    #[test]
+    fn healed_pipeline_is_failure_fail_fast() {
+        let stages = vec![stage(PipelineStageStatus::Healed), stage(PipelineStageStatus::Skipped)];
+        assert_eq!(compute_pipeline_status(&stages), Some(PipelineStatus::Failure));
+    }
+
+    #[test]
+    fn error_wins_over_failure() {
+        let stages = vec![stage(PipelineStageStatus::Failure), stage(PipelineStageStatus::Error)];
+        assert_eq!(compute_pipeline_status(&stages), Some(PipelineStatus::Error));
+    }
+
+    #[test]
+    fn all_success_is_success() {
+        let stages = vec![stage(PipelineStageStatus::Success), stage(PipelineStageStatus::Success)];
+        assert_eq!(compute_pipeline_status(&stages), Some(PipelineStatus::Success));
     }
 }

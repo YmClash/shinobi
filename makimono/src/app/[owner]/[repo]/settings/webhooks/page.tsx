@@ -16,11 +16,13 @@ import { WebhookDeliveries } from "@/components/webhook/webhook-deliveries";
 
 // ── Event Category Mapping ───────────────────────────────────
 
-function eventCategory(ev: string): "git" | "mr" | "issue" | "anbu" {
+function eventCategory(ev: string): "git" | "mr" | "issue" | "anbu" | "jutsu" {
   if (ev === "push") return "git";
   if (ev.startsWith("mr_")) return "mr";
   if (ev.startsWith("issue_")) return "issue";
   if (ev === "anbu_checkpoint") return "anbu";
+  // Phase 42-pre-Fix — événements CI/CD Jutsu
+  if (ev.startsWith("pipeline_")) return "jutsu";
   return "git";
 }
 
@@ -34,6 +36,7 @@ function eventLabel(ev: string): string {
     issue_closed: "issue:closed",
     issue_comment: "issue:comment",
     anbu_checkpoint: "anbu:checkpoint",
+    pipeline_completed: "pipeline:completed",
   };
   return labels[ev] ?? ev;
 }

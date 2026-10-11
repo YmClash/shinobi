@@ -63,6 +63,68 @@ impl ManageCommitStatusesUseCase {
         description: Option<String>,
         target_url: Option<String>,
     ) -> Result<CommitStatus, DomainError> {
+        // ── 1-3. Valider state / context / commit_id ──
+        let status_state = Self::validate(commit_id, state, context)?;
+
+        // ── 4. Résoudre le dépôt via owner/name ──
+        let owner_actor = self
+            .actor_repo
+            .find_by_handle(owner)
+            .await?
+            .ok_or_else(|| DomainError::NotFound {
+                entity_type: "Actor",
+                id: Uuid::nil(),
+            })?;
+
+        let repo = self
+            .repo_repo
+            .find_by_owner_and_name(&owner_actor.id, repo_name)
+            .await?
+            .ok_or_else(|| DomainError::NotFound {
+                entity_type: "Repository",
+                id: Uuid::nil(),
+            })?;
+
+        // ── 5. Construire et upsert ──
+        self.upsert(actor_id, repo.id, commit_id, status_state, context, description, target_url)
+            .await
+    }
+
+    /// Phase 42-pre-Fix — Reporte un statut pour un dépôt connu par son UUID.
+    ///
+    /// Utilisé par les reporters **internes** (Jutsu Runner, Kage Bunshin,
+    /// watchdog) qui connaissent déjà le `repository_id` : évite la
+    /// résolution `owner/name` (source du bug « Repository [0000…] »).
+    pub async fn report_for_repository(
+        &self,
+        actor_id: Uuid,
+        repository_id: Uuid,
+        commit_id: &str,
+        state: &str,
+        context: &str,
+        description: Option<String>,
+    ) -> Result<CommitStatus, DomainError> {
+        let status_state = Self::validate(commit_id, state, context)?;
+
+        // Vérifier l'existence du dépôt (FK + message d'erreur explicite)
+        self.repo_repo
+            .find_by_id(&repository_id)
+            .await?
+            .ok_or(DomainError::NotFound {
+                entity_type: "Repository",
+                id: repository_id,
+            })?;
+
+        self.upsert(actor_id, repository_id, commit_id, status_state, context, description, None)
+            .await
+    }
+
+    /// Validation commune (state, context, commit_id).
+    fn validate(
+        commit_id: &str,
+        state: &str,
+        context: &str,
+    ) -> Result<CommitStatusState, DomainError> {
         // ── 1. Valider le state ──
         let status_state = CommitStatusState::from_sql(state)
             .ok_or_else(|| DomainError::BusinessRule(
@@ -93,28 +155,24 @@ impl ManageCommitStatusesUseCase {
             ));
         }
 
-        // ── 4. Résoudre le dépôt via owner/name ──
-        let owner_actor = self
-            .actor_repo
-            .find_by_handle(owner)
-            .await?
-            .ok_or_else(|| DomainError::NotFound {
-                entity_type: "Actor",
-                id: Uuid::nil(),
-            })?;
+        Ok(status_state)
+    }
 
-        let repo = self
-            .repo_repo
-            .find_by_owner_and_name(&owner_actor.id, repo_name)
-            .await?
-            .ok_or_else(|| DomainError::NotFound {
-                entity_type: "Repository",
-                id: Uuid::nil(),
-            })?;
-
-        // ── 5. Construire et upsert ──
+    /// Construit et upsert le statut.
+    #[allow(clippy::too_many_arguments)]
+    async fn upsert(
+        &self,
+        actor_id: Uuid,
+        repository_id: Uuid,
+        commit_id: &str,
+        status_state: CommitStatusState,
+        context: &str,
+        description: Option<String>,
+        target_url: Option<String>,
+    ) -> Result<CommitStatus, DomainError> {
+        let state_str = status_state.as_sql_str();
         let status = CommitStatus::new(
-            repo.id,
+            repository_id,
             commit_id.to_string(),
             context.to_string(),
             status_state,
@@ -126,10 +184,10 @@ impl ManageCommitStatusesUseCase {
         let result = self.commit_status_repo.upsert(&status).await?;
 
         info!(
-            repo_id = %repo.id,
+            repo_id = %repository_id,
             commit_id = %commit_id,
             context = %context,
-            state = %state,
+            state = %state_str,
             "🌉 Commit status upserted"
         );
 

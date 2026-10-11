@@ -105,6 +105,15 @@ pub trait VcsEngine: Send + Sync {
     /// Liste les changements depuis une opération donnée dans un dépôt.
     async fn diff_since(&self, repo_id: &Uuid, content_id: &ContentId) -> Result<Vec<String>, DomainError>;
 
+    /// Phase 42-pre-Fix — Resynchronise le graphe jj avec les refs Git
+    /// écrites directement dans le store (ex : branche shadow poussée par
+    /// le Kage Bunshin). Sans cet import, jj ignore la nouvelle branche.
+    ///
+    /// Implémentation par défaut no-op (mocks de test).
+    async fn import_git_refs(&self, _repo_id: &Uuid) -> Result<(), DomainError> {
+        Ok(())
+    }
+
     // ── Phase 6 — Explorateur de Code ────────────────────────────────
 
     /// Liste les entrées d'un répertoire à une révision donnée.

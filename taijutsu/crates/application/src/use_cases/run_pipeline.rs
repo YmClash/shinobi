@@ -18,6 +18,14 @@
 //! Le pipeline reporte automatiquement son statut via l'API Commit Status
 //! (context: `jutsu/<pipeline_name>`), ce qui affiche la pastille 🟢🔴🟡
 //! à côté du commit dans l'UI Makimono.
+//!
+//! ## Kage Bunshin V2 — Fail-Fast (Phase 42-pre-Fix)
+//! Dès qu'un stage passe en `healing`, **tous les stages suivants sont
+//! `skipped`** : un seul heal (donc une seule MR Sensei) par pipeline.
+//! Le commit status passe en `pending` pendant la guérison, puis le
+//! `KageBunshinConsumer` (ou le watchdog) finalise via
+//! `FinalizePipelineUseCase`. Après le merge de la MR, le nouveau commit
+//! déclenche un nouveau pipeline propre.
 
 use std::collections::HashSet;
 use std::path::PathBuf;
@@ -37,7 +45,7 @@ use domain::ports::container_runner::ContainerRunner;
 use domain::ports::event_publisher::EventPublisher;
 use domain::ports::pipeline_repository::PipelineRepository;
 
-use super::manage_commit_statuses::ManageCommitStatusesUseCase;
+use super::finalize_pipeline::{FinalizePipelineUseCase, FinalizedBy};
 
 /// Use case d'exécution d'un pipeline CI/CD natif.
 ///
@@ -46,7 +54,8 @@ use super::manage_commit_statuses::ManageCommitStatusesUseCase;
 pub struct RunPipelineUseCase {
     pipeline_repo: Arc<dyn PipelineRepository>,
     container_runner: Arc<dyn ContainerRunner>,
-    commit_status_uc: Arc<ManageCommitStatusesUseCase>,
+    /// Phase 42-pre-Fix — Finalisation unifiée (commit status + webhook).
+    finalizer: Arc<FinalizePipelineUseCase>,
     /// Phase 41 — Publisher pour déléguer le heal à la file Kafka dédiée.
     event_publisher: Option<Arc<dyn EventPublisher>>,
     /// Phase 41 — Kage Bunshin activé globalement.
@@ -61,7 +70,7 @@ impl RunPipelineUseCase {
     pub fn new(
         pipeline_repo: Arc<dyn PipelineRepository>,
         container_runner: Arc<dyn ContainerRunner>,
-        commit_status_uc: Arc<ManageCommitStatusesUseCase>,
+        finalizer: Arc<FinalizePipelineUseCase>,
         event_publisher: Option<Arc<dyn EventPublisher>>,
         kage_bunshin_enabled: bool,
         stage_timeout: Duration,
@@ -70,7 +79,7 @@ impl RunPipelineUseCase {
         Self {
             pipeline_repo,
             container_runner,
-            commit_status_uc,
+            finalizer,
             event_publisher,
             kage_bunshin_enabled,
             stage_timeout,
@@ -81,9 +90,8 @@ impl RunPipelineUseCase {
     /// Exécute un pipeline CI/CD complet.
     ///
     /// # Arguments
-    /// - `owner` : handle du propriétaire du dépôt
-    /// - `repo_name` : nom du dépôt
-    /// - `repository_id` : UUID du dépôt
+    /// - `repository_id` : UUID du dépôt (le commit status est reporté
+    ///   directement par UUID — Phase 42-pre-Fix, plus de résolution owner/name)
     /// - `commit_id` : SHA du commit Git à builder
     /// - `trigger_event` : événement déclencheur (push, mr_created, tag, manual)
     /// - `config` : configuration `jutsu.yml` déjà parsée et validée
@@ -92,10 +100,13 @@ impl RunPipelineUseCase {
     /// - `existing_pipeline_id` : si `Some`, reprend le pipeline déjà créé par le
     ///   trigger endpoint (évite le doublon « pipeline fantôme »). Si `None`,
     ///   crée un nouveau pipeline (cas du git push auto-trigger).
+    ///
+    /// # Errors
+    /// - `DomainError::Duplicate` : un pipeline automatique existe déjà pour
+    ///   ce (dépôt, commit, trigger) — index unique partiel (migration 032).
+    #[allow(clippy::too_many_arguments)]
     pub async fn execute(
         &self,
-        owner: &str,
-        repo_name: &str,
         repository_id: Uuid,
         commit_id: &str,
         trigger_event: &str,
@@ -105,7 +116,6 @@ impl RunPipelineUseCase {
         existing_pipeline_id: Option<Uuid>,
     ) -> Result<Pipeline, DomainError> {
         let trigger = TriggerEvent::from_sql(trigger_event).unwrap_or(TriggerEvent::Manual);
-        let context = format!("jutsu/{}", config.name);
 
         // ── 1. Créer OU reprendre le Pipeline en BDD ────────────
         //
@@ -113,9 +123,9 @@ impl RunPipelineUseCase {
         // avant de publier sur Kafka, le JutsuConsumer reçoit l'ID
         // et le passe ici via `existing_pipeline_id`. On évite ainsi
         // la création d'un « pipeline fantôme » orphelin en BDD.
-        let pipeline_id = if let Some(pid) = existing_pipeline_id {
+        let pipeline_record = if let Some(pid) = existing_pipeline_id {
             // Vérifier que le pipeline existe bien
-            let _existing = self.pipeline_repo.find_by_id(&pid).await?.ok_or_else(|| {
+            let existing = self.pipeline_repo.find_by_id(&pid).await?.ok_or_else(|| {
                 DomainError::Internal(format!(
                     "existing_pipeline_id {pid} not found — race condition?"
                 ))
@@ -127,7 +137,7 @@ impl RunPipelineUseCase {
                 stages = config.stages.len(),
                 "🥷 Pipeline existant repris (created by trigger)"
             );
-            pid
+            existing
         } else {
             // Nouveau pipeline (ex: git push auto-trigger, pas de pré-création)
             let pipeline = Pipeline::new(
@@ -145,8 +155,9 @@ impl RunPipelineUseCase {
                 stages = config.stages.len(),
                 "🥷 Pipeline créé (status: queued)"
             );
-            pipeline.id
+            pipeline
         };
+        let pipeline_id = pipeline_record.id;
 
         // ── 2. Créer les PipelineStages en BDD (status: pending) ──
         let mut stage_records = Vec::new();
@@ -162,22 +173,13 @@ impl RunPipelineUseCase {
         }
 
         // ── 3. Auto-report commit status → pending ──────────────
-        if let Err(e) = self
-            .commit_status_uc
-            .create_or_update_status(
-                creator_id.unwrap_or(Uuid::nil()),
-                owner,
-                repo_name,
-                commit_id,
+        self.finalizer
+            .report_commit_status(
+                &pipeline_record,
                 "pending",
-                &context,
-                Some(format!("Pipeline '{}' démarré", config.name)),
-                None,
+                format!("Pipeline '{}' démarré", config.name),
             )
-            .await
-        {
-            warn!(error = %e, "⚠️ Commit status report failed (non-fatal)");
-        }
+            .await;
 
         // ── 4. Pipeline → running ───────────────────────────────
         let started_at = Utc::now();
@@ -209,6 +211,22 @@ impl RunPipelineUseCase {
                 .requires
                 .iter()
                 .any(|dep| failed_stages.contains(dep));
+
+            // Phase 42-pre-Fix — Fail-Fast Kage Bunshin : un stage est en
+            // guérison → on n'exécute plus rien (un seul heal par pipeline).
+            if !healing_stages.is_empty() {
+                self.pipeline_repo
+                    .update_stage_status(
+                        &stage_record.id,
+                        PipelineStageStatus::Skipped,
+                        None,
+                        Some(Utc::now()),
+                        Some(0),
+                    )
+                    .await?;
+                info!(stage = %name, healing = ?healing_stages, "⏭️ Stage skipped (Fail-Fast — Kage Bunshin en cours)");
+                continue;
+            }
 
             if deps_failed || (pipeline_failed && !deps_satisfied) {
                 // Dépendance en échec → skip ce stage
@@ -289,8 +307,10 @@ impl RunPipelineUseCase {
                             .await?;
                         completed_stages.insert(name.clone());
                         info!(stage = %name, duration_ms = stage_duration, "✅ Stage réussi");
-                    } else if stage_def.kage_bunshin && self.kage_bunshin_enabled {
+                    } else if stage_def.kage_bunshin && self.kage_bunshin_enabled && !pipeline_failed {
                         // ── Phase 41 — Kage Bunshin déclenché ──────────
+                        // (Phase 42-pre-Fix : jamais si le pipeline a déjà
+                        // échoué — Fail-Fast, le heal ne le sauverait pas.)
                         // Le stage a échoué mais kage_bunshin: true.
                         // On marque le stage comme Healing et on publie
                         // sur la file Kafka dédiée (Vegapunk Tweak #10).
@@ -314,6 +334,16 @@ impl RunPipelineUseCase {
                                 result.exit_code as i16,
                             )
                             .await?;
+
+                        // Phase 42-pre-Fix — commit status `pending` AVANT la
+                        // publication : le heal ne peut pas finir avant ce report.
+                        self.finalizer
+                            .report_commit_status(
+                                &pipeline_record,
+                                "pending",
+                                format!("🥷 Kage Bunshin en cours sur '{name}'"),
+                            )
+                            .await;
 
                         // Publier sur la file Kafka dédiée
                         if let Some(publisher) = &self.event_publisher {
@@ -423,79 +453,43 @@ impl RunPipelineUseCase {
         }
 
         // ── 6. Calculer le statut final ─────────────────────────
-        let finished_at = Utc::now();
-        let duration_ms = (finished_at - started_at).num_milliseconds() as i32;
+        let duration_ms = (Utc::now() - started_at).num_milliseconds() as i32;
 
-        let final_status = if pipeline_error {
-            PipelineStatus::Error
-        } else if pipeline_failed {
-            PipelineStatus::Failure
-        } else if !healing_stages.is_empty() {
-            // VP-13: Des stages sont en cours de guérison par Kage Bunshin.
-            // Le pipeline reste "running" pour maintenir le polling SWR frontend.
-            // Le KageBunshinConsumer appellera finalize_pipeline_after_heal()
-            // pour calculer le statut final une fois le heal terminé.
+        if !healing_stages.is_empty() && !pipeline_failed && !pipeline_error {
+            // VP-13 + Phase 42-pre-Fix : un stage est en guérison.
+            // Le pipeline reste "running" (aucune écriture ici : le
+            // KageBunshinConsumer — ou le watchdog — finalisera via
+            // FinalizePipelineUseCase, qui reporte commit status + webhook).
             info!(
+                pipeline_id = %pipeline_id,
                 healing = ?healing_stages,
-                "🥷 Pipeline reste running — {} stage(s) en guérison",
+                duration_ms,
+                "🥷 Pipeline reste running — {} stage(s) en guérison (Fail-Fast)",
                 healing_stages.len()
             );
-            PipelineStatus::Running
         } else {
-            PipelineStatus::Success
-        };
+            let final_status = if pipeline_error {
+                PipelineStatus::Error
+            } else if pipeline_failed {
+                PipelineStatus::Failure
+            } else {
+                PipelineStatus::Success
+            };
 
-        self.pipeline_repo
-            .update_status(
-                &pipeline_id,
-                final_status.clone(),
-                None,
-                Some(finished_at),
-                Some(duration_ms),
-            )
-            .await?;
+            // ── 7. Finalisation unifiée (CAS + commit status + webhook) ──
+            self.finalizer
+                .complete(&pipeline_id, final_status.clone(), FinalizedBy::Runner)
+                .await?;
 
-        // ── 7. Auto-report commit status → résultat final ───────
-        let status_state = match &final_status {
-            PipelineStatus::Success => "success",
-            PipelineStatus::Failure => "failure",
-            _ => "error",
-        };
-
-        let status_desc = format!(
-            "Pipeline '{}' {} en {}ms ({}/{} stages réussis)",
-            config.name,
-            final_status,
-            duration_ms,
-            completed_stages.len(),
-            stage_records.len(),
-        );
-
-        if let Err(e) = self
-            .commit_status_uc
-            .create_or_update_status(
-                creator_id.unwrap_or(Uuid::nil()),
-                owner,
-                repo_name,
-                commit_id,
-                status_state,
-                &context,
-                Some(status_desc),
-                None,
-            )
-            .await
-        {
-            warn!(error = %e, "⚠️ Commit status final report failed (non-fatal)");
+            info!(
+                pipeline_id = %pipeline_id,
+                status = %final_status,
+                duration_ms = duration_ms,
+                completed = completed_stages.len(),
+                failed = failed_stages.len(),
+                "🏁 Pipeline terminé"
+            );
         }
-
-        info!(
-            pipeline_id = %pipeline_id,
-            status = %final_status,
-            duration_ms = duration_ms,
-            completed = completed_stages.len(),
-            failed = failed_stages.len(),
-            "🏁 Pipeline terminé"
-        );
 
         // ── 8. Retourner le pipeline mis à jour ─────────────────
         self.pipeline_repo
@@ -624,5 +618,128 @@ mod tests {
         let raw = lines.join("\n");
         let result = sanitize_stage_logs(&raw);
         assert!(!result.contains("lignes omises"));
+    }
+}
+
+// ── Phase 42-pre-Fix — Tests d'orchestration (Fail-Fast Kage Bunshin) ──
+
+#[cfg(test)]
+mod orchestration_tests {
+    use std::collections::{BTreeMap, HashMap};
+
+    use domain::entities::jutsu_config::JutsuStage;
+    use domain::entities::webhook::WebhookEventType;
+
+    use super::*;
+    use crate::use_cases::pipeline_test_support::{
+        InMemoryPipelineRepo, RecordingPublisher, RecordingReporter, ScriptedRunner,
+    };
+
+    struct Harness {
+        repo: Arc<InMemoryPipelineRepo>,
+        reporter: Arc<RecordingReporter>,
+        publisher: Arc<RecordingPublisher>,
+        runner: Arc<ScriptedRunner>,
+        uc: RunPipelineUseCase,
+    }
+
+    fn harness(exit_codes: &[(&str, i64)]) -> Harness {
+        let repo = Arc::new(InMemoryPipelineRepo::default());
+        let reporter = Arc::new(RecordingReporter::default());
+        let publisher = Arc::new(RecordingPublisher::default());
+        let runner = Arc::new(ScriptedRunner {
+            exit_codes: exit_codes.iter().map(|(i, c)| (i.to_string(), *c)).collect::<HashMap<_, _>>(),
+            ..Default::default()
+        });
+        let finalizer = Arc::new(FinalizePipelineUseCase::new(
+            repo.clone(),
+            reporter.clone(),
+            Some(publisher.clone() as Arc<dyn EventPublisher>),
+        ));
+        let uc = RunPipelineUseCase::new(
+            repo.clone(),
+            runner.clone(),
+            finalizer,
+            Some(publisher.clone() as Arc<dyn EventPublisher>),
+            true,
+            Duration::from_secs(60),
+            Duration::from_secs(600),
+        );
+        Harness { repo, reporter, publisher, runner, uc }
+    }
+
+    fn stage(image: &str, requires: &[&str], kage_bunshin: bool) -> JutsuStage {
+        JutsuStage {
+            image: image.to_string(),
+            jutsus: vec!["cargo check".into()],
+            requires: requires.iter().map(|s| s.to_string()).collect(),
+            kage_bunshin,
+        }
+    }
+
+    /// Scénario E2E kunai-calc : Futon_Check puis Suiton_Build (requires Futon_Check).
+    fn e2e_config(build_requires_check: bool) -> JutsuConfig {
+        let mut stages = BTreeMap::new();
+        stages.insert("Futon_Check".to_string(), stage("check-img", &[], true));
+        let req: &[&str] = if build_requires_check { &["Futon_Check"] } else { &[] };
+        stages.insert("Suiton_Build".to_string(), stage("build-img", req, true));
+        JutsuConfig { name: "E2E".into(), on: vec!["push".into()], stages }
+    }
+
+    async fn run(h: &Harness, config: JutsuConfig) -> Pipeline {
+        h.uc.execute(Uuid::new_v4(), "f64e13775aab", "push", config, None, &PathBuf::from("."), None)
+            .await
+            .unwrap()
+    }
+
+    #[tokio::test]
+    async fn healing_stage_skips_all_following_stages_single_heal() {
+        // Même sans `requires` : Fail-Fast global dès qu'un heal démarre.
+        let h = harness(&[("check-img", 101), ("build-img", 101)]);
+        let pipeline = run(&h, e2e_config(false)).await;
+
+        assert_eq!(*h.publisher.heals.lock().unwrap(), vec!["Futon_Check"]);
+        assert_eq!(*h.runner.ran.lock().unwrap(), vec!["check-img"]);
+        assert_eq!(h.repo.stage_by_name("Futon_Check").status, PipelineStageStatus::Healing);
+        assert_eq!(h.repo.stage_by_name("Suiton_Build").status, PipelineStageStatus::Skipped);
+
+        // Pipeline reste running, commit status pending, aucune annonce finale.
+        assert_eq!(pipeline.status, PipelineStatus::Running);
+        assert!(h.reporter.states().iter().all(|s| s == "pending"));
+        assert!(h.publisher.webhooks.lock().unwrap().is_empty());
+    }
+
+    #[tokio::test]
+    async fn real_exit_code_is_persisted_for_heal() {
+        let h = harness(&[("check-img", 101)]);
+        run(&h, e2e_config(true)).await;
+        assert_eq!(h.repo.stage_by_name("Futon_Check").exit_code, Some(101));
+    }
+
+    #[tokio::test]
+    async fn success_pipeline_is_finalized_and_announced() {
+        let h = harness(&[]);
+        let pipeline = run(&h, e2e_config(true)).await;
+
+        assert_eq!(pipeline.status, PipelineStatus::Success);
+        assert_eq!(h.reporter.states(), vec!["pending", "success"]);
+        let webhooks = h.publisher.webhooks.lock().unwrap();
+        assert_eq!(webhooks.len(), 1);
+        assert_eq!(webhooks[0].event_type, WebhookEventType::PipelineCompleted);
+        assert_eq!(webhooks[0].payload["finalized_by"], "runner");
+    }
+
+    #[tokio::test]
+    async fn no_heal_when_pipeline_already_failed() {
+        // Futon_Check sans kage_bunshin échoue ; Suiton_Build (indépendant,
+        // kage_bunshin) échoue aussi → pas de heal, pipeline failure.
+        let h = harness(&[("check-img", 1), ("build-img", 1)]);
+        let mut config = e2e_config(false);
+        config.stages.get_mut("Futon_Check").unwrap().kage_bunshin = false;
+
+        let pipeline = run(&h, config).await;
+        assert!(h.publisher.heals.lock().unwrap().is_empty());
+        assert_eq!(pipeline.status, PipelineStatus::Failure);
+        assert_eq!(h.reporter.states().last().unwrap(), "failure");
     }
 }

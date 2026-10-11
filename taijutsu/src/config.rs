@@ -160,6 +160,10 @@ pub struct Config {
     /// Seuil de confiance minimum pour appliquer un patch. Défaut: 0.5.
     pub kage_bunshin_confidence_threshold: f32,
 
+    /// Phase 42-pre-Fix — Délai max d'un heal avant expiration par le
+    /// watchdog (stage → failure, pipeline finalisé). Défaut: 600 (10 min).
+    pub kage_bunshin_heal_timeout_secs: u64,
+
     // ── Phase 42-pre — Hub d'Agents (Mercenary Switch) 🧠🔌 ─────────
     /// Clé API Gemini (optionnelle). Si présente, `GEMINI_MODEL` est obligatoire.
     pub gemini_api_key: Option<Secret>,
@@ -295,6 +299,7 @@ impl Config {
             kage_bunshin_worker_count: env_parse("KAGE_BUNSHIN_WORKER_COUNT", 1),
             kage_bunshin_shadow_timeout_secs: env_parse("KAGE_BUNSHIN_SHADOW_TIMEOUT_SECS", 120),
             kage_bunshin_confidence_threshold: env_parse("KAGE_BUNSHIN_CONFIDENCE_THRESHOLD", 0.5),
+            kage_bunshin_heal_timeout_secs: env_parse("KAGE_BUNSHIN_TIMEOUT_SECS", 600),
             // ── Phase 42-pre — Hub d'Agents 🧠🔌 ────────────────────
             gemini_api_key: env_opt("GEMINI_API_KEY").map(Secret),
             gemini_model: env_opt("GEMINI_MODEL"),
