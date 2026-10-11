@@ -98,7 +98,6 @@ impl GitCgiBackend {
     ///
     /// # Returns
     /// `CgiResponse` avec le status, headers et body parses depuis stdout.
-    #[instrument(skip(self, body), fields(method = %method, path_info = %path_info))]
     pub async fn execute_cgi(
         &self,
         repo_git_path: &Path,
@@ -106,6 +105,38 @@ impl GitCgiBackend {
         path_info: &str,
         query_string: &str,
         content_type: &str,
+        body: &[u8],
+    ) -> Result<CgiResponse, DomainError> {
+        self.execute_cgi_with_encoding(
+            repo_git_path,
+            method,
+            path_info,
+            query_string,
+            content_type,
+            None,
+            body,
+        )
+        .await
+    }
+
+    /// Variante de [`execute_cgi`](Self::execute_cgi) qui relaie le header
+    /// `Content-Encoding` du client vers `HTTP_CONTENT_ENCODING`.
+    ///
+    /// Phase 42-pre-Fix : le client git compresse en gzip les requetes
+    /// `upload-pack` de plus de 1024 octets (`remote-curl.c`, `gzip_request`).
+    /// Sans cette variable, `git http-backend` lit le gzip comme du pkt-line
+    /// → `fatal: protocol error: bad line length character`. Avec elle, il
+    /// decompresse lui-meme le body (`inflate_request`).
+    #[allow(clippy::too_many_arguments)]
+    #[instrument(skip(self, body), fields(method = %method, path_info = %path_info))]
+    pub async fn execute_cgi_with_encoding(
+        &self,
+        repo_git_path: &Path,
+        method: &str,
+        path_info: &str,
+        query_string: &str,
+        content_type: &str,
+        content_encoding: Option<&str>,
         body: &[u8],
     ) -> Result<CgiResponse, DomainError> {
         // Construire la commande CGI avec les variables d'environnement
@@ -149,6 +180,11 @@ impl GitCgiBackend {
         // Pour POST, indiquer la taille du body
         if method == "POST" && !body.is_empty() {
             cmd.env("CONTENT_LENGTH", body.len().to_string());
+        }
+
+        // Phase 42-pre-Fix : body gzip (fetch avec beaucoup de "have")
+        if let Some(encoding) = content_encoding.filter(|e| !e.is_empty()) {
+            cmd.env("HTTP_CONTENT_ENCODING", encoding);
         }
 
         // Piper stdin/stdout/stderr

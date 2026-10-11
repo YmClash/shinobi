@@ -1125,6 +1125,7 @@ async fn main() -> anyhow::Result<()> {
                             as Arc<dyn domain::ports::repo_repository::RepoRepository>,
                         mr_repo.clone(),
                         actor_repo.clone(),
+                        notification_repo.clone(), // Phase 42-pre-Fix — notif MR auto-fix
                         workspace_root,
                         worker_count,
                     ));

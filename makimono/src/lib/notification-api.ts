@@ -18,7 +18,9 @@ export interface Notification {
     | "review_received"
     | "assigned"
     | "issue_closed"
-    | "mr_merged";
+    | "mr_merged"
+    | "mr_opened"
+    | "auto_heal_mr"; // Phase 42-pre-Fix — MR auto-fix Sensei
   target_type: "issue" | "merge_request" | "comment";
   target_id: string;
   target_number: number | null;

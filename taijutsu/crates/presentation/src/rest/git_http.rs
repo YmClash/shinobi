@@ -693,15 +693,21 @@ async fn git_upload_pack(
         .and_then(|v| v.to_str().ok())
         .unwrap_or("application/x-git-upload-pack-request");
 
+    // 4b. Phase 42-pre-Fix — Content-Encoding (git gzip les bodies > 1024 o)
+    let content_encoding = headers
+        .get(axum::http::header::CONTENT_ENCODING)
+        .and_then(|v| v.to_str().ok());
+
     // 5. Executer le CGI upload-pack
     match state
         .git_cgi
-        .execute_cgi(
+        .execute_cgi_with_encoding(
             &repo_git_path,
             "POST",
             "/git-upload-pack",
             "",
             content_type,
+            content_encoding,
             &body,
         )
         .await

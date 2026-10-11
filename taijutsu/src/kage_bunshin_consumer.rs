@@ -50,6 +50,8 @@ use domain::entities::kage_bunshin::HealResult;
 use domain::entities::merge_request::{MergeRequest, MrEvent, MrEventType};
 use domain::ports::actor_repository::ActorRepository;
 use domain::ports::mr_repository::MrRepository;
+use domain::ports::notification_repository::NotificationRepository;
+use domain::entities::notification::{Notification, NotificationType, TargetType};
 use domain::ports::pipeline_repository::PipelineRepository;
 use domain::ports::vcs_engine::VcsEngine;
 use domain::ports::repo_repository::RepoRepository;
@@ -132,6 +134,7 @@ impl KageBunshinConsumer {
         repo_repo: Arc<dyn RepoRepository>,
         mr_repo: Arc<dyn MrRepository>,
         actor_repo: Arc<dyn ActorRepository>,
+        notification_repo: Arc<dyn NotificationRepository>,
         workspace_root: PathBuf,
         worker_count: usize,
     ) {
@@ -148,6 +151,7 @@ impl KageBunshinConsumer {
             let repo_repo = repo_repo.clone();
             let mr_repo = mr_repo.clone();
             let actor_repo = actor_repo.clone();
+            let notification_repo = notification_repo.clone();
             let workspace_root = workspace_root.clone();
 
             tokio::spawn(async move {
@@ -175,6 +179,7 @@ impl KageBunshinConsumer {
                         &*repo_repo,
                         &*mr_repo,
                         &*actor_repo,
+                        &*notification_repo,
                         &workspace_root,
                     )
                     .await;
@@ -286,6 +291,7 @@ impl KageBunshinConsumer {
         repo_repo: &dyn RepoRepository,
         mr_repo: &dyn MrRepository,
         actor_repo: &dyn ActorRepository,
+        notification_repo: &dyn NotificationRepository,
         workspace_root: &PathBuf,
     ) {
         info!(
@@ -453,6 +459,17 @@ impl KageBunshinConsumer {
                                         "🥷✨ MR auto-heal #{} créée par Sensei (Phase 41-A4)",
                                         mr.number
                                     );
+                                    // Phase 42-pre-Fix : notifier les humains concernés (cloche Makimono)
+                                    Self::notify_heal_mr(
+                                        request,
+                                        &mr,
+                                        repository.owner_id,
+                                        &repository.name,
+                                        actor_repo,
+                                        pipeline_repo,
+                                        notification_repo,
+                                    )
+                                    .await;
                                     format!(
                                         "[kage-bunshin] ✅ Correctif proposé par Sensei : MR #{} (branche {})",
                                         mr.number, shadow_branch
@@ -674,6 +691,75 @@ impl KageBunshinConsumer {
             .map_err(|e| format!("import des refs jj échoué : {e}"))?;
 
         Ok(sha)
+    }
+
+    // ── Phase 42-pre-Fix : notification « MR auto-fix » ─────────────────────
+
+    /// Notifie (in-app, cloche Makimono) le propriétaire du dépôt et
+    /// l'auteur du push qui a déclenché le pipeline qu'une MR de
+    /// correctif Sensei est prête. Non bloquant : un échec est seulement logué.
+    async fn notify_heal_mr(
+        request: &KageBunshinRequest,
+        mr: &MergeRequest,
+        owner_id: Uuid,
+        repo_name: &str,
+        actor_repo: &dyn ActorRepository,
+        pipeline_repo: &dyn PipelineRepository,
+        notification_repo: &dyn NotificationRepository,
+    ) {
+        let owner_handle = match actor_repo.find_by_id(&owner_id).await {
+            Ok(Some(a)) => a.handle,
+            _ => {
+                warn!(owner_id = %owner_id, "⚠️ Notification auto-heal : owner introuvable (non bloquant)");
+                return;
+            }
+        };
+
+        // Destinataires : owner + auteur du pipeline (dédupliqués, jamais
+        // un compte système ni le bot lui-même).
+        let mut recipients = vec![owner_id];
+        if let Ok(Some(p)) = pipeline_repo.find_by_id(&request.pipeline_id).await {
+            if let Some(creator) = p.creator_id {
+                recipients.push(creator);
+            }
+        }
+        recipients.sort();
+        recipients.dedup();
+        recipients.retain(|id| *id != SYSTEM_ACTOR_ID && *id != mr.author_id);
+
+        let message = format!(
+            "⚔️ Sensei a ouvert la MR auto-fix #{} pour le stage {} (pipeline {})",
+            mr.number,
+            request.stage_name,
+            &request.pipeline_id.to_string()[..8]
+        );
+
+        for recipient in recipients {
+            let notif = Notification::new(
+                recipient,
+                mr.author_id,
+                NotificationType::AutoHealMr,
+                TargetType::MergeRequest,
+                mr.id,
+                Some(mr.number),
+                mr.repository_id,
+                owner_handle.clone(),
+                repo_name.to_string(),
+                message.clone(),
+            );
+            match notification_repo.save(&notif).await {
+                Ok(()) => info!(
+                    mr_number = mr.number,
+                    recipient = %recipient,
+                    "🔔 Notification MR auto-fix envoyée"
+                ),
+                Err(e) => warn!(
+                    recipient = %recipient,
+                    error = %e,
+                    "⚠️ Notification MR auto-fix échouée (non bloquant)"
+                ),
+            }
+        }
     }
 
     // ── Phase 41-A4 : MR Auto-Healing (Vegapunk Tweak #11) ────────────

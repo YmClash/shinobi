@@ -104,6 +104,8 @@ pub enum NotificationType {
     MrMerged,
     /// MR ouverte sur votre repo (Phase 37E-UI — Cross-Repo).
     MrOpened,
+    /// MR de correctif ouverte par le Kage Bunshin / Sensei (Phase 42-pre-Fix).
+    AutoHealMr,
 }
 
 impl NotificationType {
@@ -117,6 +119,7 @@ impl NotificationType {
             Self::IssueClosed => "issue_closed",
             Self::MrMerged => "mr_merged",
             Self::MrOpened => "mr_opened",
+            Self::AutoHealMr => "auto_heal_mr",
         }
     }
 
@@ -130,6 +133,7 @@ impl NotificationType {
             "issue_closed" => Some(Self::IssueClosed),
             "mr_merged" => Some(Self::MrMerged),
             "mr_opened" => Some(Self::MrOpened),
+            "auto_heal_mr" => Some(Self::AutoHealMr),
             _ => None,
         }
     }
@@ -207,6 +211,8 @@ mod tests {
             NotificationType::Assigned,
             NotificationType::IssueClosed,
             NotificationType::MrMerged,
+            NotificationType::MrOpened,
+            NotificationType::AutoHealMr,
         ];
         for t in types {
             let sql = t.as_sql_str();

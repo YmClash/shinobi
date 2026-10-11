@@ -41,6 +41,10 @@ function getNotifIcon(type: string) {
       return "🔒";
     case "mr_merged":
       return "⚔️";
+    case "mr_opened":
+      return "🔀";
+    case "auto_heal_mr": // Phase 42-pre-Fix — MR auto-fix Sensei
+      return "🥷";
     default:
       return "🔔";
   }
