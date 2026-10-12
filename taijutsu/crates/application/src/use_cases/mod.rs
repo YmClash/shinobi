@@ -2,6 +2,7 @@ pub mod analyze_operation;
 pub mod bulk_import_github;
 pub mod close_mr;
 pub mod shadow_branch_cleanup;
+pub mod merged_operations;
 pub mod update_repo_settings;
 pub mod close_issue;
 pub mod comment_issue;

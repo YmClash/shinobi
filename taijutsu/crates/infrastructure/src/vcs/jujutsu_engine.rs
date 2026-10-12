@@ -948,6 +948,22 @@ impl VcsEngine for JujutsuEngine {
         JujutsuEngine::reload_repo(self, repo_id).await
     }
 
+    /// Phase 42-pre-Fix — description + parents Git d'un commit, via
+    /// `read_commit_snapshot` (même source que le Sync Hook).
+    async fn commit_meta(
+        &self,
+        repo_id: &Uuid,
+        commit_id: &str,
+    ) -> Result<Option<domain::ports::vcs_engine::CommitMeta>, DomainError> {
+        let snapshot = self
+            .read_commit_snapshot(repo_id, &ContentId::new(commit_id.to_string()))
+            .await?;
+        Ok(Some(domain::ports::vcs_engine::CommitMeta {
+            description: snapshot.description,
+            parent_commit_ids: snapshot.parent_commit_ids,
+        }))
+    }
+
     /// Phase 42-pre-Fix — Supprime `refs/heads/<branch>` du store Git.
     ///
     /// `git update-ref -d` gère les refs loose ET packed. Ensuite

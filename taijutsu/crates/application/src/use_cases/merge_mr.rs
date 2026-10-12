@@ -16,11 +16,13 @@ use uuid::Uuid;
 
 use domain::entities::merge_request::{MergeStrategy, MrEvent, MrEventType, MrStatus};
 use domain::errors::DomainError;
+use domain::ports::event_publisher::EventPublisher;
 use domain::ports::mr_repository::MrRepository;
 use domain::ports::repo_repository::RepoRepository;
+use domain::ports::repository::OperationRepository;
 use domain::ports::vcs_engine::VcsEngine;
-use domain::ports::event_publisher::EventPublisher;
 
+use crate::use_cases::merged_operations::record_merged_operations;
 use crate::use_cases::shadow_branch_cleanup::cleanup_shadow_branch;
 use crate::use_cases::webhook_emit;
 
@@ -50,6 +52,8 @@ pub struct MergeMrUseCase {
     vcs: Arc<dyn VcsEngine>,
     /// Phase 34-V2 — Émission webhook (optionnel si Chakra désactivé).
     event_publisher: Option<Arc<dyn EventPublisher>>,
+    /// Phase 42-pre-Fix — Persistance des commits fusionnés (page Commits).
+    operation_repo: Option<Arc<dyn OperationRepository>>,
 }
 
 impl MergeMrUseCase {
@@ -59,7 +63,20 @@ impl MergeMrUseCase {
         vcs: Arc<dyn VcsEngine>,
         event_publisher: Option<Arc<dyn EventPublisher>>,
     ) -> Self {
-        Self { mr_repo, repo_repo, vcs, event_publisher }
+        Self {
+            mr_repo,
+            repo_repo,
+            vcs,
+            event_publisher,
+            operation_repo: None,
+        }
+    }
+
+    /// Phase 42-pre-Fix — Active la création des `Operation` pour les
+    /// commits fusionnés (le merge serveur ne passe pas par le Sync Hook).
+    pub fn with_operation_repo(mut self, operation_repo: Arc<dyn OperationRepository>) -> Self {
+        self.operation_repo = Some(operation_repo);
+        self
     }
 
     #[instrument(skip(self), fields(actor = %cmd.actor_id, repo = %cmd.repository_id, mr = cmd.mr_number))]
@@ -112,9 +129,7 @@ impl MergeMrUseCase {
         // La ref source effective : pour les MR cross-repo, c'est la ref du remote
         let effective_source_ref = if let Some(src_id) = source_repo_id {
             // Phase 37E — Fetch des objets Git du fork dans le parent
-            self.vcs
-                .fetch_fork_refs(&mr.repository_id, &src_id)
-                .await?;
+            self.vcs.fetch_fork_refs(&mr.repository_id, &src_id).await?;
 
             // La branche source est accessible via le remote temporaire
             format!("fork-{}/{}", src_id, mr.source_branch)
@@ -130,7 +145,11 @@ impl MergeMrUseCase {
         // ── Cleanup (finally-style) — toujours exécuté pour cross-repo ──
         if is_cross_repo {
             if let Some(src_id) = source_repo_id {
-                if let Err(e) = self.vcs.cleanup_fork_remote(&mr.repository_id, &src_id).await {
+                if let Err(e) = self
+                    .vcs
+                    .cleanup_fork_remote(&mr.repository_id, &src_id)
+                    .await
+                {
                     // Ne pas propager l'erreur de cleanup — le merge a réussi ou échoué
                     // indépendamment. Un remote orphelin sera nettoyé au prochain merge/close.
                     warn!(
@@ -220,6 +239,20 @@ impl MergeMrUseCase {
         // (non fatal ; fast-forward : main pointe déjà sur le commit Sensei).
         cleanup_shadow_branch(self.vcs.as_ref(), mr).await;
 
+        // Phase 42-pre-Fix — Le merge écrit directement dans le store : le
+        // Sync Hook ne voit rien, donc on persiste nous-mêmes les commits
+        // fusionnés (sinon le fix Sensei est absent de la page Commits).
+        if let Some(op_repo) = &self.operation_repo {
+            record_merged_operations(
+                self.vcs.as_ref(),
+                op_repo.as_ref(),
+                mr.repository_id,
+                cmd.actor_id,
+                merge_cid.as_str(),
+            )
+            .await;
+        }
+
         info!(
             mr_id = %mr.id,
             mr_number = mr.number,
@@ -264,7 +297,11 @@ impl MergeMrUseCase {
             let repo_id = mr.repository_id;
             let commit_sha = merge_cid.as_str().to_string();
             tokio::spawn(async move {
-                if vcs.read_blob(&repo_id, &commit_sha, "jutsu.yml").await.is_err() {
+                if vcs
+                    .read_blob(&repo_id, &commit_sha, "jutsu.yml")
+                    .await
+                    .is_err()
+                {
                     return; // pas de CI configurée
                 }
                 match publisher

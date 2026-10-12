@@ -647,12 +647,16 @@ async fn main() -> anyhow::Result<()> {
         mr_repo.clone(),
         repo_repo.clone(),
     ));
-    let merge_mr = Arc::new(application::use_cases::merge_mr::MergeMrUseCase::new(
-        mr_repo.clone(),
-        repo_repo.clone(),
-        vcs.clone(),
-        event_publisher.clone(), // Phase 34-V2
-    ));
+    let merge_mr = Arc::new(
+        application::use_cases::merge_mr::MergeMrUseCase::new(
+            mr_repo.clone(),
+            repo_repo.clone(),
+            vcs.clone(),
+            event_publisher.clone(), // Phase 34-V2
+        )
+        // Phase 42-pre-Fix — commits fusionnés visibles dans la page Commits
+        .with_operation_repo(repo.clone()),
+    );
     let close_mr = Arc::new(application::use_cases::close_mr::CloseMrUseCase::new(
         mr_repo.clone(),
         repo_repo.clone(),

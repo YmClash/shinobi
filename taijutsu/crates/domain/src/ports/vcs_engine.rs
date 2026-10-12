@@ -62,6 +62,18 @@ pub struct RefInfo {
     pub kind: RefKind,
 }
 
+/// Métadonnées minimales d'un commit (Phase 42-pre-Fix).
+///
+/// Utilisé pour persister une `Operation` après un merge serveur
+/// (qui ne passe pas par le Sync Hook post-push).
+#[derive(Debug, Clone, Default)]
+pub struct CommitMeta {
+    /// Message du commit.
+    pub description: String,
+    /// SHA-1 hex des parents Git (sans le root commit jj).
+    pub parent_commit_ids: Vec<String>,
+}
+
 // ── Trait VcsEngine ───────────────────────────────────────────────────
 
 /// Contrat d'interaction avec le moteur VCS.
@@ -121,6 +133,17 @@ pub trait VcsEngine: Send + Sync {
     /// `Ok(false)` (mocks de test).
     async fn delete_branch(&self, _repo_id: &Uuid, _branch: &str) -> Result<bool, DomainError> {
         Ok(false)
+    }
+
+    /// Phase 42-pre-Fix — Lit la description et les parents d'un commit.
+    ///
+    /// `Ok(None)` si non supporté (implémentation par défaut, mocks).
+    async fn commit_meta(
+        &self,
+        _repo_id: &Uuid,
+        _commit_id: &str,
+    ) -> Result<Option<CommitMeta>, DomainError> {
+        Ok(None)
     }
 
     // ── Phase 6 — Explorateur de Code ────────────────────────────────
