@@ -125,11 +125,19 @@ impl RunPipelineUseCase {
         // la création d'un « pipeline fantôme » orphelin en BDD.
         let pipeline_record = if let Some(pid) = existing_pipeline_id {
             // Vérifier que le pipeline existe bien
-            let existing = self.pipeline_repo.find_by_id(&pid).await?.ok_or_else(|| {
+            let mut existing = self.pipeline_repo.find_by_id(&pid).await?.ok_or_else(|| {
                 DomainError::Internal(format!(
                     "existing_pipeline_id {pid} not found — race condition?"
                 ))
             })?;
+
+            // Phase 42-pre-Fix : le trigger manuel pré-crée le pipeline sans
+            // nom (jutsu.yml pas encore lu). On le nomme AVANT le report
+            // `pending`, sinon le contexte retombe sur `jutsu/pipeline`.
+            if existing.pipeline_name.is_none() {
+                self.pipeline_repo.set_pipeline_name(&pid, &config.name).await?;
+                existing.pipeline_name = Some(config.name.clone());
+            }
 
             info!(
                 pipeline_id = %pid,
@@ -741,5 +749,27 @@ mod orchestration_tests {
         assert!(h.publisher.heals.lock().unwrap().is_empty());
         assert_eq!(pipeline.status, PipelineStatus::Failure);
         assert_eq!(h.reporter.states().last().unwrap(), "failure");
+    }
+
+    #[tokio::test]
+    async fn manual_pipeline_without_name_is_named_from_config() {
+        // Pipeline manuel pré-créé par le trigger REST : pipeline_name = None.
+        let h = harness(&[]);
+        let repo_id = Uuid::new_v4();
+        let pre = Pipeline::new(repo_id, "f64e13775aab".into(), TriggerEvent::Manual, None, None);
+        let pre = h.repo.create(&pre).await.unwrap();
+
+        let pipeline = h
+            .uc
+            .execute(repo_id, "f64e13775aab", "manual", e2e_config(true), None, &PathBuf::from("."), Some(pre.id))
+            .await
+            .unwrap();
+
+        assert_eq!(pipeline.pipeline_name.as_deref(), Some("E2E"));
+        assert_eq!(h.repo.pipeline(&pre.id).pipeline_name.as_deref(), Some("E2E"));
+        // Tous les commit statuses (pending + success) portent `jutsu/E2E`.
+        let reports = h.reporter.reports.lock().unwrap();
+        assert!(!reports.is_empty());
+        assert!(reports.iter().all(|r| r.1 == "jutsu/E2E"), "{reports:?}");
     }
 }

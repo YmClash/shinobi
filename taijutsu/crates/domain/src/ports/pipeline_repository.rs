@@ -41,6 +41,13 @@ pub trait PipelineRepository: Send + Sync {
         duration_ms: Option<i32>,
     ) -> Result<(), DomainError>;
 
+    /// Nomme un pipeline pré-créé sans nom (Phase 42-pre-Fix).
+    ///
+    /// Le trigger manuel crée le pipeline avant que `jutsu.yml` ne soit lu
+    /// (`pipeline_name = NULL`) ; sans ce nom, le commit status retombait sur
+    /// le contexte générique `jutsu/pipeline`. N'écrase jamais un nom existant.
+    async fn set_pipeline_name(&self, id: &Uuid, name: &str) -> Result<(), DomainError>;
+
     /// Retrouve un pipeline par son identifiant.
     async fn find_by_id(&self, id: &Uuid) -> Result<Option<Pipeline>, DomainError>;
 

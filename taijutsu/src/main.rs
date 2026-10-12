@@ -1098,6 +1098,7 @@ async fn main() -> anyhow::Result<()> {
             let kage_bunshin_uc = Arc::new(
                 application::use_cases::kage_bunshin::KageBunshinUseCase::new(
                     llm,
+                    sensei_local_llm.clone(), // Phase 42-pre-Fix : repli local (confidentialité)
                     pipeline_repo.clone(),
                     runner,
                     std::time::Duration::from_secs(config.kage_bunshin_shadow_timeout_secs),

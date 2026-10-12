@@ -948,6 +948,59 @@ impl VcsEngine for JujutsuEngine {
         JujutsuEngine::reload_repo(self, repo_id).await
     }
 
+    /// Phase 42-pre-Fix — Supprime `refs/heads/<branch>` du store Git.
+    ///
+    /// `git update-ref -d` gère les refs loose ET packed. Ensuite
+    /// `reload_repo` (import_refs) retire le bookmark côté jj.
+    /// Retourne `false` si la ref était absente.
+    #[instrument(skip(self))]
+    async fn delete_branch(&self, repo_id: &Uuid, branch: &str) -> Result<bool, DomainError> {
+        // Garde-fou : nom de ref sûr (pas d'option git, pas de traversée).
+        if branch.is_empty()
+            || branch.starts_with('-')
+            || branch.contains("..")
+            || branch.contains(char::is_whitespace)
+        {
+            return Err(DomainError::VcsError(format!("nom de branche invalide: '{branch}'")));
+        }
+
+        let git_dir = self.git_repo_path(repo_id);
+        let full_ref = format!("refs/heads/{branch}");
+
+        // 1. La ref existe-t-elle ? (exit 0 = oui)
+        let exists = tokio::process::Command::new("git")
+            .arg("--git-dir")
+            .arg(&git_dir)
+            .args(["show-ref", "--verify", "--quiet", &full_ref])
+            .status()
+            .await
+            .map_err(|e| DomainError::VcsError(format!("git show-ref: {e}")))?
+            .success();
+        if !exists {
+            return Ok(false);
+        }
+
+        // 2. Suppression (loose + packed)
+        let out = tokio::process::Command::new("git")
+            .arg("--git-dir")
+            .arg(&git_dir)
+            .args(["update-ref", "-d", &full_ref])
+            .output()
+            .await
+            .map_err(|e| DomainError::VcsError(format!("git update-ref -d: {e}")))?;
+        if !out.status.success() {
+            return Err(DomainError::VcsError(format!(
+                "git update-ref -d {full_ref} a échoué: {}",
+                String::from_utf8_lossy(&out.stderr).trim()
+            )));
+        }
+
+        // 3. Resynchroniser jj (retire le bookmark)
+        JujutsuEngine::reload_repo(self, repo_id).await?;
+        info!(repo_id = %repo_id, branch, "🧹 Branche supprimée");
+        Ok(true)
+    }
+
     #[instrument(skip(self))]
     async fn init_workspace(&self, owner_id: &Uuid, repo_id: &Uuid) -> Result<(), DomainError> {
         let workspace_path = self.repo_path(owner_id, repo_id);

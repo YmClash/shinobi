@@ -228,6 +228,8 @@ export interface Repository {
   forked_from_owner?: string | null;
   /** Nom (slug) du repo parent (Phase 37B). */
   forked_from_name?: string | null;
+  /** Opt-in confidentialité IA : envoi du code à un LLM externe autorisé (Phase 42-pre-Fix). */
+  allow_external_llm?: boolean;
 }
 
 export interface RepositoriesResponse {

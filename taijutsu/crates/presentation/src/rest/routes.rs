@@ -543,6 +543,11 @@ pub fn create_router(state: SharedState) -> Router {
             "/api/v1/repos/{owner}/{repo}/pipelines/{pipeline_id}/stages",
             get(crate::rest::pipeline_routes::list_pipeline_stages_handler),
         )
+        // Phase 42-pre-Fix — Réglages du dépôt (confidentialité IA, owner only) 🔒
+        .route(
+            "/api/v1/repos/{owner}/{repo}/settings",
+            patch(crate::rest::repo_settings_routes::update_repo_settings_handler),
+        )
         // Phase 41-B — Kage Bunshin (Auto-Healing) 🥷⚡
         .route(
             "/api/v1/repos/{owner}/{repo}/pipelines/{pipeline_id}/heals",
@@ -807,6 +812,8 @@ pub struct RepositoryJson {
     /// Nom (slug) du repo parent (Phase 37B). Peuplé on-the-fly.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub forked_from_name: Option<String>,
+    /// Opt-in confidentialité IA : envoi du code à un LLM externe autorisé ?
+    pub allow_external_llm: bool,
 }
 
 impl From<domain::entities::repository::Repository> for RepositoryJson {
@@ -826,6 +833,7 @@ impl From<domain::entities::repository::Repository> for RepositoryJson {
             fork_count: None,
             forked_from_owner: None,
             forked_from_name: None,
+            allow_external_llm: repo.allow_external_llm,
         }
     }
 }

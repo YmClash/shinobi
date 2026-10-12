@@ -81,6 +81,15 @@ impl PipelineRepository for InMemoryPipelineRepo {
         Ok(())
     }
 
+    async fn set_pipeline_name(&self, id: &Uuid, name: &str) -> Result<(), DomainError> {
+        if let Some(p) = self.pipelines.lock().unwrap().get_mut(id) {
+            if p.pipeline_name.is_none() {
+                p.pipeline_name = Some(name.to_string());
+            }
+        }
+        Ok(())
+    }
+
     async fn find_by_id(&self, id: &Uuid) -> Result<Option<Pipeline>, DomainError> {
         Ok(self.pipelines.lock().unwrap().get(id).cloned())
     }

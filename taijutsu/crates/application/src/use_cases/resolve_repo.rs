@@ -253,6 +253,7 @@ mod tests {
             mirror_synced_at: None,
             deleted_at: None,
             forked_from_id: None,
+            allow_external_llm: false,
         }
     }
 

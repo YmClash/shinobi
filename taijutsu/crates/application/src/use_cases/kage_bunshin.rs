@@ -56,7 +56,11 @@ const DEFAULT_CONFIDENCE_THRESHOLD: f32 = 0.5;
 ///
 /// Orchestre : diagnostic Sensei → patch → shadow re-run → MR auto.
 pub struct KageBunshinUseCase {
+    /// LLM routé par le Hub d'Agents (peut être externe : Gemini…).
     llm: Arc<dyn LlmService>,
+    /// Phase 42-pre-Fix — LLM local (Ollama) utilisé en repli quand le dépôt
+    /// n'autorise pas l'envoi du code à un fournisseur externe.
+    local_llm: Option<Arc<dyn LlmService>>,
     pipeline_repo: Arc<dyn PipelineRepository>,
     container_runner: Arc<dyn ContainerRunner>,
     /// Timeout pour le shadow re-run (Vegapunk Tweak #5).
@@ -65,10 +69,51 @@ pub struct KageBunshinUseCase {
     confidence_threshold: f32,
 }
 
+/// Provider considéré comme local : le code ne quitte jamais l'infrastructure.
+const LOCAL_PROVIDER: &str = "ollama";
+
+/// Résultat de la sélection du LLM (Phase 42-pre-Fix — Privacy by Design).
+#[derive(Clone)]
+pub(crate) enum LlmChoice {
+    /// LLM autorisé à traiter le code (routé ou local).
+    Use(Arc<dyn LlmService>),
+    /// Aucun LLM autorisé : l'envoi externe est interdit et le local est absent.
+    Denied,
+}
+
+/// Règle de sélection du LLM :
+///
+/// ```text
+/// provider routé == "ollama"  → LLM routé (local, toujours autorisé)
+/// allow_external_llm == true  → LLM routé (Gemini…)
+/// sinon, local disponible     → LLM local (repli confidentialité)
+/// sinon                       → Denied (Fail-Safe : heal sauté)
+/// ```
+pub(crate) fn select_llm(
+    routed: &Arc<dyn LlmService>,
+    local: Option<&Arc<dyn LlmService>>,
+    allow_external_llm: bool,
+) -> LlmChoice {
+    if routed.provider() == LOCAL_PROVIDER || allow_external_llm {
+        return LlmChoice::Use(routed.clone());
+    }
+    match local {
+        Some(l) => {
+            info!(
+                routed_provider = %routed.provider(),
+                "🔒 Kage Bunshin — repli local (confidentialité : LLM externe non autorisé pour ce dépôt)"
+            );
+            LlmChoice::Use(l.clone())
+        }
+        None => LlmChoice::Denied,
+    }
+}
+
 impl KageBunshinUseCase {
     /// Construit le use case.
     pub fn new(
         llm: Arc<dyn LlmService>,
+        local_llm: Option<Arc<dyn LlmService>>,
         pipeline_repo: Arc<dyn PipelineRepository>,
         container_runner: Arc<dyn ContainerRunner>,
         shadow_timeout: Duration,
@@ -76,6 +121,7 @@ impl KageBunshinUseCase {
     ) -> Self {
         Self {
             llm,
+            local_llm,
             pipeline_repo,
             container_runner,
             shadow_timeout,
@@ -97,6 +143,8 @@ impl KageBunshinUseCase {
     /// - `repository_id` : UUID du dépôt
     /// - `commit_id` : SHA du commit
     /// - `workspace_path` : chemin du workspace éphémère contenant le code
+    /// - `allow_external_llm` : opt-in confidentialité du dépôt (Phase 42-pre-Fix)
+    #[allow(clippy::too_many_arguments)]
     pub async fn attempt_heal(
         &self,
         pipeline_id: Uuid,
@@ -108,12 +156,26 @@ impl KageBunshinUseCase {
         _repository_id: Uuid,
         _commit_id: &str,
         workspace_path: &Path,
+        allow_external_llm: bool,
     ) -> Result<HealResult, DomainError> {
         info!(
             pipeline_id = %pipeline_id,
             stage = %stage_name,
             "🥷 Kage Bunshin — analyse Sensei en cours..."
         );
+
+        // ── 0. Confidentialité : quel LLM a le droit de voir ce code ? ──
+        let llm = match select_llm(&self.llm, self.local_llm.as_ref(), allow_external_llm) {
+            LlmChoice::Use(llm) => llm,
+            LlmChoice::Denied => {
+                warn!(
+                    pipeline_id = %pipeline_id,
+                    stage = %stage_name,
+                    "🔒 Kage Bunshin ignoré — LLM externe non autorisé pour ce dépôt et aucun LLM local disponible"
+                );
+                return Ok(HealResult::Skipped);
+            }
+        };
 
         // ── 1. Extraire les fichiers mentionnés dans les logs ─────
         let error_files = extract_error_files(error_logs);
@@ -139,8 +201,8 @@ impl KageBunshinUseCase {
 
         let system = build_system_prompt();
 
-        let llm_response = self.llm.generate(&prompt, &system).await?;
-        let llm_model = self.llm.model_name().to_string();
+        let llm_response = llm.generate(&prompt, &system).await?;
+        let llm_model = llm.model_name().to_string();
         let llm_duration_ms = llm_response.duration_ms as i32;
 
         info!(
@@ -833,5 +895,125 @@ J'espère que cela aide !"#;
         assert!(prompt.contains("JSON STRICT"));
         assert!(prompt.contains("diagnosis"));
         assert!(prompt.contains("hunks"));
+    }
+}
+
+// ── Phase 42-pre-Fix — Tests de confidentialité (Privacy by Design) ──
+
+#[cfg(test)]
+mod privacy_tests {
+    use super::*;
+    use std::sync::atomic::{AtomicUsize, Ordering};
+
+    use async_trait::async_trait;
+    use domain::ports::llm_service::{LlmResponse, LlmStreamChunk};
+
+    use crate::use_cases::pipeline_test_support::{InMemoryPipelineRepo, ScriptedRunner};
+
+    /// LLM factice : provider configurable + compteur d'appels.
+    struct FakeLlm {
+        provider: &'static str,
+        calls: AtomicUsize,
+    }
+
+    impl FakeLlm {
+        fn arc(provider: &'static str) -> Arc<FakeLlm> {
+            Arc::new(FakeLlm { provider, calls: AtomicUsize::new(0) })
+        }
+    }
+
+    #[async_trait]
+    impl LlmService for FakeLlm {
+        async fn generate(&self, _: &str, _: &str) -> Result<LlmResponse, DomainError> {
+            self.calls.fetch_add(1, Ordering::SeqCst);
+            Ok(LlmResponse { content: "not json".into(), model: "m".into(), duration_ms: 1 })
+        }
+        async fn generate_stream(
+            &self,
+            _: &str,
+            _: &str,
+        ) -> Result<tokio::sync::mpsc::Receiver<LlmStreamChunk>, DomainError> {
+            unimplemented!()
+        }
+        fn model_name(&self) -> &str {
+            "fake"
+        }
+        fn provider(&self) -> &str {
+            self.provider
+        }
+    }
+
+    fn as_dyn(l: &Arc<FakeLlm>) -> Arc<dyn LlmService> {
+        l.clone()
+    }
+
+    fn chosen_provider(c: LlmChoice) -> Option<String> {
+        match c {
+            LlmChoice::Use(l) => Some(l.provider().to_string()),
+            LlmChoice::Denied => None,
+        }
+    }
+
+    #[test]
+    fn local_provider_is_always_allowed() {
+        let routed = FakeLlm::arc("ollama");
+        let c = select_llm(&as_dyn(&routed), None, false);
+        assert_eq!(chosen_provider(c).as_deref(), Some("ollama"));
+    }
+
+    #[test]
+    fn external_allowed_uses_routed_llm() {
+        let routed = FakeLlm::arc("gemini");
+        let local = FakeLlm::arc("ollama");
+        let c = select_llm(&as_dyn(&routed), Some(&as_dyn(&local)), true);
+        assert_eq!(chosen_provider(c).as_deref(), Some("gemini"));
+    }
+
+    #[test]
+    fn external_denied_falls_back_to_local() {
+        let routed = FakeLlm::arc("gemini");
+        let local = FakeLlm::arc("ollama");
+        let c = select_llm(&as_dyn(&routed), Some(&as_dyn(&local)), false);
+        assert_eq!(chosen_provider(c).as_deref(), Some("ollama"));
+    }
+
+    #[test]
+    fn external_denied_without_local_is_denied() {
+        let routed = FakeLlm::arc("gemini");
+        let c = select_llm(&as_dyn(&routed), None, false);
+        assert!(chosen_provider(c).is_none());
+    }
+
+    #[tokio::test]
+    async fn attempt_heal_skips_without_calling_external_llm() {
+        let external = FakeLlm::arc("gemini");
+        let uc = KageBunshinUseCase::new(
+            as_dyn(&external),
+            None,
+            Arc::new(InMemoryPipelineRepo::default()),
+            Arc::new(ScriptedRunner::default()),
+            Duration::from_secs(1),
+            0.5,
+        );
+
+        let result = uc
+            .attempt_heal(
+                Uuid::new_v4(),
+                Uuid::new_v4(),
+                "Futon_Check",
+                "img",
+                &["cargo check".to_string()],
+                "error: boom",
+                Uuid::new_v4(),
+                "abc",
+                Path::new("."),
+                false, // allow_external_llm
+            )
+            .await
+            .unwrap();
+
+        assert!(matches!(result, HealResult::Skipped));
+        // Le code ne doit JAMAIS avoir été envoyé au LLM externe.
+        assert_eq!(external.calls.load(Ordering::SeqCst), 0);
     }
 }

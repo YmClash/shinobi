@@ -160,6 +160,7 @@ impl ForkRepositoryUseCase {
             mirror_synced_at: None,
             deleted_at: None,
             forked_from_id: Some(source.id),
+            allow_external_llm: false, // Privacy by Design : opt-in à refaire sur le fork
         };
 
         // ── Étape 7 : Persister en base ─────────────────────────────

@@ -1,0 +1,80 @@
+/* ═══════════════════════════════════════════════════════════════
+   PHASE 42-PRE-FIX — REPO SETTINGS (Privacy by Design 🔒)
+   ═══════════════════════════════════════════════════════════════ */
+
+/* ── Shell + sub-navigation ─────────────────────────────────── */
+.st-shell { display: flex; gap: 1.5rem; padding: 1.5rem 2rem; max-width: 1100px; margin: 0 auto; }
+.st-subnav { display: flex; flex-direction: column; gap: 0.2rem; width: 180px; flex-shrink: 0; }
+.st-subnav-item {
+  display: flex; align-items: center; gap: 0.5rem;
+  padding: 0.5rem 0.8rem; border-radius: 8px;
+  font-size: 0.85rem; color: var(--muted-foreground);
+  text-decoration: none; transition: background 0.15s, color 0.15s;
+}
+.st-subnav-item:hover { background: color-mix(in oklch, var(--muted) 50%, transparent); color: var(--foreground); }
+.st-subnav-active { background: color-mix(in oklch, var(--primary) 14%, transparent); color: var(--foreground); font-weight: 600; }
+.st-content { flex: 1; min-width: 0; }
+
+/* ── Page ───────────────────────────────────────────────────── */
+.st-page-header { margin-bottom: 1.2rem; }
+.st-page-title { font-size: 1.4rem; font-weight: 700; margin: 0; color: var(--foreground); }
+
+/* ── Card ───────────────────────────────────────────────────── */
+.st-card {
+  border: 1px solid var(--border); border-radius: 12px;
+  padding: 1.2rem 1.3rem;
+  background: color-mix(in oklch, var(--card, var(--background)) 92%, transparent);
+  backdrop-filter: blur(6px);
+  animation: st-fade-in 0.25s ease-out;
+}
+.st-card-head { display: flex; align-items: flex-start; justify-content: space-between; gap: 1rem; margin-bottom: 1rem; }
+.st-card-title { font-size: 1.05rem; font-weight: 700; margin: 0 0 0.2rem; color: var(--foreground); }
+.st-card-sub { font-size: 0.8rem; margin: 0; color: var(--muted-foreground); }
+
+/* ── Status badge ───────────────────────────────────────────── */
+.st-badge {
+  font-size: 0.72rem; font-weight: 600; padding: 0.25rem 0.65rem;
+  border-radius: 999px; white-space: nowrap; transition: background 0.2s, color 0.2s;
+}
+.st-badge-local    { background: oklch(0.72 0.15 155 / 0.16); color: oklch(0.78 0.15 155); }
+.st-badge-external { background: oklch(0.78 0.15 70 / 0.16);  color: oklch(0.82 0.14 70); }
+
+/* ── Setting row ────────────────────────────────────────────── */
+.st-row {
+  display: flex; align-items: center; justify-content: space-between; gap: 1.5rem;
+  padding: 0.9rem 0; border-top: 1px solid var(--border);
+}
+.st-row-text { min-width: 0; }
+.st-row-label { font-size: 0.9rem; font-weight: 600; color: var(--foreground); cursor: pointer; }
+.st-row-desc { font-size: 0.78rem; line-height: 1.5; margin: 0.3rem 0 0; color: var(--muted-foreground); max-width: 62ch; }
+
+/* ── Switch ─────────────────────────────────────────────────── */
+.st-switch {
+  position: relative; width: 44px; height: 24px; flex-shrink: 0;
+  border-radius: 999px; border: 1px solid var(--border);
+  background: var(--muted); cursor: pointer; padding: 0;
+  transition: background 0.2s, border-color 0.2s, opacity 0.2s;
+}
+.st-switch-thumb {
+  position: absolute; top: 2px; left: 2px; width: 18px; height: 18px;
+  border-radius: 50%; background: var(--foreground);
+  transition: transform 0.2s cubic-bezier(0.4, 0, 0.2, 1);
+}
+.st-switch-on { background: oklch(0.72 0.15 70); border-color: oklch(0.72 0.15 70); }
+.st-switch-on .st-switch-thumb { transform: translateX(20px); background: #fff; }
+.st-switch:disabled { opacity: 0.45; cursor: not-allowed; }
+.st-switch:focus-visible { outline: 2px solid var(--primary); outline-offset: 2px; }
+
+/* ── Misc ───────────────────────────────────────────────────── */
+.st-note { font-size: 0.76rem; margin: 0.4rem 0 0; color: var(--muted-foreground); }
+.st-error { font-size: 0.8rem; margin: 0.6rem 0 0; color: oklch(0.7 0.18 25); }
+.st-skeleton { height: 150px; border-radius: 12px; background: var(--muted); animation: st-pulse 1.2s ease-in-out infinite; }
+
+@keyframes st-fade-in { from { opacity: 0; transform: translateY(4px); } to { opacity: 1; transform: none; } }
+@keyframes st-pulse { 50% { opacity: 0.5; } }
+
+@media (max-width: 720px) {
+  .st-shell { flex-direction: column; padding: 1rem; }
+  .st-subnav { flex-direction: row; width: auto; }
+  .st-row { flex-direction: column; align-items: flex-start; }
+}

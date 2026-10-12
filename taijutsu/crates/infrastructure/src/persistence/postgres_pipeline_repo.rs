@@ -110,6 +110,23 @@ impl PipelineRepository for PostgresPipelineRepo {
         Ok(())
     }
 
+    async fn set_pipeline_name(&self, id: &Uuid, name: &str) -> Result<(), DomainError> {
+        sqlx::query(
+            r#"
+            UPDATE pipelines
+            SET pipeline_name = $2, updated_at = NOW()
+            WHERE id = $1 AND pipeline_name IS NULL
+            "#,
+        )
+        .bind(id)
+        .bind(name)
+        .execute(&self.pool)
+        .await
+        .map_err(|e| DomainError::Persistence(format!("pipeline set_pipeline_name: {e}")))?;
+
+        Ok(())
+    }
+
     async fn find_by_id(&self, id: &Uuid) -> Result<Option<Pipeline>, DomainError> {
         let row = sqlx::query_as::<_, PipelineRow>(
             r#"

@@ -17,6 +17,7 @@ use domain::ports::repo_repository::RepoRepository;
 use domain::ports::vcs_engine::VcsEngine;
 use domain::ports::event_publisher::EventPublisher;
 
+use crate::use_cases::shadow_branch_cleanup::cleanup_shadow_branch;
 use crate::use_cases::webhook_emit;
 
 pub struct CloseMrUseCase {
@@ -97,6 +98,9 @@ impl CloseMrUseCase {
                 );
             }
         }
+
+        // Phase 42-pre-Fix — Nettoyage de la branche shadow Kage Bunshin (non fatal).
+        cleanup_shadow_branch(self.vcs.as_ref(), &mr).await;
 
         info!(
             mr_id = %mr.id,

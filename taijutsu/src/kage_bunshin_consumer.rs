@@ -386,6 +386,7 @@ impl KageBunshinConsumer {
                 request.repository_id,
                 &request.commit_id,
                 &temp_path,
+                repository.allow_external_llm, // Phase 42-pre-Fix : opt-in confidentialité
             )
             .await
         {

@@ -36,7 +36,7 @@ function buildHref(owner: string, repo: string, key: string): string {
     case "refs":    return `${base}/bookmarks`;
     case "checkpoints": return `${base}/checkpoints`;
     case "jutsus":      return `${base}/jutsus`;
-    case "settings":    return `${base}/settings/webhooks`;
+    case "settings":    return `${base}/settings/general`;
     default:        return base;
   }
 }

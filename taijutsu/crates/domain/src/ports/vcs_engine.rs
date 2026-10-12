@@ -114,6 +114,15 @@ pub trait VcsEngine: Send + Sync {
         Ok(())
     }
 
+    /// Phase 42-pre-Fix — Supprime une branche (`refs/heads/<branch>`).
+    ///
+    /// Retourne `Ok(true)` si la branche existait et a été supprimée,
+    /// `Ok(false)` si elle était absente. Implémentation par défaut :
+    /// `Ok(false)` (mocks de test).
+    async fn delete_branch(&self, _repo_id: &Uuid, _branch: &str) -> Result<bool, DomainError> {
+        Ok(false)
+    }
+
     // ── Phase 6 — Explorateur de Code ────────────────────────────────
 
     /// Liste les entrées d'un répertoire à une révision donnée.

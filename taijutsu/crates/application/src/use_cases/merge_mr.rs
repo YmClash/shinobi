@@ -21,6 +21,7 @@ use domain::ports::repo_repository::RepoRepository;
 use domain::ports::vcs_engine::VcsEngine;
 use domain::ports::event_publisher::EventPublisher;
 
+use crate::use_cases::shadow_branch_cleanup::cleanup_shadow_branch;
 use crate::use_cases::webhook_emit;
 
 /// Commande de merge d'une MR.
@@ -214,6 +215,10 @@ impl MergeMrUseCase {
             }),
         );
         self.mr_repo.save_event(&event).await?;
+
+        // Phase 42-pre-Fix — Nettoyage de la branche shadow Kage Bunshin
+        // (non fatal ; fast-forward : main pointe déjà sur le commit Sensei).
+        cleanup_shadow_branch(self.vcs.as_ref(), mr).await;
 
         info!(
             mr_id = %mr.id,

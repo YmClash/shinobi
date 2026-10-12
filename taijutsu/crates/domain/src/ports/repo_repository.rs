@@ -93,4 +93,12 @@ pub trait RepoRepository: Send + Sync {
         owner_id: &Uuid,
         source_repo_id: &Uuid,
     ) -> Result<Option<Repository>, DomainError>;
+
+    // ── Phase 42-pre-Fix — Confidentialité IA ───────────────────
+
+    /// Active/désactive l'envoi du code à un LLM externe pour ce dépôt.
+    /// Retourne `true` si le dépôt existe. Défaut : non supporté (mocks).
+    async fn update_llm_policy(&self, _repo_id: &Uuid, _allow: bool) -> Result<bool, DomainError> {
+        Err(DomainError::Internal("update_llm_policy non implémenté".into()))
+    }
 }

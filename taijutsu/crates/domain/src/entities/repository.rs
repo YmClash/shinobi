@@ -109,6 +109,13 @@ pub struct Repository {
     /// FK vers `repositories(id)` avec `ON DELETE SET NULL` — si le parent
     /// est supprimé, le fork survit en tant que repo autonome.
     pub forked_from_id: Option<Uuid>,
+
+    // ── Phase 42-pre-Fix — Confidentialité IA (Privacy by Design) ─
+
+    /// Autorise l'envoi du code/logs à un fournisseur LLM externe
+    /// (Gemini, Claude…) pour le Kage Bunshin. `false` = LLM local uniquement.
+    #[serde(default)]
+    pub allow_external_llm: bool,
 }
 
 impl Repository {
@@ -131,6 +138,7 @@ impl Repository {
             mirror_synced_at: None,
             deleted_at: None,
             forked_from_id: None,
+            allow_external_llm: false,
         }
     }
 
